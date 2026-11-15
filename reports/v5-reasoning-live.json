@@ -1,0 +1,57 @@
+{
+  "validation": "text-only small requests; no GUI validation in this report",
+  "endpoint_source": "Existing user-configured OpenAI and DeepSeek environment endpoints, unchanged. This does not establish official direct connectivity or support for every model.",
+  "samples": [
+    {
+      "provider": "deepseek",
+      "protocol": "openai",
+      "requested_model": "deepseek-flash",
+      "returned_model": "deepseek-flash",
+      "reasoning_effort": "low",
+      "tool_mode": "none",
+      "status": "completed",
+      "finish_reason": "stop",
+      "reasoning_delta_count": 20,
+      "reasoning_char_count": 70,
+      "answer_delta_count": 1,
+      "answer_char_count": 3,
+      "first_reasoning_seconds": 0.657,
+      "first_answer_seconds": 0.969,
+      "latency_seconds": 0.969
+    },
+    {
+      "provider": "openai",
+      "protocol": "responses",
+      "requested_model": "gpt-6-astra",
+      "returned_model": "gpt-6-astra",
+      "reasoning_effort": "low",
+      "tool_mode": "none",
+      "status": "completed",
+      "finish_reason": "stop",
+      "summary_delta_count": 87,
+      "summary_char_count": 397,
+      "answer_delta_count": 17,
+      "answer_char_count": 60,
+      "first_reasoning_seconds": 3.5,
+      "first_answer_seconds": 4.765,
+      "latency_seconds": 4.906
+    },
+    {
+      "provider": "openai",
+      "protocol": "responses",
+      "requested_model": "gpt-6-astra",
+      "reasoning_effort": "low",
+      "tool_mode": "native_responses_synthetic_read_only",
+      "summary_delta_count": 0,
+      "summary_char_count": 0,
+      "answer_delta_count": 1,
+      "answer_char_count": 2,
+      "executed_tool_count": 1,
+      "first_answer_seconds": 3.938,
+      "status": "completed",
+      "returned_model": "gpt-6-astra",
+      "finish_reason": "stop",
+      "latency_seconds": 4.047
+    }
+  ]
+}

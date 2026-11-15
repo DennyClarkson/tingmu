@@ -1,0 +1,103 @@
+{
+  "version": "0.5.0",
+  "date": "2026-11-15",
+  "scope": "Native Windows GUI acceptance in isolated QA data, live configured text models, automated regression and production data preservation",
+  "test_data_isolation": {
+    "qa_root": ".cache/v5-qa",
+    "personal_database_or_notebook_copied_to_qa": false,
+    "original_video_modified": false,
+    "video_or_audio_sent_to_cloud": false,
+    "local_asr": "Qwen3-ASR-1.7B CUDA",
+    "short_video_fixture_seconds": 12
+  },
+  "regression": {
+    "full_suite_passed": 505,
+    "subtests_passed": 84,
+    "seconds": 42.87,
+    "ruff_passed": true,
+    "diff_whitespace_check_passed": true,
+    "known_warning": "Existing wordseg/pkg_resources deprecation",
+    "final_model_list_and_short_panel_focused_tests_passed": 25,
+    "final_full_suite_includes_all_ui_fixes": true,
+    "intermediate_test_incident": "One earlier focused QML run exited with a native PySide GC access violation during fixture initialization; the focused rerun and final full suite both passed."
+  },
+  "native_gui": {
+    "fullscreen_button_then_space_pauses_without_exit": true,
+    "fullscreen_drag_selection_saved_exactly": true,
+    "collection_remark_saved_and_restored": true,
+    "collection_organizing_keeps_original_and_marks_organized": true,
+    "separate_collection_note_review_views": true,
+    "agent_note_append_and_edit_save": true,
+    "handwritten_markdown_preserved": true,
+    "long_editor_ctrl_end_and_paste_visible": true,
+    "review_rating_persists": true,
+    "opened_video_empty_caption_state_correct": true,
+    "detached_module_releases_original_space": true,
+    "model_create_discover_select_persists": true,
+    "model_protocol_choice_persists": true,
+    "discovered_models_scoped_to_connection_after_fix": true,
+    "legacy_short_docked_chat_controls_visible_after_fix": true,
+    "manual_key_dpapi_roundtrip": true,
+    "manual_key_not_echoed_or_stored_as_plaintext": true,
+    "chat_table_code_copy_rendered": true,
+    "chat_edit_retry_keep_original_branches": true,
+    "chat_stop_feedback_immediate": true,
+    "chat_history_after_restart": true,
+    "reasoning_effort_high_and_low_selected": true,
+    "deepseek_reasoning_expand_and_history_after_restart": true,
+    "saved_teaching_preferences_used_by_later_generation": true,
+    "agent_processes_only_requested_video": true,
+    "queue_teaching_only_reprocess_completes": true
+  },
+  "live_models": {
+    "openai_gui": {
+      "requested_model": "gpt-6-astra",
+      "discovered_models": 96,
+      "chat_completions_agent_operations": ["read_context", "process_video", "save_teaching_preferences", "read_collections", "organize_collections", "read_notebook", "save_notebook", "append_note", "update_collection"],
+      "responses_gui_completed_turns": 3,
+      "responses_gui_efforts": ["high", "high", "low"],
+      "responses_gui_public_summary_characters": 0,
+      "public_summary_transport_probe_passed": true,
+      "public_summary_transport_probe_delta_count": 87,
+      "public_summary_transport_probe_characters": 397,
+      "native_responses_tool_roundtrip_passed": true,
+      "summary_limitation": "The successful GUI replies did not include public summary text. A separate real transport probe returned a summary. Summary display is conditional on service output; it is not fabricated."
+    },
+    "deepseek_gui": {
+      "requested_model": "deepseek-flash",
+      "discovered_models": 2,
+      "completed_turns": 2,
+      "effort": "high",
+      "operations": ["read_collections", "read_notebook", "append_note", "read_notebook", "update_note"],
+      "both_note_writes_saved": true,
+      "public_reasoning_characters": [2458, 1301],
+      "visible_reasoning_elapsed_ms": [7156, 3828],
+      "note_source_personal_goal_and_language_comparison_present": true
+    },
+    "server_reported_model_metadata": "See v5-reasoning-live.json for requested versus returned model names on independent live transport probes. GUI labels alone are not treated as server proof.",
+    "endpoint_scope": "Existing user-configured credentials/endpoints. This does not claim live acceptance for every preset or every model."
+  },
+  "qa_data_audit": {
+    "collections": 1,
+    "organized_collections": 1,
+    "remarks_preserved": true,
+    "archived_sources": 1,
+    "notes": 5,
+    "all_note_bodies_present_in_markdown": true,
+    "manual_plan_and_handwriting_preserved": true,
+    "review_records": 1,
+    "known_private_reasoning_signature_encrypted_fields_in_chat_records": 0,
+    "public_reasoning_within_60000_character_limit": true,
+    "short_video_ready_cues": 5,
+    "teaching_reset_raw_ids_order_times_text_segments_preserved": true,
+    "teaching_reset_asr_and_review_metadata_preserved": true,
+    "teaching_reset_only_teaching_content_changed": true
+  },
+  "known_limits": [
+    "Only public provider reasoning or summaries are shown; no private or encrypted reasoning is exposed.",
+    "Stopping during connection or response-header wait is bounded by transport timeout; immediate UI feedback is available.",
+    "Manual keys use Windows account/machine-bound DPAPI and must be entered again after moving to another account or machine.",
+    "Full model-provider live coverage, web search, image upload and voice calls are outside this acceptance scope.",
+    "Text review and generated pronunciations are not a claim of human audio verification."
+  ]
+}

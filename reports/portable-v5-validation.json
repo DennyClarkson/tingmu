@@ -1,0 +1,75 @@
+{
+  "version": "0.5.0",
+  "built_utc": "2026-11-15T11:27:12.872945+00:00",
+  "entry": "dist/Tingmu/Tingmu.exe",
+  "source_files_equal_packaged_files": 87,
+  "qml_assets": 55,
+  "reasoning_qml_packaged": true,
+  "offscreen_final_exe": {
+    "ready": true,
+    "version": "0.5.0",
+    "platform": "offscreen",
+    "frames": 54,
+    "errors": [],
+    "checks": {
+      "qml_window": true,
+      "isolated_data": true,
+      "portable_imports": true,
+      "bundled_open_fonts": true,
+      "v4_learning_workspace": true,
+      "model_presets": true,
+      "qml_video_sink": true,
+      "decode": true,
+      "seek": true,
+      "rate": true,
+      "audio_switch": true,
+      "pause": true
+    },
+    "audio_tracks": 2,
+    "wall_seconds": 2.078
+  },
+  "native_final_exe": {
+    "started": true,
+    "normal_main_window_observed": true,
+    "original_collections_and_markdown_readable": true,
+    "original_video_and_1015_subtitle_segments_loaded": true,
+    "legacy_short_chat_slot_controls_visible_after_fix": true,
+    "final_window_left_open": true,
+    "automatic_media_processing_started": false
+  },
+  "preservation": {
+    "backup_root": ".cache/v5-release-backup",
+    "baseline_non_database_files": 52,
+    "unchanged_baseline_files": 51,
+    "expected_changed_files": [
+      "settings.json"
+    ],
+    "missing_files": [],
+    "old_database_tables_unchanged": [
+      "entries",
+      "sqlite_sequence",
+      "conversations",
+      "notebook_state",
+      "notebook_reviews",
+      "chat_sessions",
+      "chat_legacy_migrations"
+    ],
+    "expected_changed_database_tables": [
+      "positions"
+    ],
+    "position_change_reason": "Native playback acceptance opened and paused the original video.",
+    "new_migration_tables": [
+      "notebook_collections",
+      "notebook_entry_note_history",
+      "notebook_notes",
+      "notebook_sources",
+      "notebook_v5_migrations"
+    ],
+    "old_collections_and_chat_rows_preserved": true,
+    "original_notebook_bytes_preserved": true,
+    "all_original_document_hashes_preserved": true,
+    "original_video_sha256_matches": true,
+    "database_integrity": "ok",
+    "qa_data_merged_into_production": false
+  }
+}

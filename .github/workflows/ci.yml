@@ -1,0 +1,54 @@
+name: Windows checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Python 3.12 / Windows
+    runs-on: windows-2022
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      PYTHONUTF8: "1"
+      QT_QPA_PLATFORM: offscreen
+      QT_QUICK_BACKEND: software
+      HF_HUB_OFFLINE: "1"
+      HF_DATASETS_OFFLINE: "1"
+      UV_CACHE_DIR: ${{ github.workspace }}/.cache/uv
+      UV_PYTHON_INSTALL_DIR: ${{ github.workspace }}/.cache/python
+      TINGMU_CACHE_DIR: ${{ github.workspace }}/.cache/test-runtime
+      TINGMU_DATA_DIR: ${{ github.workspace }}/.cache/test-data
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Set up uv and Python 3.12
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.12.10"
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+          cache-local-path: ${{ github.workspace }}/.cache/uv
+          cache-suffix: windows-py312-cpu
+      - name: Install locked CPU and development dependencies
+        # No GPU extra, Qwen environment, model weights, user media, or API keys.
+        run: uv sync --locked --extra dev
+      - name: Lint
+        run: uv run --no-sync --offline ruff check .
+      - name: Offline regression tests
+        # Tests mock model/provider calls and create their own temporary fixtures.
+        # The suite does not require FFmpeg CLI or the private portable build.
+        run: uv run --no-sync --offline python .github/run_offline_tests.py -q
