@@ -1,4 +1,4 @@
-# Windows 开发入门（v0.5）
+# Windows 开发入门
 
 以下命令均在仓库根目录（含 `pyproject.toml`）的 PowerShell 执行。开发主要验证 Windows x64、Python 3.12；项目声明支持 `>=3.12,<3.14`，安装脚本固定选择 3.12。
 

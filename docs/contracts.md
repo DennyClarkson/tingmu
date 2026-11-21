@@ -1,4 +1,32 @@
-# Integration contracts (2026-11-15)
+# Integration contracts (2026-11-21)
+
+## Batch concurrency in v0.10
+
+Each workspace stores `llm_high_concurrency` and `llm_max_concurrency`. The queue reads them when starting or resuming each video, including jobs saved by earlier releases. The default is four concurrent requests, the supported range is 1–16, and disabling concurrency gives one. Scheduling preferences are excluded from queue identities and material cache keys. Transcript review, teaching and bilingual verification share the limit and run in sequence. Validated batches are merged by cue ID and checkpointed in source order. A rate-limit response stops new submissions in that stage and allows already issued requests to finish.
+
+For all three stages, ordered unique response IDs may cover a subset of the requested cues. Validate each identified row and checkpoint successful rows before scheduling repairs for only invalid or missing IDs. Recovery retains a per-cue validation message with the checkpoint. Ambiguous identities and incomplete JSON can be retried in smaller batches. Each stage bounds its repair attempts and exposes the cue number and timestamp for a located terminal error. Provider transport and rate-limit errors bypass content repair.
+
+## Reviewed translation track in v0.9
+
+The known language is `language.source`. A text-enabled preparation produces per-source-cue teaching material and runs an additional bilingual review with the configured annotation model. Each successful verification batch checkpoints the verified cue digest, any ordered split translations, and provider response metadata in `translation_review`. The player and translated SRT use the same split boundaries. A stale digest suppresses the affected verified caption and invalidates the complete SRT. Local-only preparation records its scope explicitly.
+
+`PreparationQueue.enqueue_lessons(path, settings)` schedules one existing media document without re-transcription. Completed drafts and current verification records can be resumed. `documents/<id>.translation.srt` is derived from the study JSON, participates in its publication journal and portable relocation, and can be exported from the File menu. Named workspaces can opt to inherit the text connections shown during creation.
+
+## Revision 9 — v0.7
+
+Workspace source and target languages are independent tags, including the same tag and tags outside the bundled ASR engines. The offline UI and setup chat use CLDR labels and accept custom codes. ASR language compatibility gates automatic inference only. A compatible sidecar or configured service can prepare a video in that same workspace.
+
+Chat can create and enter a catalogued study workspace, configure its learning preferences, recommend a model using the actual inference runtimes, reuse installed weights, assign local text roles or configure a transcription service. Speech recommendations and preparation perform no model downloads. The human download decision is bound to the proposal, model, originating session and target workspace settings. An explicit decision in the chat input or confirmation card reaches the same trusted UI slot. Downloaded weights and the Qwen aligner use installation-scoped repositories and locks.
+
+New Agent-created workspaces monitor their media directory and enable automatic preparation. An inbox job retains its identity across restarts, waits for completed copies and checks local model readiness and applicable audio permissions. Existing workspaces retain their automatic preparation preference. Remote text reuse requires a separate scoped decision which lists the actual roles and services. The original chat is saved before switching. The new workspace receives a setup summary.
+
+## Revision 8 — v0.6
+
+The workspace catalog uses the previous data directory as its default workspace. Normal launch opens the last study folder. The main window picker opens, creates and configures study folders under the installation's data/workspaces directory. Each owns its media library, documents, queues, settings, credentials, conversations, notebooks and playback state. Download and inference share the installation-local model cache. A model repository lock and a completeness check prevent duplicate downloads. API connections do not download model weights. Copying media into a workspace is an explicit library action. Exports stay in that workspace.
+
+Every new ASR job takes a local preprocessing pass unless disabled. Local turn detection uses acoustic boundaries with timed words or alignment units. External transcription uses per-workspace endpoint and audio opt-in independently of cloud text. Queue uploads check current permission and endpoint before sending each piece. Imported subtitles take precedence in ordinary preparation. Explicit full regeneration can bypass discovery.
+
+The companion can revise the subtitle selected at the start of the request and the lesson of its underlying source cue. Read and compare the source revision before publishing workspace-owned SRT and JSON. A user correction persists in `metadata.cue_corrections`; teaching-only regeneration reuses the corrected text and boundaries. Preserve source IDs, original text, acoustic times, unrelated cues and external subtitle files. Current source code and this revision supersede the historical contracts below.
 
 ## Revision 7 — v0.5 current behavior
 
