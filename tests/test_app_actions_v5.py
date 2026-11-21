@@ -138,6 +138,7 @@ def test_preferences_persist_and_queue_pause_retry_are_real(bridge, tmp_path, mo
     assert bridge.store.load_settings().teaching_preferences == "详细解释并比较母语"
     path = tmp_path / "queue.mkv"
     path.touch()
+    path.with_suffix(".srt").write_text("1\n00:00:00,000 --> 00:00:01,000\nTest cue\n", encoding="utf-8")
     job = bridge.queue.enqueue([path], bridge._settings)[0]
     bridge.queue._jobs[0]["status"] = "failed"
     bridge._request_app_action("manage_queue", {"action": "retry", "job_ids": [job["id"]]}, bound, None)
@@ -273,6 +274,7 @@ def test_prepare_current_runs_only_requested_job_even_with_other_pending(bridge,
     paths = [tmp_path / "unrequested.mkv", tmp_path / "requested.mkv"]
     for path in paths:
         path.touch()
+    paths[1].with_suffix(".srt").write_text("1\n00:00:00,000 --> 00:00:01,000\nTest cue\n", encoding="utf-8")
     bridge.queue.enqueue(paths, bridge._settings)
     bridge.media_path = str(paths[1])
     calls = []
