@@ -5,6 +5,52 @@ from tingmu.models import AppSettings, Cue, StudyDocument
 from tingmu.storage import Store
 
 
+def test_concurrency_changes_reuse_legacy_queue_and_apply_on_resume(tmp_path, monkeypatch):
+    store = Store(tmp_path / "data")
+    media = tmp_path / "film.mkv"
+    media.touch()
+    settings = AppSettings(llm_high_concurrency=False, llm_max_concurrency=7)
+    store.save_settings(settings)
+    queue = batch.PreparationQueue(store)
+    job = queue.enqueue([media], settings)[0]
+    saved = json.loads(queue.path.read_bytes())
+    for key in ("llm_high_concurrency", "llm_max_concurrency"):
+        del saved["jobs"][0]["settings"][key]
+    queue.path.write_text(json.dumps(saved), encoding="utf-8")
+    queue = batch.PreparationQueue(store)
+    calls = []
+
+    def prepare(path, active, store, **kwargs):
+        calls.append(active.llm_workers)
+        if len(calls) == 1:
+            queue.pause()
+            raise InterruptedError()
+        return StudyDocument(str(path), active.language, [Cue("one", 0, 1, "hello")])
+
+    monkeypatch.setattr(batch, "prepare_media", prepare)
+    assert queue.run()[0]["status"] == "paused"
+    settings.llm_high_concurrency = True
+    store.save_settings(settings)
+    assert queue.enqueue([media], settings) == []
+    resumed = queue.run()
+    assert [(j["id"], j["status"]) for j in resumed] == [(job["id"], "completed")]
+    assert calls == [1, 7]
+
+
+def test_explicit_enqueue_concurrency_in_a_store_without_saved_settings(tmp_path, monkeypatch):
+    queue = batch.PreparationQueue(Store(tmp_path / "data"))
+    media = tmp_path / "film.mkv"
+    media.touch()
+    queue.enqueue([media], AppSettings(llm_high_concurrency=False))
+
+    def prepare(path, settings, *_args, **_kwargs):
+        assert settings.llm_workers == 1
+        return StudyDocument(str(path), settings.language, [Cue("a", 0, 1, "hello")])
+
+    monkeypatch.setattr(batch, "prepare_media", prepare)
+    assert queue.run()[0]["status"] == "completed"
+
+
 def test_queue_persists_skips_complete_and_recovers_interrupted_job(tmp_path, monkeypatch):
     store = Store(tmp_path / "data")
     videos = [tmp_path / f"{i}.mkv" for i in range(3)]

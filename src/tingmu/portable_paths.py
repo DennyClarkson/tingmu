@@ -11,7 +11,7 @@ import threading
 import time
 import uuid
 
-from .models import LanguagePair
+from .models import LanguagePair, StudyDocument, preparation_identity_settings
 
 _THREAD_LOCK = threading.RLock()
 MANIFEST = "portable-location.json"
@@ -107,11 +107,14 @@ def _backup(store, sources, old, new):
 
 
 def migrate_portable_paths(store):
-    """Only the portable default data directory participates; explicit stores do not."""
+    """Remap the portable installation or a registered study folder after it moves."""
     from .runtime import portable_root
     from .storage import atomic_json, media_fingerprint
+    from .workspaces import MARKER
     root = portable_root()
-    if root is None or store.data_dir != (root / "data").resolve():
+    if (store.data_dir / MARKER).is_file():
+        root = store.data_dir
+    elif root is None or store.data_dir != (root / "data").resolve():
         return
     root = root.resolve()
     manifest = store.data_dir / MANIFEST
@@ -127,16 +130,21 @@ def migrate_portable_paths(store):
         # Cache keys hash the canonical path string, so case-only Windows renames matter too.
         if str(old) == str(root):
             return
+        with store._material_write():
+            for pending in (store.data_dir / "documents").glob("*.pending"):
+                store._recover_material(pending.with_suffix(".json"))
         sources = [manifest]
         sources += list((store.data_dir / "documents").glob("*.json"))
         sources += [store.data_dir / name for name in
                     ("settings.json", "preparation-queue.json", "workspace.json",
                      "media-library.json", "quick-layout.json")
                     if (store.data_dir / name).exists()]
-        if any(not p.resolve().is_relative_to(store.data_dir) for p in sources):
+        subtitles = list((store.data_dir / "documents").glob("*.srt"))
+        if any(not p.resolve().is_relative_to(store.data_dir) for p in sources + subtitles):
             raise ValueError("便携数据包含指向目录外的链接；未修改学习记录")
-        backup = _backup(store, sources, old, root)
+        backup = _backup(store, sources + subtitles, old, root)
         writes = {}
+        renders = {}
         retired = set()
         for source in sources:
             if source == manifest:
@@ -148,8 +156,12 @@ def migrate_portable_paths(store):
             if source.name == "preparation-queue.json":
                 for job in changed.get("jobs", []):
                     subtitle = job.get("subtitle_path")
-                    identity = json.dumps([job["media_path"], job["fingerprint"], job["settings"], subtitle,
-                                           media_fingerprint(subtitle) if subtitle else None], sort_keys=True)
+                    spec = preparation_identity_settings(job["settings"])
+                    parts = (["existing-lessons", job["media_path"], job["fingerprint"], spec]
+                             if job.get("reuse_existing_transcript") else
+                             [job["media_path"], job["fingerprint"], spec, subtitle,
+                              media_fingerprint(subtitle) if subtitle else None])
+                    identity = json.dumps(parts, sort_keys=True)
                     job["id"] = hashlib.sha256(identity.encode()).hexdigest()[:24]
             target = source
             if source.parent.name == "documents":
@@ -159,6 +171,11 @@ def migrate_portable_paths(store):
                     raise ValueError(f"便携迁移发现学习材料冲突，原文件与备份均保留：{backup}")
                 if target != source:
                     retired.add(source)
+                    for suffix in (".srt", ".translation.srt"):
+                        if source.with_suffix(suffix).exists():
+                            retired.add(source.with_suffix(suffix))
+                if source.with_suffix(".srt").exists() or changed.get("metadata", {}).get("cue_corrections"):
+                    renders[target.with_suffix(".srt")] = StudyDocument.from_dict(changed)
             if target in writes and writes[target] != changed:
                 raise ValueError(f"便携迁移发现重复学习材料，原文件与备份均保留：{backup}")
             writes[target] = changed
@@ -203,6 +220,8 @@ def migrate_portable_paths(store):
                                        (json.dumps(messages, ensure_ascii=False), session_id))
                 for target, value in writes.items():
                     atomic_json(target, value)
+                for target, document in renders.items():
+                    store._render_srt(document, target)
                 db.commit()
             except sqlite3.IntegrityError as error:
                 db.rollback()
@@ -217,5 +236,5 @@ def migrate_portable_paths(store):
                               "last_backup": str(backup.relative_to(store.data_dir))})
         atomic_json(backup / "migration.json", {"from": str(old), "to": str(root), "state": "complete",
                                                 "rewritten_json": len(writes)})
-        for source in retired - writes.keys():
+        for source in retired - writes.keys() - renders.keys():
             source.unlink()  # A byte-for-byte copy remains in migration-backups.

@@ -104,16 +104,116 @@ class Store:
         key = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:32]
         return self.data_dir / "documents" / f"{key}.json"
 
-    def save_document(self, document: StudyDocument) -> Path:
+    @contextmanager
+    def _material_write(self):
+        # Coordinate independent Store instances, including a second app process.
+        with self._connection() as db:
+            db.execute("BEGIN IMMEDIATE")
+            yield
+
+    def material_paths(self, media_path: str, language: LanguagePair) -> tuple[Path, Path]:
+        document = self._document_path(media_path, language)
+        return document, document.with_suffix(".srt")
+
+    def ensure_subtitle_files(self, document):
+        """Restore missing published subtitles from the current authoritative document."""
+        path, srt = self.material_paths(document.media_path, document.language)
+        if srt.exists() and path.with_suffix(".translation.srt").exists():
+            return
+        with self._material_write():
+            self._recover_material(path)
+            current = self.load_document(document.media_path, document.language)
+            if current:
+                self._render_srt(current, srt)
+
+    def _backup_material(self, path):
+        backup = self.data_dir / "material-backups" / (
+            datetime.now().strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:10])
+        backup.mkdir(parents=True)
+        for source in (path, path.with_suffix(".srt"), path.with_suffix(".translation.srt")):
+            if source.exists():
+                with (backup / source.name).open("xb") as stream:
+                    stream.write(source.read_bytes())
+                    stream.flush()
+                    os.fsync(stream.fileno())
+        return backup
+
+    @staticmethod
+    def _render_srt(document, path):
+        from .lesson_material import translated_subtitles
+        from .media import save_srt
+        from .timeline import SubtitleTimeline
+        # Zero-length source markers have no playable caption interval.
+        save_srt([cue for cue in SubtitleTimeline(document.cues).cues if cue.end > cue.start], path)
+        translated = path.with_suffix(".translation.srt")
+        cues = translated_subtitles(document)
+        if cues:
+            save_srt(cues, translated)
+        else:
+            translated.unlink(missing_ok=True)
+
+    def _recover_material(self, path):
+        marker = path.with_suffix(".pending")
+        if not marker.exists():
+            return
+        if path.exists():
+            current = StudyDocument.from_dict(json.loads(path.read_bytes()))
+            self._render_srt(current, path.with_suffix(".srt"))
+        else:
+            path.with_suffix(".srt").unlink(missing_ok=True)
+            path.with_suffix(".translation.srt").unlink(missing_ok=True)
+        marker.unlink()
+
+    def save_document(self, document: StudyDocument, *, replace_existing=False) -> Path:
+        with self._material_write():
+            path = self._document_path(document.media_path, document.language)
+            self._recover_material(path)
+            if path.exists():
+                try:
+                    previous = json.loads(path.read_bytes()).get("metadata", {}).get("cue_corrections", {})
+                except (ValueError, AttributeError):
+                    # Replacement of an unreadable cache must retain its original bytes.
+                    self._backup_material(path)
+                    previous = {}
+                if previous and previous != document.metadata.get("cue_corrections", {}):
+                    if not replace_existing:
+                        raise ValueError("当前字幕已有新的逐句修订，请重新读取材料。")
+                    self._backup_material(path)
+            return self._save_document(document)
+
+    def _save_document(self, document: StudyDocument, *, payload=None) -> Path:
         document.media_path = canonical_path(document.media_path)
         document.metadata.setdefault("media_fingerprint", media_fingerprint(document.media_path))
         document.metadata["schema_version"] = 1
         path = self._document_path(document.media_path, document.language)
-        atomic_json(path, document.to_dict())
+        if payload is None:
+            payload = document.to_dict()
+        else:
+            payload["metadata"] = document.metadata
+        srt = path.with_suffix(".srt")
+        managed = (srt.exists() or document.metadata.get("stage") == "ready"
+                   or document.metadata.get("subtitle_path") or document.metadata.get("cue_corrections"))
+        if managed:
+            # JSON is authoritative. The journal repairs an interrupted two-file
+            # publication on the next read, including after a process crash.
+            marker = path.with_suffix(".pending")
+            atomic_json(marker, {})
+            try:
+                self._render_srt(document, srt)
+                atomic_json(path, payload)
+            except Exception:
+                self._recover_material(path)
+                raise
+            marker.unlink()
+        else:
+            atomic_json(path, payload)
         return path
 
     def load_document(self, media_path: str, language: LanguagePair) -> StudyDocument | None:
         path = self._document_path(media_path, language)
+        if path.with_suffix(".pending").exists():
+            with self._material_write():
+                self._recover_material(path)
         if not path.exists():
             return None
         try:
@@ -134,28 +234,30 @@ class Store:
         """
         if mode not in ("all", "teaching"):
             raise ValueError("请选择清除全部识别与讲解，或仅清除讲解")
-        path = self._document_path(media_path, language)
+        with self._material_write():
+            path = self._document_path(media_path, language)
+            self._recover_material(path)
+            return self._reset_material(path, mode)
+
+    def _reset_material(self, path, mode):
         if not path.exists():
             return False
         raw = path.read_bytes()
         document = StudyDocument.from_dict(json.loads(raw)) if mode == "teaching" else None
-        backup = self.data_dir / "material-backups" / (
-            datetime.now().strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:10]) / path.name
-        backup.parent.mkdir(parents=True, exist_ok=True)
-        with backup.open("xb") as stream:
-            stream.write(raw)
-            stream.flush()
-            os.fsync(stream.fileno())
+        self._backup_material(path)
         if mode == "all":
+            atomic_json(path.with_suffix(".pending"), {})
             path.unlink()
+            self._recover_material(path)
         else:
             document.cues = [replace(c, translation="", explanation="", tokens=[]) for c in document.cues]
-            for key in ("annotation_spec", "model_responses", "analysis_batches", "checkpoint_events", "finished_at"):
+            for key in ("annotation_spec", "model_responses", "analysis_batches", "checkpoint_events", "finished_at",
+                        "translation_review", "lesson_status"):
                 document.metadata.pop(key, None)
             document.metadata.update(stage="reviewed" if document.metadata.get("review_stage") == "ready"
                                      else "transcribed", completed_ids=[], annotated_count=0, error="",
                                      reuse_transcript_once=True)
-            self.save_document(document)
+            self._save_document(document)
         return True
 
     def _save_entry(self, kind: str, media_path: str, cue: Cue, language: LanguagePair,

@@ -27,7 +27,12 @@ def split_display_text(text: str) -> list[str]:
                 break
             limit = index + 1
         boundaries = [i + 1 for i, char in enumerate(text[:limit]) if char in "，。！？；、,.!?;: \n"]
-        cut = next((i for i in reversed(boundaries) if display_width(text[:i]) >= MAX_LINE_WIDTH // 2), limit)
+        # Prefer a shorter natural word boundary over cutting the next Latin
+        # word merely to fill half a line. Unbroken words wider than the limit
+        # still need a bounded split. Source whitespace remains in its slice.
+        natural = [i for i in boundaries if text[:i].strip()]
+        cut = next((i for i in reversed(natural) if display_width(text[:i]) >= MAX_LINE_WIDTH // 2),
+                   natural[-1] if natural else limit)
         parts.append(text[:cut])
         text = text[cut:]
     if text:
@@ -61,7 +66,7 @@ def _slice_tokens(cue: Cue, start: int, end: int) -> list[Token]:
     return result
 
 
-def _display_parts(source: Cue):
+def _display_parts(source: Cue, translated_segments=()):
     parts = source.segmented_texts
     valid = (isinstance(parts, list) and bool(parts)
              and all(isinstance(p, str) and p.strip() and display_width(p) <= MAX_LINE_WIDTH for p in parts)
@@ -75,7 +80,8 @@ def _display_parts(source: Cue):
         next_elapsed = elapsed + display_width(part)
         start = source.start + (source.end - source.start) * elapsed / total
         end = source.end if index == len(parts) - 1 else source.start + (source.end - source.start) * next_elapsed / total
-        yield replace(source, id=f"{source.id}:part:{index + 1}", start=start, end=end, text=part,
+        translation = translated_segments[index] if len(translated_segments) == len(parts) else source.translation
+        yield replace(source, id=f"{source.id}:part:{index + 1}", start=start, end=end, text=part, translation=translation,
                       tokens=_slice_tokens(source, offset, offset + len(part)), segmented_texts=[]), "text_proportional"
         elapsed, offset = next_elapsed, offset + len(part)
 
@@ -90,11 +96,16 @@ class SubtitleTimeline:
     """
 
     def __init__(self, cues: list[Cue], min_duration_ms: int = 1200, gap_fill_ms: int = 500,
-                 companion_hold_ms: int = 2200):
+                 companion_hold_ms: int = 2200, *, translation_review=None):
         self.minimum = int(min_duration_ms)
         self.hold = int(companion_hold_ms)
         self.gap = max(0, min(1500, int(gap_fill_ms)))
-        entries = [(part, source.id, basis) for source in cues for part, basis in _display_parts(source)]
+        from .translation_review import translation_verified
+        review = translation_review or {}
+        entries = []
+        for source in cues:
+            segments = review.get("segments", {}).get(source.id, ()) if review and translation_verified(source, review) else ()
+            entries.extend((part, source.id, basis) for part, basis in _display_parts(source, segments))
         entries.sort(key=lambda entry: (entry[0].start, entry[0].end))
         self.cues = [entry[0] for entry in entries]
         self.segments: list[DisplaySegment] = []

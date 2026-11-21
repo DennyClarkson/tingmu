@@ -6,9 +6,11 @@ import copy
 from collections import Counter
 from dataclasses import replace
 from difflib import SequenceMatcher
+import unicodedata
 
 from .agent import (
-    AnnotationValidationError, LearningAgent, _BatchCancelled, _json_loads,
+    AnnotationValidationError, LearningAgent, PartialBatchResult, _BatchCancelled, _json_loads,
+    request_ids, validate_identified_rows,
 )
 from .language import learning_text
 from .models import Cue, LanguagePair
@@ -47,7 +49,9 @@ audio would be needed. Reasons use the specified source language (Simplified Chi
 most one short sentence, preferably empty for unchanged unambiguous text. A correction must have a
 brief concrete reason. uncertain must be true for unresolved ambiguity; never claim audio verification.
 segmented_texts is a list of short subtitle lines for EACH source ID separately. Concatenating it
-must reproduce text EXACTLY, including spaces and punctuation. NEVER join or move words between source
+must reproduce text EXACTLY, including spaces and punctuation. Put the original separating space
+at the END of the preceding segment when breaking English or another space-separated language.
+NEVER trim these segment-edge spaces. NEVER join or move words between source
 IDs. Keep a line already within 42 display columns as exactly one segment, even if it contains
 several short clauses or punctuation. Count punctuation and spaces too. For longer lines choose
 natural clause/sentence boundaries, each at most 42 columns (Chinese/Japanese/Korean wide characters
@@ -67,6 +71,48 @@ No translation, explanations, pronunciation, tokens, timestamps or extra keys.""
 
 def _lexical(text: str) -> str:
     return "".join(c for c in text if c.isalnum())
+
+
+def _restore_boundary_spaces(text: str, parts: list[str]):
+    """Recover only whitespace at model segment edges from the authoritative text.
+
+    Each segment's interior must match the next literal source span exactly.
+    Comparing non-whitespace characters alone would wrongly accept changed word
+    boundaries such as "nowhere" versus "now here" inside a segment. Never strip
+    or normalize the source; slice it, retaining every original space/tab/NBSP.
+    """
+    if "".join(parts) == text:
+        return parts, None
+
+    def horizontal(char):
+        return char == "\t" or unicodedata.category(char) == "Zs"
+
+    fixed, cursor = [], 0
+    for part in parts:
+        left, right = 0, len(part)
+        while left < right and horizontal(part[left]):
+            left += 1
+        while right > left and horizontal(part[right - 1]):
+            right -= 1
+        core = part[left:right]
+        start = cursor
+        while cursor < len(text) and horizontal(text[cursor]):
+            cursor += 1
+        if not core or not text.startswith(core, cursor):
+            raise AnnotationValidationError("分句必须逐字重构复核正文，不能删字、重复或加入换行。")
+        cursor += len(core)
+        while cursor < len(text) and horizontal(text[cursor]):
+            cursor += 1
+        fixed.append(text[start:cursor])
+    if cursor != len(text) or "".join(fixed) != text:
+        raise AnnotationValidationError("分句必须逐字重构复核正文，不能删字、重复或加入换行。")
+    return fixed, {
+        "method": "restore_boundary_whitespace", "reason_codes": ["segment_boundary_whitespace"],
+        "input_segment_count": len(parts), "output_segment_count": len(fixed),
+        "input_widths": [display_width(part) for part in parts[:128]],
+        "input_widths_truncated": len(parts) > 128,
+        "exact_reconstruction": True, "normalized_text_preserved": True,
+    }
 
 
 def _repair_display_parts(text: str, parts: list[str]):
@@ -123,26 +169,38 @@ def validate_review(content: str, cues: list[Cue], language: LanguagePair):
     rows = payload.get("cues")
     if set(payload) != {"cues"} or not isinstance(rows, list) or len(rows) != len(cues):
         raise AnnotationValidationError("复核字幕条数或字段不匹配。")
+    return _validate_review_rows(rows, cues, language)
+
+
+def _validate_review_rows(rows, cues, language):
     result, metadata, seen = [], {}, set()
     for source, row in zip(cues, rows):
-        if not isinstance(row, dict) or set(row) != {"id", "text", "uncertain", "reason", "segmented_texts"}:
-            raise AnnotationValidationError("复核字幕字段缺失或包含未知字段。")
+        if not isinstance(row, dict):
+            raise AnnotationValidationError("每条复核字幕应为 JSON 对象。")
+        required = REVIEW_SCHEMA["properties"]["cues"]["items"]["required"]
+        missing = [key for key in required if key not in row]
+        if missing:
+            raise AnnotationValidationError(f"复核字幕缺少必填字段 {', '.join(missing)}。")
+        if len(row) != len(required):
+            raise AnnotationValidationError(f"复核字幕包含额外字段，只需 {', '.join(required)}。")
         if not isinstance(row["id"], str) or row["id"] != source.id or row["id"] in seen:
             raise AnnotationValidationError("复核改变了字幕 ID 或顺序。")
         seen.add(row["id"])
-        if (not isinstance(row["text"], str) or len(row["text"]) > 8000
-                or not isinstance(row["reason"], str) or len(row["reason"]) > 240
-                or type(row["uncertain"]) is not bool):
-            raise AnnotationValidationError("复核文本、原因或标记格式无效。")
+        if not isinstance(row["text"], str) or len(row["text"]) > 8000:
+            raise AnnotationValidationError("text 须为不超过 8000 字符的原文。")
+        if not isinstance(row["reason"], str) or len(row["reason"]) > 240:
+            raise AnnotationValidationError("reason 须为不超过 240 字符的复核原因。")
+        if type(row["uncertain"]) is not bool:
+            raise AnnotationValidationError("uncertain 须为 JSON 布尔值 true 或 false。")
         if source.text.strip() and not row["text"].strip():
             raise AnnotationValidationError("复核不能删除原字幕。")
         before = learning_text(source.text, language)
         after = learning_text(row["text"], language)
         parts = row["segmented_texts"]
         if (not isinstance(parts, list) or not parts
-                or any(not isinstance(p, str) or not p.strip() or "\n" in p or "\r" in p for p in parts)
-                or "".join(parts) != row["text"]):
+                or any(not isinstance(p, str) or not p.strip() or "\n" in p or "\r" in p for p in parts)):
             raise AnnotationValidationError("分句必须逐字重构复核正文，不能删字、重复或加入换行。")
+        parts, boundary_repair = _restore_boundary_spaces(row["text"], parts)
         parts = [learning_text(part, language) for part in parts]
         old, new = _lexical(before), _lexical(after)
         rejected = ""
@@ -168,6 +226,11 @@ def validate_review(content: str, cues: list[Cue], language: LanguagePair):
             # A layout repair cannot bypass a missing correction reason, alter
             # spoken particles or accept a speculative rewrite above.
             parts, repair = _repair_display_parts(after, parts)
+            if boundary_repair:
+                repair = ({**boundary_repair,
+                           "method": boundary_repair["method"] + "_then_" + repair["method"],
+                           "reason_codes": boundary_repair["reason_codes"] + repair["reason_codes"],
+                           "output_segment_count": len(parts)} if repair else boundary_repair)
         changed = before != after
         uncertain = source.uncertain or row["uncertain"] or changed or bool(rejected)
         state = "retained" if rejected else ("corrected" if changed else (
@@ -212,7 +275,7 @@ class TranscriptReviewer(LearningAgent):
     def __init__(self, provider: str = "openai", model: str | None = "gpt-6-astra", *, profile=None):
         super().__init__(provider, model or "gpt-6-astra", profile=profile)
         self.chunk_size = 40
-        self.max_workers = 2
+        self.split_invalid_batches = True
         self.max_completion_tokens = profile.get("max_tokens", 10000) if profile else 10000
         self.review_metadata: dict = {}
         self.context_metadata: dict = {}
@@ -220,34 +283,55 @@ class TranscriptReviewer(LearningAgent):
 
     def _annotate_batch(self, cues, language, cursor, end, stopped, context_texts, context_positions):
         batch = cues[cursor:end]
+        ids = request_ids(batch)
         first, last = context_positions[batch[0].id], context_positions[batch[-1].id]
         payload = {
             "source": language.source, "target": language.target,
             "document_context": self._review_context,
             "context_before": context_texts[max(0, first - 6):first],
             "context_after": context_texts[last + 1:last + 7],
-            "cues": [{"id": c.id, "text": c.text} for c in batch],
+            "cues": [{"id": ident, "text": c.text} for ident, c in zip(ids, batch)],
         }
+        if any(c.speaker for c in batch):
+            payload["speaker_labels_in_cue_order"] = [c.speaker for c in batch]
+        feedback = getattr(self, "repair_feedback", {})
+        if feedback:
+            payload.pop("document_context")
+            payload.pop("context_before")
+            payload.pop("context_after")
+            payload["read_only_neighbors_in_cue_order"] = [
+                {"before": context_texts[max(0, context_positions[c.id] - 2):context_positions[c.id]],
+                 "after": context_texts[context_positions[c.id] + 1:context_positions[c.id] + 3]}
+                for c in batch]
+            for row, cue in zip(payload["cues"], batch):
+                if cue.id in feedback:
+                    row["validation_error"] = feedback[cue.id]
+        if stopped():
+            raise _BatchCancelled("全文复核已取消；已完成批次可恢复。")
         instructions = REVIEW_PROMPT
-        for attempt in range(2):
-            if stopped():
-                raise _BatchCancelled("全文复核已取消；已完成批次可恢复。")
-            content = self._complete(instructions, payload, REVIEW_SCHEMA)
-            self.last_response_metadata.update(stage="transcript_review", review_version=REVIEW_VERSION)
-            try:
-                result, metadata = validate_review(content, batch, language)
-                self.last_response_metadata.update(validation_passed=True, review_results=metadata)
-                repairs = {ident: record["segmentation_repair"] for ident, record in metadata.items()
-                           if "segmentation_repair" in record}
-                if repairs:
-                    self.last_response_metadata.update(validation_passed_after_repair=True,
-                                                       segmentation_repairs=repairs)
-                return result
-            except AnnotationValidationError as exc:
-                self.last_response_metadata.update(validation_passed=False, validation_error=str(exc))
-                if attempt:
-                    raise
-                instructions += "\nPrevious response failed validation: " + str(exc) + " Return complete correct JSON."
+        if feedback:
+            instructions += "\nRepair only the requested rows using each validation_error and the local context."
+        content = self._complete(instructions, payload, REVIEW_SCHEMA)
+        self.last_response_metadata.update(stage="transcript_review", review_version=REVIEW_VERSION)
+        metadata = {}
+
+        def validate(source, row):
+            checked, records = _validate_review_rows([row], [source], language)
+            metadata.update(records)
+            return checked[0]
+
+        try:
+            result, errors = validate_identified_rows(content, batch, validate, expected_ids=ids)
+        except AnnotationValidationError as exc:
+            if len(batch) != 1:
+                raise
+            result, errors = [], {batch[0].id: str(exc)}
+        self.last_response_metadata.update(validation_passed=not errors, review_results=metadata)
+        repairs = {ident: record["segmentation_repair"] for ident, record in metadata.items()
+                   if "segmentation_repair" in record}
+        if repairs:
+            self.last_response_metadata.update(validation_passed_after_repair=True, segmentation_repairs=repairs)
+        return PartialBatchResult(result, errors) if errors else result
 
     def review(self, cues: list[Cue], language: LanguagePair, progress=None, cancelled=None,
                checkpoint=None, context_cues: list[Cue] | None = None) -> list[Cue]:
@@ -259,7 +343,6 @@ class TranscriptReviewer(LearningAgent):
         def sync_metadata():
             self.review_metadata = {
                 cue_id: value for request in self.response_metadata
-                if request.get("validation_passed")
                 for cue_id, value in request.get("review_results", {}).items()
             }
 

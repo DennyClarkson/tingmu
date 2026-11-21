@@ -12,7 +12,7 @@ import uuid
 
 def run_smoke(root: Path, media: Path | None = None) -> int:
     import tingmu
-    from PySide6.QtCore import QTimer, qVersion
+    from PySide6.QtCore import QObject, QTimer, qVersion
     from PySide6.QtGui import QFontDatabase
     from tingmu.quick.main import create_qml_app
     from tingmu.runtime import cache_root, data_root
@@ -42,6 +42,17 @@ def run_smoke(root: Path, media: Path | None = None) -> int:
         "Source Han Sans SC", "Source Han Serif SC", "Source Sans 3", "Source Code Pro"))
     report["checks"]["v4_learning_workspace"] = bool(bridge.notebooks.get("revision")) and bool(bridge.activeSessionId)
     report["checks"]["model_presets"] = len(bridge.modelPresets) >= 7
+    if windows:
+        picker = windows[0].findChild(QObject, "workspacePicker")
+        manager = windows[0].findChild(QObject, "workspaceSetup")
+        report["checks"]["workspace_switcher"] = bool(picker and picker.property("visible"))
+        report["checks"]["opens_in_player"] = bool(manager and not manager.property("visible"))
+        limit = manager.findChild(QObject, "llmConcurrencyCount") if manager else None
+        report["checks"]["workspace_llm_concurrency"] = bool(
+            limit and limit.property("count") == bridge.llmConcurrencyLimit
+            and limit.property("currentText") == str(bridge.store.load_settings().llm_workers))
+    report["checks"]["shared_model_cache"] = cache_root() == root / ".cache"
+    report["speech_preprocessing"] = bridge.speechModels
     engine.warnings.connect(lambda errors: report["errors"].extend(error.toString() for error in errors))
     player.errorOccurred.connect(lambda error, message: report["errors"].append(message))
     began = time.monotonic()

@@ -152,7 +152,7 @@ def test_cancelled_organize_never_writes(library):
     ("yue", "粤语学习笔记"), ("zh-CN", "简体中文学习笔记"), ("zh-TW", "繁体中文学习笔记"),
     ("en", "英语学习笔记"), ("ja", "日语学习笔记"), ("ko", "韩语学习笔记"),
     ("fr", "法语学习笔记"), ("es", "西班牙语学习笔记"), ("de", "德语学习笔记"),
-    ("it", "it 学习笔记"),
+    ("it", "意大利语学习笔记"), ("x-study", "x-study 学习笔记"),
 ])
 def test_localized_titles_keep_language_identity_and_paths(tmp_path, language, title):
     books = NotebookManager(Store(tmp_path))

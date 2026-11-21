@@ -16,17 +16,25 @@ import time
 from PySide6.QtCore import QObject, Property, QTimer, QUrl, Signal, Slot
 from PySide6.QtGui import QDesktopServices, QGuiApplication
 from PySide6.QtMultimedia import QAudioOutput, QMediaMetaData, QMediaPlayer, QVideoFrame
-from PySide6.QtWidgets import QFileDialog
+from PySide6.QtWidgets import QFileDialog, QInputDialog, QMessageBox
 
 from tingmu import __version__
 from tingmu.batch import PreparationQueue
 from tingmu.diagnostics import AppLog, media_id, safe_fields
+from tingmu.export_paths import export_path
 from tingmu.library import MediaLibrary
+from tingmu.lesson_material import lesson_counts, translated_subtitles
+from tingmu.locale_catalog import display_language
+from tingmu.translation_review import translation_verified
+from tingmu.media_inbox import InboxScanner, preparation_block_reason
 from tingmu.media import MEDIA_EXTENSIONS, load_subtitles, save_srt
-from tingmu.models import AppSettings, StudyDocument
+from tingmu.models import MAX_LLM_CONCURRENCY, AppSettings, StudyDocument, preparation_identity_settings
 from tingmu.storage import Store, atomic_json, canonical_path
 from tingmu.timeline import SubtitleTimeline
+from tingmu.workspaces import language_code
+from .embedded import EmbeddedCaptions
 from .features import FeatureMixin
+from .playback_sources import PlaybackSources
 
 
 def cue_map(cue):
@@ -40,6 +48,7 @@ def cue_map(cue):
 class Bridge(FeatureMixin, QObject):
     stateChanged = Signal()
     settingsChanged = Signal()
+    lessonModelChanged = Signal()
     playbackChanged = Signal()
     cuesChanged = Signal()
     activeCueChanged = Signal()
@@ -62,11 +71,14 @@ class Bridge(FeatureMixin, QObject):
     _chatActionProgress = Signal(str, str, object)
     appAction = Signal(str, "QVariantMap")
     focusWindowChanged = Signal()
+    _inboxCompleted = Signal(object)
 
     def __init__(self, store: Store):
         super().__init__()
         QGuiApplication.instance().focusWindowChanged.connect(self._focus_window_changed)
         self.store = store
+        self.settingsChanged.connect(self.lessonModelChanged)
+        self.modelsChanged.connect(self.lessonModelChanged)
         self._settings = store.load_settings()
         self.log = AppLog(store.data_dir, self._settings.developer_mode)
         self.log.event("app_start", "应用启动", version=__version__, frontend="Qt Quick/QML")
@@ -89,7 +101,10 @@ class Bridge(FeatureMixin, QObject):
         self.audio = QAudioOutput(self)
         self.audio.setVolume(0.7)
         self._player.setAudioOutput(self.audio)
-        self._subtitle_sink = None
+        self._sources = PlaybackSources(store, self._player, self.audio, self)
+        self._restore_embedded_pending = False
+        self._embedded = EmbeddedCaptions(self)
+        self._embedded.changed.connect(self._update_playback)
         self.document = None
         self.media_path = ""
         self.timeline = SubtitleTimeline([])
@@ -119,6 +134,7 @@ class Bridge(FeatureMixin, QObject):
         self._player.seekableChanged.connect(lambda ready: self._duration_changed(self._player.duration()) if ready else None)
         self._player.playbackStateChanged.connect(self._update_playback)
         self._player.tracksChanged.connect(self._update_playback)
+        self._player.tracksChanged.connect(self._restore_embedded_choice)
         self._player.activeTracksChanged.connect(self._update_playback)
         self._player.mediaStatusChanged.connect(self._media_status)
         self._player.errorOccurred.connect(self._media_error)
@@ -138,6 +154,18 @@ class Bridge(FeatureMixin, QObject):
         self._refresh_library()
         self._refresh_jobs()
         self._update_playback()
+        self._inbox_scanner = InboxScanner(self.catalog.media_dir)
+        self._inbox_thread = None
+        self._inbox_stop = threading.Event()
+        self._inbox_paused = False
+        self._inboxCompleted.connect(self._inbox_completed)
+        self._set_state(mediaDir=str(self.catalog.media_dir), mediaInbox={
+            "scanning": False, "waiting": 0, "ready": 0, "blocked": "", "status": "正在检查媒体文件夹"})
+        self.inbox_timer = QTimer(self)
+        self.inbox_timer.setInterval(2000)
+        self.inbox_timer.timeout.connect(self._scan_media_inbox)
+        self.inbox_timer.start()
+        QTimer.singleShot(0, self._scan_media_inbox)
 
     def _focus_window_changed(self, *_):
         self.focusWindowChanged.emit()
@@ -150,6 +178,10 @@ class Bridge(FeatureMixin, QObject):
     def player(self):
         return self._player
 
+    @Property(QObject, constant=True)
+    def sources(self):
+        return self._sources
+
     @Property("QVariantMap", notify=stateChanged)
     def state(self):
         return self._state
@@ -157,6 +189,80 @@ class Bridge(FeatureMixin, QObject):
     @Property("QVariantMap", notify=settingsChanged)
     def settings(self):
         return asdict(self._settings)
+
+    @Property(int, constant=True)
+    def llmConcurrencyLimit(self):
+        return MAX_LLM_CONCURRENCY
+
+    @Property("QVariantMap", notify=lessonModelChanged)
+    def lessonModel(self):
+        from tingmu.agent import provider_status
+        from tingmu.providers import ProviderError
+        settings = self._settings
+        try:
+            enabled, profile = self.model_registry.text_role(settings, "annotation")
+            usable = enabled and ((profile.get("key_source") == "none" or profile.get("has_key", False))
+                                  if profile else provider_status().get(settings.provider, {}).get("available", False))
+        except ProviderError:
+            usable = False
+        return {"configured": usable, "language": display_language(settings.source_language)}
+
+    @Property("QVariantMap", notify=settingsChanged)
+    def speechModels(self):
+        from tingmu.runtime import cache_root
+        from tingmu.speech import speech_model_status
+        return speech_model_status(cache_root())
+
+    @Slot(str, result=bool)
+    def saveSpeechKey(self, secret):
+        from tingmu.external_asr import api_options, save_audio_key
+        try:
+            endpoint = api_options(self._settings)[0]
+            save_audio_key(self.store.data_dir, endpoint, secret.strip(), local=self._settings.asr_backend == "local_api")
+            self._set_state(status="已保存工作区语音密钥" if secret else "已清除工作区语音密钥", error="")
+            return True
+        except (OSError, RuntimeError, ValueError) as exc:
+            self._error(exc)
+            return False
+
+    @Slot()
+    def chooseWhisperFolder(self):
+        from tingmu.local_whisper import model_reference
+        from tingmu.runtime import cache_root, confined_path
+        try:
+            base = confined_path(cache_root(), "models")
+            base.mkdir(exist_ok=True)
+            folder = QFileDialog.getExistingDirectory(None, "选择共享缓存内的 CTranslate2 Whisper 模型", str(base))
+            if folder:
+                self.setting("asr_model", model_reference(folder))
+        except (OSError, ValueError) as exc:
+            self._error(exc)
+
+    @Slot()
+    def checkSpeechModels(self):
+        from tingmu.external_asr import api_options, list_models
+        settings = replace(self._settings)
+        if settings.asr_backend not in ("local_api", "external") or "speech-models" in self._workers:
+            return
+        def complete(items):
+            if (self._settings.asr_backend == settings.asr_backend
+                    and api_options(settings)[0] == api_options(self._settings)[0]):
+                self._set_state(speechModelChoices=items, status=f"服务返回 {len(items)} 个模型，可选择或手填 ID。")
+        self._set_state(speechModelChoices=[], status="正在查询语音服务的模型列表…", error="")
+        self._start_job("speech-models", lambda progress, cancelled: list_models(settings, self.store.data_dir), complete)
+
+    def _export_destination(self, provided, default_name, suffixes):
+        if provided:
+            return export_path(self.store.data_dir, provided, suffixes)
+        name, ok = QInputDialog.getText(None, "导出到当前工作区", f"文件名（{'、'.join(suffixes)}）", text=default_name)
+        if not ok or not name.strip():
+            return None
+        if Path(name).name != name or "/" in name or "\\" in name:
+            raise ValueError("请输入文件名，文件将保存到当前工作区的 exports 文件夹。")
+        destination = export_path(self.store.data_dir, name.strip(), suffixes)
+        if destination.exists() and QMessageBox.question(None, "覆盖导出文件", f"覆盖 {destination.name}？") != QMessageBox.Yes:
+            return None
+        return destination
 
     @Property("QVariantMap", notify=playbackChanged)
     def playback(self):
@@ -235,6 +341,7 @@ class Bridge(FeatureMixin, QObject):
             self.refresh_diagnostics()
 
     def refresh_diagnostics(self):
+        from tingmu.external_asr import api_options
         counts = {}
         for job in self.queue.snapshot():
             counts[job["status"]] = counts.get(job["status"], 0) + 1
@@ -243,10 +350,13 @@ class Bridge(FeatureMixin, QObject):
                  "media": {"loaded": bool(self.media_path), "id": media_id(self.media_path),
                            "cues": len(self._cues), "position": self._player.position(), "duration": self._player.duration()},
                  "queue": {"running": "queue" in self._workers, "counts": counts},
-                 "models": {"asr": self._settings.asr_model, "review": self._settings.review_model,
+                 "models": {"asr": (self._settings.asr_model if self._settings.asr_backend == "local"
+                                    else api_options(self._settings)[1]), "review": self._settings.review_model,
                             "teaching": self._settings.model, "companion": self._settings.companion_model,
                             "device": self._settings.device},
-                 "privacy": {"cloudText": self._settings.cloud_text_enabled, "logsIncludeContent": False},
+                 "privacy": {"cloudText": self._settings.text_models_enabled and self._settings.cloud_text_enabled,
+                             "asrBackend": self._settings.asr_backend, "audioUpload": self._settings.allow_audio_upload,
+                             "logsIncludeContent": False},
                  "logLevel": "DEBUG" if self._settings.developer_mode else "INFO"}
         value = safe_fields(value)
         if value != self._diagnostics:
@@ -280,14 +390,6 @@ class Bridge(FeatureMixin, QObject):
     def attachVideo(self, sink):
         if sink is not None:
             self._player.setVideoSink(sink)
-            if self._subtitle_sink is not sink:
-                if self._subtitle_sink is not None:
-                    try:
-                        self._subtitle_sink.subtitleTextChanged.disconnect(self._update_playback)
-                    except (RuntimeError, TypeError):
-                        pass
-                self._subtitle_sink = sink
-                sink.subtitleTextChanged.connect(self._update_playback)
 
     @Slot()
     def refreshVideo(self):
@@ -320,6 +422,14 @@ class Bridge(FeatureMixin, QObject):
             return
         try:
             before = getattr(self._settings, name)
+            if name == "audio_output_id":
+                self._set_audio_output(str(value))
+                return
+            if name in ("source_language", "target_language"):
+                source = value if name == "source_language" else self._settings.source_language
+                target = value if name == "target_language" else self._settings.target_language
+                self.set_languages(source, target)
+                return
             if isinstance(before, bool):
                 value = value if isinstance(value, bool) else str(value).lower() == "true"
             elif isinstance(before, int):
@@ -333,11 +443,20 @@ class Bridge(FeatureMixin, QObject):
                 if name == "teaching_preferences":
                     if len(value) > 6000 or "\x00" in value:
                         raise ValueError("讲解偏好最多 6000 字符，不能包含空字符")
-                else:
+                elif name not in ("asr_model", "asr_endpoint", "external_asr_model", "asr_key_env",
+                                   "local_asr_endpoint", "local_asr_api_model", "local_asr_key_env"):
                     value = value[:200]
+            if name in ("asr_endpoint", "external_asr_model", "asr_key_env", "asr_backend", "asr_response_format",
+                        "local_asr_endpoint", "local_asr_api_model", "local_asr_key_env", "local_asr_response_format"):
+                from tingmu.external_asr import validate_speech_setting
+                value = validate_speech_setting(name, value)
+                if name in ("asr_backend", "asr_endpoint") and value != before:
+                    self._settings.allow_audio_upload = False
+                if name in ("asr_backend", "asr_endpoint", "local_asr_endpoint") and value != before:
+                    self._set_state(speechModelChoices=[])
             limits = {"subtitle_gap_ms": (0, 1500), "subtitle_offset_ms": (-600000, 600000),
                       "overlay_opacity": (0.15, 1.0), "overlay_font_size": (14, 48),
-                      "audio_track": (0, 31)}
+                      "audio_track": (0, 31), "llm_max_concurrency": (1, MAX_LLM_CONCURRENCY)}
             if name in limits:
                 value = max(limits[name][0], min(limits[name][1], value))
             if name == "theme" and value not in ("forest", "paper", "mist", "graphite"):
@@ -349,14 +468,18 @@ class Bridge(FeatureMixin, QObject):
                 raise ValueError("请输入有效的模型 ID")
             setattr(self._settings, name, value)
             self.store.save_settings(self._settings)
+            if name == "auto_prepare_media" and value:
+                self._resume_inbox()
             self.settingsChanged.emit()
             self._set_state(cloudEnabled=self._settings.cloud_text_enabled)
+            if name in ("cloud_text_enabled", "text_models_enabled") and before and not value:
+                self._stop_model_jobs()
             self.log.event("setting_changed", "设置已更新", "DEBUG", setting=name)
             if name == "developer_mode":
                 self.log.set_developer(value)
                 self.log.event("developer_mode", "开发者模式已开启" if value else "开发者模式已关闭")
                 self.refresh_diagnostics()
-            if name in ("source_language", "target_language", "level", "audio_track"):
+            if name in ("level", "audio_track"):
                 self._load_document()
                 self._load_personal()
                 self._refresh_library()
@@ -367,6 +490,18 @@ class Bridge(FeatureMixin, QObject):
         except (ValueError, TypeError) as exc:
             self._error(exc)
 
+    def set_languages(self, source, target):
+        source, target = language_code(source), language_code(target)
+        if (source, target) == (self._settings.source_language, self._settings.target_language):
+            return
+        updated = replace(self._settings, source_language=source, target_language=target)
+        self.store.save_settings(updated)
+        self._settings = updated
+        self.settingsChanged.emit()
+        self._load_document()
+        self._load_personal()
+        self._refresh_library()
+
     def add_paths(self, paths):
         normalized = [QUrl(p).toLocalFile() if str(p).startswith("file:") else p for p in paths]
         added = self.catalog.add(normalized)
@@ -374,6 +509,127 @@ class Bridge(FeatureMixin, QObject):
         self._set_state(status=f"已添加 {len(added)} 个视频", error="")
         self.log.event("library_add", "媒体索引已更新", count=len(added))
         return added
+
+    def _copy_media(self, selected):
+        self._start_job("media-copy",
+                        lambda progress, cancel: self.catalog.copy_files(selected, progress, cancel),
+                        self.add_paths)
+
+    def _scan_media_inbox(self):
+        if self._closed or (self._inbox_thread and self._inbox_thread.is_alive()):
+            return
+        settings = replace(self._settings)
+        scanner, store, stop = self._inbox_scanner, self.store, self._inbox_stop
+        self._set_state(mediaInbox={**self._state.get("mediaInbox", {}), "scanning": True})
+
+        def scan():
+            try:
+                if scanner.folder.resolve() == scanner.folder:
+                    scanner.folder.mkdir(exist_ok=True)
+                result = scanner.scan(cancelled=stop.is_set)
+                if result is None or stop.is_set():
+                    return
+                documents = {}
+                for path in result["ready"]:
+                    if stop.is_set():
+                        return
+                    doc = store.load_document(path, settings.language)
+                    documents[path] = doc.metadata.get("stage") if doc else ""
+                candidates = [p for p, stage in documents.items() if stage != "ready"]
+                # A ready sidecar needs no speech model; each path gets its own gate.
+                result["blocked"] = {p: preparation_block_reason(settings, [p]) for p in candidates}
+                result["documents"] = documents
+                result["settings"] = asdict(settings)
+            except Exception as exc:
+                result = {"failure": type(exc).__name__}
+            if not stop.is_set():
+                self._inboxCompleted.emit(result)
+
+        self._inbox_thread = threading.Thread(target=scan, name="tingmu-media-inbox", daemon=True)
+        self._inbox_thread.start()
+
+    @Slot(object)
+    def _inbox_completed(self, result):
+        if self._closed:
+            return
+        if result.get("failure"):
+            self._set_state(mediaInbox={**self._state.get("mediaInbox", {}), "scanning": False,
+                                       "blocked": "暂时无法检查媒体文件夹，稍后自动重试"})
+            return
+        if result["settings"] != asdict(self._settings):
+            self._set_state(mediaInbox={**self._state.get("mediaInbox", {}), "scanning": False})
+            return
+        # A partial/inaccessible scan must never purge index entries.
+        if result["error"]:
+            self._set_state(mediaInbox={**self._state.get("mediaInbox", {}), "scanning": False,
+                                       "blocked": result["error"]})
+            return
+        added, removed = self.catalog.reconcile_inbox(result["ready"], result["present"])
+        snapshot = self.queue.snapshot()
+        ready = result["ready"]
+        selected, blocked = [], []
+        enabled = self._settings.auto_prepare_media and not self._inbox_paused
+        if enabled:
+            for path in self.catalog.automatic & ready.keys():
+                if result["documents"].get(path) == "ready":
+                    continue
+                same = [j for j in snapshot if j["media_path"] == path
+                        and all(j["settings"].get(k) == getattr(self._settings, k)
+                                for k in ("source_language", "target_language", "level"))
+                        and j.get("fingerprint") == ready[path]]
+                # Existing manual/failed/cleared jobs retain their explicit controls.
+                if same:
+                    own = [j for j in same if j.get("origin") == "media-inbox"
+                           and j["status"] in ("queued", "paused") and not j.get("auto_paused")]
+                    for job in own:
+                        previous = AppSettings(**{k: v for k, v in job["settings"].items()
+                                                  if k in {f.name for f in fields(AppSettings)}})
+                        # Configuration changes must not revive a frozen request automatically.
+                        if (preparation_identity_settings(asdict(previous)) !=
+                                preparation_identity_settings(asdict(self._settings))):
+                            continue
+                        reason = result["blocked"].get(path, "")
+                        if reason:
+                            blocked.append(reason)
+                        else:
+                            selected.append(job["id"])
+                    continue
+                reason = result["blocked"].get(path, "")
+                if reason:
+                    blocked.append(reason)
+                    continue
+                try:
+                    jobs = self.queue.enqueue([Path(path)], replace(self._settings), automatic=True)
+                    for job in jobs:
+                        if job["fingerprint"] == ready[path]:
+                            selected.append(job["id"])
+                        else:
+                            self.queue.remove(job["id"])
+                except (OSError, ValueError):
+                    # Removal/replacement after the snapshot will be reconsidered next scan.
+                    continue
+        if removed:
+            for job in snapshot:
+                if job.get("origin") == "media-inbox" and job["media_path"] in removed:
+                    if job["status"] == "running":
+                        self.queue.pause()
+                    elif job["status"] in ("queued", "paused"):
+                        self.queue.remove(job["id"])
+        if added or removed:
+            self._refresh_library()
+        waiting = len(result["waiting"])
+        status = (f"等待 {waiting} 个文件复制完成" if waiting else
+                  "媒体文件夹自动准备已开启" if enabled else "媒体文件夹已同步")
+        if self._settings.auto_prepare_media and self._inbox_paused:
+            blocked.append("媒体文件夹自动准备已暂停。开始队列或重新打开自动准备即可继续。")
+        self._set_state(mediaInbox={"scanning": False, "waiting": waiting, "ready": len(ready),
+                                   "blocked": next(iter(blocked), ""), "status": status})
+        if selected and "queue" not in self._workers:
+            self._start_job("queue", lambda progress, cancelled: self.queue.run(
+                progress, cancelled, on_error=lambda exc: self.log.exception(exc, "queue_error"),
+                job_ids=selected, allow_model_downloads=False),
+                lambda result: self._set_state(status="自动准备已结束；可在媒体库和队列查看结果"))
+        self._refresh_jobs()
 
     def _refresh_library(self):
         jobs = {j["media_path"]: j for j in self.queue.snapshot()}
@@ -383,6 +639,10 @@ class Bridge(FeatureMixin, QObject):
             job = jobs.get(media)
             stage = document.metadata.get("stage", "transcribed") if document else "unprepared"
             status = "ready" if stage == "ready" else ("partial" if document else "unprepared")
+            if document and status == "ready":
+                counts = lesson_counts(document)
+                if counts["verified"] < counts["total"]:
+                    status = "lessonDraft" if counts["taught"] else "subtitleOnly"
             if job and job["status"] != "completed":
                 status = job["status"]
             if not Path(media).is_file():
@@ -404,6 +664,9 @@ class Bridge(FeatureMixin, QObject):
         self.save_position()
         self._player.stop()
         self.media_path = str(path)
+        self._embedded.select(self.media_path, -1, 0)
+        self.sources.open(self.media_path)
+        self._restore_embedded_pending = self.sources.embeddedChoice["show"]
         self.log.event("media_open", "打开媒体", media_id=media_id(self.media_path), extension=path.suffix.lower())
         self._loop_a = self._loop_b = -1
         self.catalog.add([path])
@@ -412,6 +675,7 @@ class Bridge(FeatureMixin, QObject):
         self._load_document()
         self._load_personal()
         self._player.setSource(QUrl.fromLocalFile(self.media_path))
+        self._restore_embedded_choice()
         self._player.play()
         self._refresh_library()
 
@@ -426,7 +690,9 @@ class Bridge(FeatureMixin, QObject):
     def _set_document(self, document):
         self.document = document
         self._source_cues = {cue.id: cue for cue in document.cues} if document else {}
-        self.timeline = SubtitleTimeline(document.cues if document else [], gap_fill_ms=self._settings.subtitle_gap_ms)
+        review = document.metadata.get("translation_review", {}) if document else {}
+        self.timeline = SubtitleTimeline(document.cues if document else [], gap_fill_ms=self._settings.subtitle_gap_ms,
+                                         translation_review=review)
         self._cues = [self._present_cue(cue) for cue in self.timeline.cues]
         self._cue_indices = {cue.id: i for i, cue in enumerate(self.timeline.cues)}
         self.cuesChanged.emit()
@@ -436,7 +702,7 @@ class Bridge(FeatureMixin, QObject):
         metadata = document.metadata if document else {}
         review = metadata.get("review_spec", {})
         active_review = bool(metadata.get("annotation_spec", {}).get("review"))
-        self._set_state(subtitleSource="学习字幕" if document else "",
+        self._set_state(subtitleSource="学习字幕" if document else "", lessonCounts=lesson_counts(document),
                         reviewModel=review.get("model", "") if active_review else "",
                         reviewSummary="文本已复核" if active_review and metadata.get("review_stage") == "ready" else "")
 
@@ -449,8 +715,12 @@ class Bridge(FeatureMixin, QObject):
         records = metadata.get("review_records", {})
         active_review = bool(metadata.get("annotation_spec", {}).get("review"))
         value["reviewReason"] = "\n".join(records.get(i, {}).get("reason", "") for i in ids) if active_review else ""
+        if any(i in metadata.get("cue_corrections", {}) for i in ids):
+            value["reviewReason"] = "本句已按用户提供的意思逐句修订；仍保留原始识别文本与时间。"
         value["sourceIds"] = list(ids)
         originals = [self._source_cues[i] for i in ids if i in self._source_cues]
+        value["translationVerified"] = bool(originals) and all(
+            translation_verified(c, metadata.get("translation_review", {})) for c in originals)
         value["sourceStart"] = min((c.start for c in originals), default=cue.start)
         value["sourceEnd"] = max((c.end for c in originals), default=cue.end)
         value["timingBasis"] = next((s.timing_basis for s in self.timeline.segments if s.cue.id == cue.id), "source")
@@ -476,6 +746,7 @@ class Bridge(FeatureMixin, QObject):
             self._player.setPosition(self._loop_a)
             return
         self._sync_cue(position)
+        self._embedded.position(position)
         self._update_playback()
 
     def _duration_changed(self, duration):
@@ -514,6 +785,7 @@ class Bridge(FeatureMixin, QObject):
         QTimer.singleShot(0, apply_after_load)
 
     def _media_status(self, status):
+        self._restore_embedded_choice()
         self._schedule_resume_seek()
         if status == QMediaPlayer.MediaStatus.EndOfMedia:
             if self._loop_b > self._loop_a >= 0:
@@ -523,17 +795,40 @@ class Bridge(FeatureMixin, QObject):
                 self._adjacent_media(1)
         self._update_playback()
 
+    def _restore_embedded_choice(self):
+        if not self._restore_embedded_pending or self._player.source() != QUrl.fromLocalFile(self.media_path):
+            return
+        if self._player.mediaStatus() not in (QMediaPlayer.MediaStatus.LoadedMedia,
+                                              QMediaPlayer.MediaStatus.BufferingMedia,
+                                              QMediaPlayer.MediaStatus.BufferedMedia):
+            return
+        tracks = self._player.subtitleTracks()
+        if tracks:
+            self._restore_embedded_pending = False
+            index = self.sources.embeddedChoice["index"]
+            if index < len(tracks):
+                self._embedded.select(self.media_path, index, self._player.position())
+
     def _media_error(self, code, text):
         if code != QMediaPlayer.Error.NoError:
             self.log.event("player_error", "播放器发生错误", "ERROR", code=code.name)
             self._error(text or "无法播放此文件")
 
-    def _tracks(self, items):
+    def _set_audio_output(self, identity):
+        self.sources.choose_output(identity)
+        self._settings.audio_output_id = identity
+        self.store.save_settings(self._settings)
+        self.settingsChanged.emit()
+
+    def _tracks(self, items, *, numbered=False):
         result = []
         for index, metadata in enumerate(items):
             title = metadata.stringValue(QMediaMetaData.Key.Title)
             language = metadata.stringValue(QMediaMetaData.Key.Language)
-            result.append({"index": index, "name": title or language or f"轨道 {index + 1}"})
+            name = title or language
+            if numbered and name:
+                name = f"{index + 1} · {name}"
+            result.append({"index": index, "name": name or f"轨道 {index + 1}"})
         return result
 
     def _update_playback(self, *_):
@@ -541,9 +836,10 @@ class Bridge(FeatureMixin, QObject):
                  "playing": self._player.playbackState() == QMediaPlayer.PlaybackState.PlayingState,
                  "volume": self.audio.volume(), "muted": self.audio.isMuted(), "rate": self._player.playbackRate(),
                  "audioTracks": self._tracks(self._player.audioTracks()),
-                 "subtitleTracks": self._tracks(self._player.subtitleTracks()),
-                 "audioTrack": self._player.activeAudioTrack(), "subtitleTrack": self._player.activeSubtitleTrack(),
-                 "embeddedText": self._player.videoSink().subtitleText() if self._player.videoSink() else "",
+                 "subtitleTracks": self._tracks(self._player.subtitleTracks(), numbered=True),
+                 "audioTrack": self._player.activeAudioTrack(), "subtitleTrack": self._embedded.track,
+                 "embeddedText": self._embedded.text, "embeddedImage": self._embedded.image,
+                 "embeddedBounds": self._embedded.bounds, "embeddedStatus": self._embedded.status,
                  "loopA": self._loop_a, "loopB": self._loop_b}
         if value != self._playback:
             self._playback = value
@@ -602,11 +898,26 @@ class Bridge(FeatureMixin, QObject):
                 self.log.event("queue_stage", "视频处理阶段更新", job_id=job["id"], status=phase[0],
                                stage=phase[1], done=done, total=total)
         if rows != self._jobs:
-            old_completed = {j["id"] for j in self._jobs if j["status"] == "completed"}
+            prior = {j["id"]: j["status"] for j in self._jobs}
             self._jobs = rows
             self.jobsChanged.emit()
-            self._refresh_library()
-            if any(j["path"] == self.media_path and j["status"] == "completed" and j["id"] not in old_completed for j in rows):
+            if prior != {j["id"]: j["status"] for j in rows}:
+                self._refresh_library()
+            else:
+                # The queue already read this checkpoint. Avoid deserializing every
+                # film and hashing every lesson on the UI thread for each batch.
+                latest = {j["path"]: j for j in rows}
+                updated = []
+                for item in self._library:
+                    job = latest.get(item["path"])
+                    if job and job["status"] == "running":
+                        item = {**item, "progress": job["message"], "cueCount": job["total"] or item["cueCount"]}
+                    updated.append(item)
+                if updated != self._library:
+                    self._library = updated
+                    self.libraryChanged.emit()
+            if any(j["path"] == self.media_path and j["status"] in ("completed", "paused", "failed")
+                   and j["status"] != prior.get(j["id"]) for j in rows):
                 self._load_document()
 
     @staticmethod
@@ -614,12 +925,14 @@ class Bridge(FeatureMixin, QObject):
         text = job.get("progress", "")
         if job["status"] == "completed":
             return "完成"
+        if "译文核验" in text:
+            return "译稿核验"
         if "复核" in text:
             return "文本复核"
         if any(word in text for word in ("讲解", "教学", "分析", "标注")):
             return "学习材料"
         if any(word in text for word in ("识别", "音频", "模型", "转写", "Qwen", "Whisper")):
-            return "本地识别"
+            return "外部识别" if job.get("settings", {}).get("asr_backend") == "external" else "本地识别"
         return {"queued": "等待", "paused": "已暂停", "failed": "失败"}.get(job["status"], "准备")
 
     def _start_job(self, key, function, completed):
@@ -645,6 +958,7 @@ class Bridge(FeatureMixin, QObject):
         thread = threading.Thread(target=work, name=f"tingmu-{key}", daemon=True)
         self._workers[key] = (thread, cancelled)
         self._set_state(busy=True, queueRunning="queue" in self._workers,
+                        modelDownloading="model-download" in self._workers,
                         chatBusy=bool({"chat", "summary"} & self._workers.keys()),
                         learningBusy="notebook" in self._workers, modelBusy="models" in self._workers, error="")
         thread.start()
@@ -659,9 +973,13 @@ class Bridge(FeatureMixin, QObject):
         if self._closed:
             return
         self._workers.pop(key, None)
+        if key == "chat":
+            self._chat_worker_session_id = ""
         callback = self._callbacks.pop(key, None)
         self._set_state(busy=bool(self._workers), queueRunning="queue" in self._workers,
+                        modelDownloading="model-download" in self._workers,
                         chatBusy=bool({"chat", "summary"} & self._workers.keys()),
+                        chatStopping=False if key == "chat" else self._state.get("chatStopping", False),
                         learningBusy="notebook" in self._workers, modelBusy="models" in self._workers,
                         streaming="chat" in self._workers)
         if error:
@@ -694,12 +1012,58 @@ class Bridge(FeatureMixin, QObject):
             self.queue.retry_failed()
         if not self.queue.pending_count:
             raise ValueError("队列中没有待处理视频")
+        self._resume_inbox()
         self._start_job("queue", lambda progress, cancelled: self.queue.run(
                             progress, cancelled, on_error=lambda exc: self.log.exception(exc, "queue_error")),
                         lambda result: self._set_state(status="队列已暂停" if self.queue.pending_count else "队列处理结束"))
 
+    def _resume_inbox(self):
+        self._inbox_paused = False
+        self.queue.resume_automatic()
+
     def _find_cue(self, cue_id):
         return next((c for c in self.timeline.cues if c.id == cue_id), self._active_cue if not cue_id else None)
+
+    def _frozen_subtitle(self, cue_id):
+        from tingmu.corrections import freeze_target
+        ids = self.timeline.source_ids(cue_id)
+        if self.document and len(ids) == 1 and ids[0] in self._source_cues:
+            return freeze_target(self.document, self._source_cues[ids[0]], cue_id)
+        return None
+
+    @Slot(str, result="QVariantMap")
+    def captureSubtitle(self, cue_id):
+        cue = self._find_cue(cue_id) if cue_id else None
+        frozen = self._frozen_subtitle(cue_id)
+        if not cue or not frozen:
+            return {}
+        document, srt = self.store.material_paths(self.media_path, self._settings.language)
+        return {"target": frozen, "text": cue.text, "start": cue.start,
+                "media": self.media_path, "language": asdict(self._settings.language),
+                "documentPath": str(document), "srtPath": str(srt)}
+
+    @Slot("QVariantMap", str, result="QVariantMap")
+    def submitSubtitleCorrection(self, captured, guidance):
+        try:
+            target = captured.get("target") or {}
+            cue_id = target.get("display_id", "")
+            if not target or captured != self.captureSubtitle(cue_id):
+                return {"error": "字幕或学习材料已变化，请重新选择该句。"}
+            if not guidance.strip():
+                return {"error": "请填写你确认的说法或意思。"}
+            session = self.conversations.load(self._active_session_id)
+            if (session.get("media_path") != self.media_path or
+                    session.get("source_language") != self._settings.source_language or
+                    session.get("target_language") != self._settings.target_language):
+                self._activate_context_session()
+            cue = self._find_cue(cue_id)
+            self._v4_send_chat("请按我确认的意思复核并保存本句的字幕、译文和讲解。\n" + guidance.strip(),
+                               request_context={"media_path": self.media_path, "language": asdict(self._settings.language),
+                                                "cue": asdict(cue), "correction": target, "subtitle_editor": True})
+            return {"messageId": self._messages[-1]["id"]}
+        except Exception as exc:
+            self.log.exception(exc, "subtitle_correction_error")
+            return {"error": str(exc) if isinstance(exc, ValueError) else "未能提交修订，请检查模型连接。"}
 
     def _send_chat(self, text):
         self._v4_send_chat(text)
@@ -718,7 +1082,7 @@ class Bridge(FeatureMixin, QObject):
                 raise ValueError("字幕文件中没有有效内容")
             doc = StudyDocument(media, language, annotate_local(cues, language),
                                 metadata={"subtitle_path": canonical_path(path), "stage": "transcribed"})
-            self.store.save_document(doc)
+            self.store.save_document(doc, replace_existing=True)
             return doc
 
         def completed(doc):
@@ -748,11 +1112,14 @@ class Bridge(FeatureMixin, QObject):
     def _command(self, name, p):
         if self._feature_command(name, p):
             return
-        if name in ("openFiles", "addFiles"):
+        if name in ("openFiles", "addFiles", "copyFiles"):
             selected, _ = QFileDialog.getOpenFileNames(None, "选择视频（可多选）", self._settings.library_path,
                 "音视频 (" + " ".join("*" + ext for ext in sorted(MEDIA_EXTENSIONS)) + ");;所有文件 (*)")
             if selected:
-                self.add_paths(selected)
+                if name == "copyFiles":
+                    self._copy_media(selected)
+                else:
+                    self.add_paths(selected)
                 self._settings.library_path = str(Path(selected[0]).parent)
                 self.store.save_settings(self._settings)
                 if name == "openFiles" and len(selected) == 1:
@@ -767,6 +1134,8 @@ class Bridge(FeatureMixin, QObject):
             self.open_media(p["path"])
         elif name == "addPaths":
             self.add_paths(p.get("paths", []))
+        elif name == "scanWorkspaceMedia":
+            self._scan_media_inbox()
         elif name == "removeMedia":
             self.catalog.remove(p.get("paths", []))
             self._refresh_library()
@@ -775,9 +1144,24 @@ class Bridge(FeatureMixin, QObject):
         elif name == "prepareCurrent":
             self._enqueue([self.media_path] if self.media_path else [])
             self._start_queue()
+        elif name == "openLessonSettings":
+            self.appAction.emit("lessonModels", {})
+        elif name == "prepareLessons":
+            if not self.document or not self.document.cues:
+                raise ValueError("请先为这个视频准备学习字幕。")
+            if not self.lessonModel["configured"]:
+                raise ValueError("请先在工作区的文本模型设置中分配逐句讲解模型。")
+            if "queue" in self._workers:
+                raise ValueError("正在准备视频，请等待当前任务完成。")
+            ident = self.queue.enqueue_lessons(Path(self.media_path), replace(self._settings))
+            self._start_job("queue", lambda progress, cancel: self.queue.run(
+                progress, cancel, on_error=lambda exc: self.log.exception(exc, "queue_error"), job_ids=[ident]),
+                lambda _: self._load_document())
         elif name == "startQueue":
             self._start_queue()
         elif name == "pauseQueue":
+            self._inbox_paused = True
+            self.queue.pause_automatic()
             self.queue.pause()
             if "queue" in self._workers:
                 self._workers["queue"][1].set()
@@ -842,25 +1226,54 @@ class Bridge(FeatureMixin, QObject):
             self._player.setPlaybackRate(max(0.25, min(3, float(p["value"]))))
             self._update_playback()
         elif name == "setAudioTrack":
-            self._player.setActiveAudioTrack(int(p["index"]))
+            index = int(p["index"])
+            if not 0 <= index < len(self._player.audioTracks()):
+                raise ValueError("请选择可用的音轨。")
+            self._player.setActiveAudioTrack(index)
+        elif name == "setAudioOutput":
+            self._set_audio_output(str(p["id"]))
         elif name == "setSubtitleTrack":
-            self._player.setActiveSubtitleTrack(int(p["index"]))
-        elif name == "importSubtitle":
+            index = int(p["index"])
+            if not -1 <= index < len(self._player.subtitleTracks()):
+                raise ValueError("请选择可用的内嵌字幕轨。")
+            self._restore_embedded_pending = False
+            self.sources.rememberTrack(index)
+            self._embedded.select(self.media_path, index, self._player.position())
+        elif name in ("importSubtitle", "importStudySubtitle"):
+            if not self.media_path:
+                raise ValueError("请先打开字幕对应的视频")
             path = p.get("path")
             if not path:
-                path, _ = QFileDialog.getOpenFileName(None, "导入字幕", str(Path(self.media_path).parent), "字幕 (*.srt *.ass *.ssa *.vtt)")
+                title = "导入播放字幕" if name == "importSubtitle" else "从字幕建立学习文档"
+                path, _ = QFileDialog.getOpenFileName(None, title, str(Path(self.media_path).parent), "字幕 (*.srt *.ass *.ssa *.vtt)")
             if path:
-                self._import_subtitle(path)
-        elif name == "exportSubtitle":
+                if name == "importStudySubtitle":
+                    self._import_subtitle(path)
+                else:
+                    media = self.media_path
+
+                    def imported(track):
+                        if self.media_path == media:
+                            self.sources.install(track)
+                            self._set_state(status=f"已导入播放字幕：{track.name}")
+
+                    self._start_job("display-import", lambda *_: self.sources.import_file(media, path), imported)
+        elif name == "removeDisplaySubtitle":
+            if "display-import" in self._workers:
+                raise ValueError("正在导入播放字幕，请稍后再移除。")
+            self.sources.remove()
+        elif name in ("exportSubtitle", "exportTranslation"):
             if not self._cues:
                 raise ValueError("当前没有字幕")
-            path = p.get("path")
-            if not path:
-                path, _ = QFileDialog.getSaveFileName(None, "导出字幕", str(self.store.data_dir / "exports" / "字幕.srt"), "SRT (*.srt)")
+            translation = name == "exportTranslation"
+            cues = translated_subtitles(self.document) if translation else self.timeline.cues
+            if not cues:
+                raise ValueError("请先补全逐句讲解与译稿，完成复核后可导出整片译稿。")
+            filename = f"{Path(self.media_path).stem}.{self._settings.source_language}.srt" if translation else "字幕.srt"
+            path = self._export_destination(p.get("path"), filename, (".srt",))
             if path:
-                Path(path).parent.mkdir(parents=True, exist_ok=True)
-                save_srt(self.timeline.cues, Path(path))
-                self._set_state(status="字幕已导出")
+                save_srt(cues, path)
+                self._set_state(status=f"字幕已导出：{path}")
         elif name == "saveWord":
             cue = self._find_cue(p.get("cueId", ""))
             if cue and 0 <= int(p["tokenIndex"]) < len(cue.tokens):
@@ -904,21 +1317,18 @@ class Bridge(FeatureMixin, QObject):
                     self._load_personal()
                 self._seek(round(entry["start"] * 1000))
         elif name == "exportNotes":
-            path = p.get("path")
-            if not path:
-                path, _ = QFileDialog.getSaveFileName(None, "导出学习记录", str(self.store.data_dir / "exports/学习记录.md"), "Markdown (*.md);;CSV (*.csv)")
+            path = self._export_destination(p.get("path"), "学习记录.md", (".md", ".csv"))
             if path:
                 method = self.store.export_csv if Path(path).suffix.lower() == ".csv" else self.store.export_markdown
                 method(Path(path), self.media_path or None)
-                self._set_state(status="学习记录已导出")
+                self._set_state(status=f"学习记录已导出：{path}")
         elif name == "saveFrame":
             sink = self._player.videoSink()
             frame = sink.videoFrame() if sink else None
             if not frame or not frame.isValid():
                 raise ValueError("当前没有可保存的画面")
             image = frame.toImage()
-            destination = self.store.data_dir / "exports" / (datetime.now().strftime("画面-%Y%m%d-%H%M%S") + ".png")
-            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination = export_path(self.store.data_dir, datetime.now().strftime("画面-%Y%m%d-%H%M%S-%f.png"), (".png",))
             if not image.save(str(destination)):
                 raise ValueError("保存画面失败")
             self._set_state(status=f"画面已保存：{destination}")
@@ -943,7 +1353,7 @@ class Bridge(FeatureMixin, QObject):
         elif name == "dismissError":
             self._set_state(error="", status="")
         elif name == "openAbout":
-            self._set_state(status=f"听幕 {__version__} · 本地播放与语言学习 · 学习资料保存在应用 data 目录")
+            self._set_state(status=f"听幕 {__version__} · 当前工作区：{self.store.data_dir}")
         else:
             raise ValueError(f"未知操作：{name}")
 
@@ -955,9 +1365,12 @@ class Bridge(FeatureMixin, QObject):
         self.store.save_settings(self._settings)
         self.queue.pause()
         self._closed = True
+        self._embedded.close()
         self.timer.stop()
         self.position_timer.stop()
         self.diagnostic_timer.stop()
+        self.inbox_timer.stop()
+        self._inbox_stop.set()
         workers = list(self._workers.values())
         for thread, event in workers:
             event.set()

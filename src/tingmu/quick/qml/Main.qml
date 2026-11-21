@@ -6,7 +6,7 @@ import "Style.js" as S
 ApplicationWindow {
     id:app
     objectName:"mainWindow"
-    title:(backend.state.mediaName ? backend.state.mediaName + " — " : "") + "听幕"
+    title:(backend.state.mediaName ? backend.state.mediaName + " — " : "") + workspaces.info.name + " · 听幕"
     width:1480; height:930
     minimumWidth:Math.min(980,Math.max(760,Screen.desktopAvailableWidth-24))
     minimumHeight:Math.min(600,Math.max(420,Screen.desktopAvailableHeight-64))
@@ -104,23 +104,41 @@ ApplicationWindow {
         libraryDock.SplitView.preferredHeight=Math.min(w.libraryHeight || 420,app.height*0.62)
         companionDock.SplitView.preferredHeight=Math.min(w.companionHeight || 450,(app.height-104)*0.56)
         restoring=false
+        if(workspaces.info.showSetup) Qt.callLater(function(){workspaceSetup.open()})
     }
     onClosing:{learningPanel.flushDrafts();Theme.closing=true;saveWorkspace();persist.stop();developerPanel.hide();if(playerDock.loadedItem && playerDock.loadedItem.fullscreen)playerDock.loadedItem.toggleFullscreen();var all=docks();for(var key in all)all[key].detached=false}
     DeveloperPanel{id:developerPanel}
     ModelManager{id:modelManager}
+    WorkspaceSetup{id:workspaceSetup;onModelsRequested:modelManager.open()}
+    Connections {
+        target:backend
+        function onAppAction(name,payload){
+            if(name!=="lessonModels")return
+            const player=playerDock.loadedItem
+            if(player){player.closeSettings();if(player.fullscreen)player.toggleFullscreen()}
+            workspaceSetup.openTextSettings()
+            app.raise();app.requestActivate()
+        }
+    }
+    ModelDownloadConsent { onConfirmationRequested: { app.raise(); app.requestActivate() } }
+    TextConnectionConsent { onConfirmationRequested: { app.raise(); app.requestActivate() } }
     Timer{id:persist;interval:350;onTriggered:app.saveWorkspace()}
     Shortcut{sequence:"Ctrl+O";onActivated:backend.command("openFiles",{})}
     Shortcut{sequence:"Ctrl+Shift+O";onActivated:backend.command("openFolder",{})}
     header:Rectangle {
         height:66;color:Theme.bg
         RowLayout {
-            anchors.fill:parent;anchors.leftMargin:20;anchors.rightMargin:20;spacing:18
+            anchors.fill:parent;anchors.leftMargin:app.width<1100 ? 10 : 20;anchors.rightMargin:anchors.leftMargin;spacing:app.width<1100 ? 6 : 14
             RowLayout {
                 spacing:10
                 Rectangle { width:26;height:26;radius:6;color:Theme.accent;Text { textFormat:Text.PlainText;anchors.centerIn:parent;text:"听";color:Theme.bg;font.family:Theme.font;font.pixelSize:17;font.weight:Font.DemiBold} }
-                Text { textFormat:Text.PlainText;text:"听幕";color:Theme.text;font.family:Theme.font;font.pixelSize:20;font.weight:Font.DemiBold}
+                Text { visible:app.width>=1100;textFormat:Text.PlainText;text:"听幕";color:Theme.text;font.family:Theme.font;font.pixelSize:20;font.weight:Font.DemiBold}
             }
-            Rectangle{width:1;height:22;color:Theme.line}
+            WorkspacePicker {
+                Layout.preferredWidth:app.width<950 ? 142 : app.width<1100 ? 172 : 200
+                onCreateRequested:workspaceSetup.openCreate()
+                onManageRequested:workspaceSetup.open()
+            }
             MenuBar {
                 id:menuBar;objectName:"applicationMenuBar"
                 Layout.preferredHeight:36
@@ -137,8 +155,10 @@ ApplicationWindow {
                     Action{text:"添加多个视频…";onTriggered:backend.command("addFiles",{})}
                     Action{text:"打开文件夹…    Ctrl+Shift+O";onTriggered:backend.command("openFolder",{})}
                     MenuSeparator{}
-                    Action{text:"导入字幕…";onTriggered:backend.command("importSubtitle",{})}
+                    Action{text:"导入播放字幕…";enabled:!!backend.state.mediaPath;onTriggered:backend.command("importSubtitle",{})}
+                    Action{text:backend.cues.length ? "从字幕替换学习文档…" : "从字幕建立学习文档…";enabled:!!backend.state.mediaPath;onTriggered:backend.command("importStudySubtitle",{})}
                     Action{text:"导出字幕…";onTriggered:backend.command("exportSubtitle",{})}
+                    Action{text:"导出"+backend.lessonModel.language+"译稿…";enabled:!!backend.state.lessonCounts && backend.state.lessonCounts.total>0 && backend.state.lessonCounts.verified===backend.state.lessonCounts.total;onTriggered:backend.command("exportTranslation",{})}
                     Action{text:"打开数据文件夹";onTriggered:backend.command("openDataFolder",{})}
                 }
                 AppMenu {
@@ -154,9 +174,8 @@ ApplicationWindow {
                     Action{text:"全屏    F";onTriggered:if(playerDock.loadedItem)playerDock.loadedItem.toggleFullscreen()}
                 }
                 AppMenu {
-                    objectName:"workspaceMenu";title:"工作区"
+                    objectName:"workspaceMenu";title:"视图"
                     Action{text:"学习布局";onTriggered:app.changeView("learn")}
-                    Action{text:"模型管理…";onTriggered:modelManager.open()}
                     Action{text:"观看布局";onTriggered:app.changeView("watch")}
                     Action{text:"准备布局";onTriggered:app.changeView("prepare")}
                     MenuSeparator{}
@@ -181,8 +200,8 @@ ApplicationWindow {
             Item{Layout.fillWidth:true}
             RowLayout {spacing:2;TButton{text:"观看";quiet:true;checked:app.viewMode==="watch";onClicked:app.changeView("watch")}TButton{text:"准备";quiet:true;checked:app.viewMode==="prepare";onClicked:app.changeView("prepare")}TButton{objectName:"learningViewButton";text:"学习";quiet:true;checked:app.viewMode==="learn";onClicked:app.changeView("learn")}}
             Choice{objectName:"themeChoice";Layout.preferredWidth:88;model:["森林","纸页","薄雾","石墨"];property var values:["forest","paper","mist","graphite"];currentIndex:Math.max(0,values.indexOf(backend.settings.theme));onActivated:backend.setting("theme",values[currentIndex])}
-            TButton{text:"对话";quiet:true;onClicked:{chatDock.detached=true;chatDock.save()}}
-            TButton{text:"打开视频";iconSource:"arrow-up-right";primary:true;onClicked:backend.command("openFiles",{})}
+            TButton{visible:app.width>=980;text:"对话";quiet:true;onClicked:{chatDock.detached=true;chatDock.save()}}
+            TButton{text:app.width>=950 ? "打开视频" : "";tip:"打开视频";iconSource:"arrow-up-right";primary:true;onClicked:backend.command("openFiles",{})}
         }
     }
     SplitView {
@@ -235,7 +254,7 @@ ApplicationWindow {
             Rectangle{width:5;height:5;radius:3;color:backend.state.error ? Theme.error : Theme.accent}
             Text { textFormat:Text.PlainText;Layout.fillWidth:true;text:backend.state.error || backend.state.status || "就绪";color:backend.state.error ? Theme.error : Theme.muted;font.family:Theme.font;font.pixelSize:10;elide:Text.ElideRight}
             TButton{visible:!!backend.state.error;iconSource:"close";quiet:true;implicitHeight:24;tip:"关闭提示";onClicked:backend.command("dismissError",{})}
-            Text { textFormat:Text.PlainText;text:backend.state.cloudEnabled ? "本地媒体 · 云端文本已启用" : "本地模式";color:Theme.muted;font.family:Theme.font;font.pixelSize:10}
+            Text { textFormat:Text.PlainText;text:!backend.settings.text_models_enabled ? "文本模型已停用" : backend.state.cloudEnabled ? "允许远程文本 API" : "文本仅用本机 API";color:Theme.muted;font.family:Theme.font;font.pixelSize:10}
         }
     }
     AppDialog {

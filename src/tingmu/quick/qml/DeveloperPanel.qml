@@ -47,7 +47,7 @@ Window {
             "队列      " + (queue.running ? "运行中" : "未运行"),
             "任务      " + (states.join(" · ") || "无任务"),
             "", "模型配置",
-            "本地识别  " + (models.asr || "—"),
+            "字幕识别  " + (models.asr || "—"),
             "识别设备  " + (models.device || "—"),
             "文本复核  " + (models.review || "—"),
             "批量讲解  " + (models.teaching || "—"),

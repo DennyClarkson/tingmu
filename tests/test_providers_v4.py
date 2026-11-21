@@ -113,7 +113,8 @@ def test_discovery_without_chosen_model_and_anthropic_pagination(tmp_path):
     assert registry.public_profiles()[0]["models"] == ["a", "b"]
     with pytest.raises(ProviderError, match="模型 ID"):
         registry.resolve(p["id"])
-    assert {p["provider"] for p in registry.presets()} == {"openai", "deepseek", "qwen", "gemini", "anthropic", "ollama", "custom"}
+    assert {p["provider"] for p in registry.presets()} == {"openai", "deepseek", "qwen", "gemini", "anthropic",
+                                                          "ollama", "lmstudio", "local_compatible", "custom"}
     assert all(not p["model"] for p in registry.presets())
 
 
@@ -146,11 +147,24 @@ def test_http_errors_and_invalid_payloads_are_safe():
         with pytest.raises(ProviderError) as exc:
             request(profile(), "/models")
         assert exc.value.status == 401
+        assert "密钥" in str(exc.value)
         assert "secret" not in str(exc.value)
     with patch("tingmu.providers._open", return_value=io.BytesIO(b'{"error":{"message":"secret"}}')):
         with pytest.raises(ProviderError) as exc:
             request(profile(), "/chat/completions", {"model": "x", "messages": []})
         assert "secret" not in str(exc.value)
+
+
+def test_queue_rate_limit_reports_server_wait_without_resubmitting():
+    from tingmu.batch import _failure_details
+    error = urllib.error.HTTPError("https://example.invalid", 429, "secret", {"Retry-After": "45"},
+                                   io.BytesIO(b"secret"))
+    with patch("tingmu.providers._open", side_effect=error) as opened:
+        with pytest.raises(ProviderError) as exc:
+            request(profile(), "/models")
+    opened.assert_called_once()
+    message = _failure_details(exc.value, None)["error_message"]
+    assert "45 秒" in message and "同时请求上限" in message and "secret" not in message
 
 
 def test_openai_stream_deltas_tools_usage_and_completion():

@@ -31,7 +31,8 @@ ORGANIZE_PROMPT = (
 
 
 def language_name(language):
-    return LANGUAGE_NAMES.get(language, language)
+    from .locale_catalog import display_language
+    return LANGUAGE_NAMES.get(language) or display_language(language)
 
 
 DETAIL_FIELDS = {

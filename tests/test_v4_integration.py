@@ -114,15 +114,18 @@ def test_force_asr_ignores_sidecar_and_failed_retry_reuses_checkpoint(tmp_path, 
     monkeypatch.setattr(pipeline, "load_subtitles", lambda *a: pytest.fail("Reset used stale sidecar"))
 
     class Teacher:
+        def verify_translations(self, cues, language, context):
+            return [(c, list(c.segmented_texts) if len(c.segmented_texts) > 1 else []) for c in cues]
+
         def __init__(self, **kw):
             pass
 
         def annotate(self, cues, language, **kw):
             annotations.append([c.id for c in cues])
             if len(annotations) == 1:
-                kw["checkpoint"]([replace(cues[0], explanation="saved-first")])
+                kw["checkpoint"]([replace(cues[0], translation="draft", explanation="saved-first")])
                 raise RuntimeError("mock outage")
-            return [replace(c, explanation="retried-second") for c in cues]
+            return [replace(c, translation="draft", explanation="retried-second") for c in cues]
 
     monkeypatch.setattr(pipeline, "LearningAgent", Teacher)
     assert queue.run()[0]["status"] == "failed"
@@ -153,6 +156,9 @@ def test_teaching_reset_preserves_review_and_asr_through_failed_resume(tmp_path,
     attempts = []
 
     class Teacher:
+        def verify_translations(self, cues, language, context):
+            return [(c, list(c.segmented_texts) if len(c.segmented_texts) > 1 else []) for c in cues]
+
         def __init__(self, **kw):
             pass
 
@@ -161,7 +167,7 @@ def test_teaching_reset_preserves_review_and_asr_through_failed_resume(tmp_path,
             assert cues[0].text == "Reviewed text" and self.preserve_text
             if len(attempts) == 1:
                 raise RuntimeError("mock outage")
-            return [replace(cues[0], explanation="new-teaching")]
+            return [replace(cues[0], translation="draft", explanation="new-teaching")]
 
     monkeypatch.setattr(pipeline, "LearningAgent", Teacher)
     with pytest.raises(RuntimeError):
@@ -265,6 +271,10 @@ def test_model_selection_wires_all_roles_and_cloud_off_blocks_chat(bridge, monke
     assert persisted.companion_profile_id == selected["companion"]["id"]
     tutor = bridge._tutor_transport()
     assert tutor.model == "companion-model"
+    remote = bridge.model_registry.save_profile({"provider": "custom", "base_url": "https://example.invalid/v1",
+                                                "model": "cloud-model", "key_source": "none"})
+    bridge._refresh_models()
+    bridge._feature_command("selectModel", {"role": "companion", "id": remote["id"]})
     bridge._settings.cloud_text_enabled = False
     with pytest.raises(ValueError, match="云端文本"):
         bridge._v4_send_chat("must stay local")
@@ -292,12 +302,15 @@ def test_pipeline_passes_selected_profile_to_annotation_and_review(tmp_path, mon
             return [replace(c, text="reviewed") for c in cues]
 
     class Teacher:
+        def verify_translations(self, cues, language, context):
+            return [(c, list(c.segmented_texts) if len(c.segmented_texts) > 1 else []) for c in cues]
+
         def __init__(self, **kw):
             calls.append(("annotation", kw))
 
         def annotate(self, cues, *a, **kw):
             assert self.preserve_text
-            return [replace(c, explanation="teacher") for c in cues]
+            return [replace(c, translation="draft", explanation="teacher") for c in cues]
 
     monkeypatch.setattr(pipeline, "LearningAgent", Teacher)
     monkeypatch.setattr(pipeline, "TranscriptReviewer", Reviewer)

@@ -28,6 +28,8 @@ reports/asr*.srt
 /diagnostics/
 /examples/
 model-profiles.json
+audio-credential.json
+local-audio-credential.json
 *.sqlite
 *.sqlite3
 *.sqlite-*

@@ -8,14 +8,19 @@ import argparse
 import hashlib
 from pathlib import Path
 import shutil
+import sys
 import threading
 import time
 
-import httpx
-from huggingface_hub import HfApi, snapshot_download
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from tingmu.runtime import cache_root, confined_path  # noqa: E402
+
+import httpx  # noqa: E402
+from huggingface_hub import HfApi, snapshot_download  # noqa: E402
 
 
 def download(repo: str, cache: Path, workers: int = 8):
+    cache = confined_path(cache_root(), cache)
     info = HfApi().model_info(repo, files_metadata=True)
     snapshot = Path(snapshot_download(repo, revision=info.sha, cache_dir=cache,
                                      allow_patterns=["*.json", "*.txt", "*.tiktoken"]))
@@ -89,7 +94,7 @@ def download(repo: str, cache: Path, workers: int = 8):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("repo", nargs="+", help="Official Hugging Face repository IDs")
-    parser.add_argument("--cache", type=Path, default=Path(".cache/qwen-models"))
+    parser.add_argument("--cache", type=Path, default=cache_root() / "qwen-models")
     parser.add_argument("--workers", type=int, default=8)
     args = parser.parse_args()
     for repo in args.repo:

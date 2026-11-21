@@ -341,7 +341,7 @@ def test_snapshot_saves_video_sink_pixels(window, tmp_path, monkeypatch):
     image = QImage(16, 12, QImage.Format.Format_RGBA8888)
     image.fill("#86B99A")
     window.video.videoSink().setVideoFrame(QVideoFrame(image))
-    output = tmp_path / "frame.png"
+    output = window.store.data_dir / "exports" / "frame.png"
     monkeypatch.setattr("tingmu.ui.app.QFileDialog.getSaveFileName", lambda *args: (str(output), "PNG (*.png)"))
     window.save_current_frame()
     saved = QImage(str(output))

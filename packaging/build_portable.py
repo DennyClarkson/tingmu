@@ -138,6 +138,9 @@ def main():
         for filename in ("LICENSE", "LICENSE.txt"):
             if (ffmpeg_folder / filename).exists():
                 shutil.copy2(ffmpeg_folder / filename, OUT / "bin" / "FFmpeg-LICENSE.txt")
+    speech_models = ROOT / ".cache/speech-models"
+    if speech_models.is_dir():
+        copy_tree(speech_models, OUT / ".cache/speech-models")
     copy_tree(ROOT / "src/tingmu", OUT / "app/tingmu", ignore=shutil.ignore_patterns("__pycache__"))
     patch_nagisa(OUT)
     shutil.copy2(ROOT / "packaging/bootstrap.py", OUT / "app/bootstrap.py")

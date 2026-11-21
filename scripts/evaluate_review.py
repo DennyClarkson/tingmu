@@ -1,4 +1,4 @@
-"""Opt-in bounded text-only Astra/Sol review benchmark; transcript output stays private."""
+"""Opt-in text-only review benchmark; transcript output stays private."""
 
 from __future__ import annotations
 
@@ -23,7 +23,8 @@ def main():
     parser.add_argument("--input", type=Path, required=True, help="Local ASR JSON with cues")
     parser.add_argument("--count", type=int, default=12)
     parser.add_argument("--offset", type=int, default=0)
-    parser.add_argument("--models", nargs="+", default=["gpt-6-astra", "gpt-6.1-sol"])
+    parser.add_argument("--models", nargs="+", choices=["deepseek-flash", "gpt-6-astra", "gpt-6.1-sol"],
+                        default=["deepseek-flash"])
     parser.add_argument("--output", type=Path, default=ROOT / "reports/review-evaluation.json")
     args = parser.parse_args()
     if not args.live:
@@ -42,9 +43,7 @@ def main():
     private = ROOT / "reports/private/review-evaluation"
     private.mkdir(parents=True, exist_ok=True)
     for model in args.models:
-        if model not in ("gpt-6-astra", "gpt-6.1-sol"):
-            parser.error("Benchmark accepts only validated Astra/Sol model IDs.")
-        reviewer = TranscriptReviewer(model=model)
+        reviewer = TranscriptReviewer(provider="deepseek" if model == "deepseek-flash" else "openai", model=model)
         started = time.monotonic()
         item = {"requested_model": model, "input_cues": len(cues), "success": False}
         try:

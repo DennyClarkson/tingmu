@@ -8,6 +8,8 @@ from bootstrap_logging import RedactingLog
 
 ROOT = Path(__file__).resolve().parent.parent
 LOGS = ROOT / "data" / "logs"
+if LOGS.resolve() != LOGS or (LOGS / "application.log").resolve() != LOGS / "application.log":
+    raise RuntimeError("启动日志必须保存在当前应用文件夹内。")
 LOGS.mkdir(parents=True, exist_ok=True)
 # pythonw has no standard streams. Keep SDK output local and available on failure.
 log = RedactingLog(LOGS / "application.log")

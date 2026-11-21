@@ -720,11 +720,14 @@ class NotebookDialog(QDialog):
         self.owner.player.play()
 
     def export(self, kind: str):
-        path, _ = QFileDialog.getSaveFileName(self, "导出收藏", f"听幕收藏.{kind}",
+        from tingmu.export_paths import export_path
+        default = export_path(self.owner.store.data_dir, f"听幕收藏.{kind}", (".md", ".csv"))
+        path, _ = QFileDialog.getSaveFileName(self, "导出收藏", str(default),
                                              "CSV (*.csv)" if kind == "csv" else "Markdown (*.md)")
         if not path:
             return
         try:
+            path = export_path(self.owner.store.data_dir, path, (".md", ".csv"))
             if kind == "csv":
                 self.owner.store.export_csv(Path(path), self.media_filter())
             else:
@@ -1115,11 +1118,18 @@ class MainWindow(WorkspaceMixin, QMainWindow):
             return
         stem = self.media_path.stem if self.media_path else "听幕"
         timestamp = clock_text(self.player.position()).replace(":", "-")
-        path, _ = QFileDialog.getSaveFileName(self, "保存当前画面", f"{stem}-{timestamp}.png", "PNG (*.png)")
+        from tingmu.export_paths import export_path
+        default = export_path(self.store.data_dir, f"{stem}-{timestamp}.png", (".png",))
+        path, _ = QFileDialog.getSaveFileName(self, "保存当前画面", str(default), "PNG (*.png)")
         if not path:
             return
         if Path(path).suffix.lower() != ".png":
             path += ".png"
+        try:
+            path = str(export_path(self.store.data_dir, path, (".png",)))
+        except ValueError as exc:
+            self.show_error(str(exc))
+            return
         if image.save(path, "PNG"):
             self.statusBar().showMessage(f"画面已保存：{path}")
         else:
@@ -1404,10 +1414,11 @@ class MainWindow(WorkspaceMixin, QMainWindow):
             self.statusBar().showMessage("当前没有可导出的学习字幕")
             return
         filename = (self.media_path.stem if self.media_path else "听幕") + ".srt"
-        path, _ = QFileDialog.getSaveFileName(self, "导出学习字幕", filename, "SRT (*.srt)")
+        from tingmu.export_paths import export_path
+        path, _ = QFileDialog.getSaveFileName(self, "导出学习字幕", str(export_path(self.store.data_dir, filename, (".srt",))), "SRT (*.srt)")
         if path:
             try:
-                save_srt(self.document.cues if self.document else self.cues, Path(path))
+                save_srt(self.document.cues if self.document else self.cues, export_path(self.store.data_dir, path, (".srt",)))
                 self.statusBar().showMessage(f"字幕已导出：{path}（保留原始时间轴，未叠加播放延迟）")
             except Exception as exc:
                 self.show_error(str(exc))

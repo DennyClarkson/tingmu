@@ -12,7 +12,7 @@ import threading
 import uuid
 
 from .learning_notes import (
-    LANGUAGE_NAMES as _LANGUAGE_NAMES, ORGANIZE_PROMPT, ORGANIZE_SCHEMA, decode_topics,
+    ORGANIZE_PROMPT, ORGANIZE_SCHEMA, decode_topics,
     language_name, literal as _literal, render_topic_body,
 )
 
@@ -36,8 +36,8 @@ def _revision(text):
 
 
 def _title(language):
-    name = _LANGUAGE_NAMES.get(language)
-    return f"{name}学习笔记" if name else f"{language} 学习笔记"
+    name = language_name(language)
+    return f"{name}学习笔记" if name != language else f"{language} 学习笔记"
 
 
 def _video(value):
@@ -94,7 +94,10 @@ class NotebookManager:
         self._migrate_legacy()
 
     def _path(self, language):
-        return self.root / _language(language) / "notebook.md"
+        code = _language(language)
+        # Some ISO language codes (e.g. con) are device names on Windows.
+        folder = "~" + code if PureWindowsPath(code).is_reserved() else code
+        return self.root / folder / "notebook.md"
 
     def _entries(self, language):
         with self.store._connection() as db:
@@ -116,7 +119,7 @@ class NotebookManager:
             db.execute("BEGIN IMMEDIATE")
             done = {r[0] for r in db.execute("SELECT language FROM notebook_v5_migrations")}
             old = {r["language"]: dict(r) for r in db.execute("SELECT * FROM notebook_state")}
-            paths = {p.parent.name: p for p in self.root.glob("*/notebook.md")}
+            paths = {p.parent.name.removeprefix("~"): p for p in self.root.glob("*/notebook.md")}
             for language in sorted(set(old) | set(paths)):
                 if language in done:
                     continue
@@ -186,7 +189,7 @@ class NotebookManager:
         if old == text:
             return
         if old:
-            backup = self.root / language / "backups" / (
+            backup = path.parent / "backups" / (
                 datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%f") + "-" + uuid.uuid4().hex[:8] + ".md")
             _atomic_text(backup, path.read_bytes().decode("utf-8"))
         _atomic_text(path, text)

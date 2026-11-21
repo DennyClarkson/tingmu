@@ -16,7 +16,20 @@ Item {
     function phaseLabel(message){if(root.stopping && (message.status==="pending" || message.status==="streaming"))return "正在停止…等待当前连接结束";if(message.status==="cancelled" || message.status==="stopped")return "已停止生成";if(message.status==="error")return message.error || "回复失败，可以重试";return ({connecting:"正在连接…",thinking:"正在思考…",acting:"正在执行学习操作…",answering:"正在生成回复…"})[message.phase] || (message.status==="pending" ? "正在连接…" : "正在回复…")}
     function toolEvents(events){var out=[];events.forEach(function(event){var index=-1;if(event.status!=="running")for(var i=out.length-1;i>=0;i--)if(out[i].name===event.name && out[i].status==="running"){index=i;break}if(index>=0)out[index]=event;else out.push(event)});return out}
     function openSettings(){settingsPopup.open()}
-    function send(){if(input.text.trim() && !busy){backend.command(editMessageId ? "editChat" : "sendChat",{id:editMessageId,text:input.text.trim()});editMessageId="";input.clear();followTail=true}}
+    readonly property var modelOffer: (workspaces.onboarding || {}).proposal || ({})
+    readonly property bool boundOffer: modelOffer.origin_session_id === backend.activeSessionId && modelOffer.status === "pending"
+    property string draftOffer: ""
+    function send() {
+        var text = input.text.trim()
+        if (!text || busy) return
+        if (!editMessageId && boundOffer && draftOffer === modelOffer.id &&
+            /^(同意下载|确认下载|取消下载|暂不下载|confirm download|cancel download)[。.!！]?$/i.test(text)) {
+            if (workspaces.decideProposal(draftOffer, /^(同意|确认|confirm)/i.test(text))) input.clear()
+            return
+        }
+        backend.command(editMessageId ? "editChat" : "sendChat", {id:editMessageId, text:text})
+        editMessageId=""; input.clear(); followTail=true
+    }
     function tail(){if(followTail)Qt.callLater(function(){history.positionViewAtEnd()})}
     ModelManager{id:models}
     TeachingPreferences{id:teachingPrefs}
@@ -82,7 +95,7 @@ Item {
                     Column{
                         visible:history.count===0;anchors.centerIn:parent;width:Math.min(420,parent.width-24);spacing:16
                         Text{width:parent.width;text:"今天想学懂什么？";color:Theme.text;font.family:Theme.serif;font.pixelSize:26;wrapMode:Text.Wrap}
-                        Text{width:parent.width;text:"问当前句、讨论收藏的表达，或一起练习。对话会按学习语言保存。";color:Theme.muted;font.family:Theme.font;font.pixelSize:13;wrapMode:Text.Wrap;lineHeight:1.5}
+                        Text{width:parent.width;text:"想开一个新工作区，可以说「我要学英语了」。看视频时，也可以问当前句或用收藏练习。";color:Theme.muted;font.family:Theme.font;font.pixelSize:13;wrapMode:Text.Wrap;lineHeight:1.5}
                     }
                 }
                 TButton{Layout.alignment:Qt.AlignHCenter;visible:!root.followTail && !history.atYEnd;text:"↓ 回到最新回复";quiet:true;onClicked:{root.followTail=true;history.positionViewAtEnd()}}
@@ -94,7 +107,13 @@ Item {
                 Rectangle {
                     Layout.fillWidth:true;Layout.preferredHeight:root.compact ? (root.height<300 ? 48 : 64) : 104;color:Theme.bg;radius:10;border.color:input.activeFocus ? Theme.accent : Theme.line
                     ScrollView{anchors.fill:parent;anchors.margins:10;clip:true
-                        TextArea{id:input;objectName:"chatInput";enabled:!root.busy;placeholderText:"向听幕提问…   Ctrl+Enter 发送";color:Theme.text;placeholderTextColor:Theme.muted;font.family:Theme.font;font.pixelSize:13;wrapMode:TextArea.Wrap;selectByMouse:true;background:null;Keys.onPressed:function(event){if((event.key===Qt.Key_Return || event.key===Qt.Key_Enter) && (event.modifiers & Qt.ControlModifier)){root.send();event.accepted=true}}}
+                        TextArea{id:input;objectName:"chatInput";enabled:!root.busy;placeholderText:root.boundOffer ? "回复「同意下载」或「取消下载」" : "向听幕提问…   Ctrl+Enter 发送";color:Theme.text;placeholderTextColor:Theme.muted;font.family:Theme.font;font.pixelSize:13;wrapMode:TextArea.Wrap;selectByMouse:true;background:null
+                            onTextChanged: {
+                                if (!text) root.draftOffer=""
+                                else if (!root.draftOffer) root.draftOffer=root.boundOffer ? root.modelOffer.id : "no-proposal"
+                            }
+                            Keys.onPressed:function(event){if((event.key===Qt.Key_Return || event.key===Qt.Key_Enter) && (event.modifiers & Qt.ControlModifier)){root.send();event.accepted=true}}
+                        }
                     }
                 }
                 RowLayout {
@@ -116,7 +135,7 @@ Item {
             }
         }
     }
-    SettingPopup{id:settingsPopup;contentItem:ColumnLayout{spacing:12;Text{text:"对话设置";color:Theme.text;font.family:Theme.font;font.pixelSize:17}Toggle{text:"允许云端文本分析";checked:backend.settings.cloud_text_enabled;onToggled:backend.setting("cloud_text_enabled",checked)}TButton{text:"管理模型连接";onClicked:models.open()}Text{Layout.fillWidth:true;text:"仅发送字幕、收藏和对话文本；音视频始终留在本地。";color:Theme.muted;font.family:Theme.font;font.pixelSize:12;wrapMode:Text.Wrap}}}
+    SettingPopup{id:settingsPopup;contentItem:ColumnLayout{spacing:12;Text{text:"对话设置";color:Theme.text;font.family:Theme.font;font.pixelSize:17}TextModelPolicy{Layout.fillWidth:true}TButton{text:"管理模型连接";onClicked:models.open()}Text{Layout.fillWidth:true;text:"对话模型接收字幕、收藏和对话文本。外部语音识别可在字幕处理设置中单独启用。";color:Theme.muted;font.family:Theme.font;font.pixelSize:12;wrapMode:Text.Wrap}}}
     AppDialog{width:380;id:renameDialog;title:"会话名称";anchors.centerIn:parent;modal:true;standardButtons:Dialog.Ok | Dialog.Cancel;background:Rectangle{color:Theme.panel;border.color:Theme.line;radius:8}contentItem:Field{id:sessionTitle;implicitWidth:280;placeholderText:"输入名称"}onAccepted:if(sessionTitle.text.trim())backend.command("renameChat",{id:backend.activeSessionId,title:sessionTitle.text.trim()})}
     AppDialog{width:380;id:deleteDialog;title:"删除这个会话？";anchors.centerIn:parent;modal:true;standardButtons:Dialog.Ok | Dialog.Cancel;background:Rectangle{color:Theme.panel;border.color:Theme.line;radius:8}contentItem:Text{text:"仅删除当前会话，收藏和学习笔记会保留。";color:Theme.text;font.family:Theme.font}onAccepted:backend.command("deleteChat",{id:backend.activeSessionId})}
 }

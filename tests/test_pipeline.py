@@ -32,11 +32,14 @@ def test_cloud_failure_preserves_transcript_and_resumes_completed_chunks(tmp_pat
     monkeypatch.setattr(pipeline, "transcribe", lambda *a, **k: [Cue("1", 0, 1, "A"), Cue("2", 1, 2, "B")])
 
     class FailingAgent:
+        def verify_translations(self, cues, language, context):
+            return [(c, list(c.segmented_texts) if len(c.segmented_texts) > 1 else []) for c in cues]
+
         def __init__(self, **kwargs):
             pass
 
         def annotate(self, cues, language, **kwargs):
-            kwargs["checkpoint"]([replace(cues[0], explanation="saved")])
+            kwargs["checkpoint"]([replace(cues[0], translation="draft", explanation="saved")])
             raise RuntimeError("simulated outage")
 
     monkeypatch.setattr(pipeline, "LearningAgent", FailingAgent)
@@ -51,7 +54,7 @@ def test_cloud_failure_preserves_transcript_and_resumes_completed_chunks(tmp_pat
     class ResumeAgent(FailingAgent):
         def annotate(self, cues, language, **kwargs):
             assert [c.id for c in cues] == ["2"]
-            return [replace(cues[0], explanation="resumed")]
+            return [replace(cues[0], translation="draft", explanation="resumed")]
 
     monkeypatch.setattr(pipeline, "LearningAgent", ResumeAgent)
     monkeypatch.setattr(pipeline, "transcribe", lambda *a, **k: pytest.fail("Transcription repeated"))
@@ -108,6 +111,9 @@ def test_model_change_failure_cannot_reuse_old_completed_ids(tmp_path, monkeypat
     attempts = []
 
     class NewAgent:
+        def verify_translations(self, cues, language, context):
+            return [(c, list(c.segmented_texts) if len(c.segmented_texts) > 1 else []) for c in cues]
+
         def __init__(self, **kwargs):
             pass
 
@@ -115,7 +121,7 @@ def test_model_change_failure_cannot_reuse_old_completed_ids(tmp_path, monkeypat
             attempts.append([c.id for c in cues])
             if len(attempts) == 1:
                 raise RuntimeError("provider outage before first checkpoint")
-            return [replace(c, translation="你好") for c in cues]
+            return [replace(c, translation="你好", explanation="问候") for c in cues]
 
     monkeypatch.setattr(pipeline, "LearningAgent", NewAgent)
     with pytest.raises(RuntimeError):
@@ -134,6 +140,9 @@ def test_actual_agent_metadata_contract_is_persisted(tmp_path, monkeypatch):
     monkeypatch.setattr(pipeline, "transcribe", lambda *a, **k: [Cue("1", 0, 2, "Hello")])
 
     def complete(self, system, payload, schema=None):
+        if "known_language" in payload:
+            return json.dumps({"cues": [{"id": c["id"], "translation": c["translation"], "segments": []}
+                                        for c in payload["cues"]]})
         return json.dumps({"cues": [{"id": c["id"], "text": c["text"], "translation": "你好",
                                     "explanation": "问候", "uncertain": False,
                                     "tokens": [{"text": c["text"], "reading": "", "meaning": "你好", "learn": True}]}
