@@ -15,6 +15,7 @@ Item {
             TButton { text:"＋ 文件"; Layout.fillWidth:true; onClicked:backend.command("addFiles",{}) }
             TButton { text:"文件夹"; Layout.fillWidth:true; onClicked:backend.command("openFolder",{}) }
         }
+        TButton { Layout.fillWidth:true; text:"复制视频到工作区…"; onClicked:backend.command("copyFiles",{}) }
         Field { id:search; Layout.fillWidth:true; placeholderText:"查找视频" }
         RowLayout {
             Layout.fillWidth:true
@@ -54,8 +55,14 @@ Item {
             Column {
                 visible:files.count===0; anchors.centerIn:parent; width:parent.width-20; spacing:10
                 Text { textFormat:Text.PlainText; text:"你的放映室"; color:Theme.text; font.family:Theme.font; font.pixelSize:18 }
-                Text { textFormat:Text.PlainText; width:parent.width; text:"添加任意位置的视频，或扫描文件夹。\n原文件留在原处。"; color:Theme.muted; font.family:Theme.font; font.pixelSize:12; wrapMode:Text.Wrap; lineHeight:1.4 }
+                Text { textFormat:Text.PlainText; width:parent.width; text:backend.settings.auto_prepare_media ? "把视频放进当前工作区的 media 文件夹，复制完成后会自动准备字幕。" : "可引用已有视频，或把视频放进当前工作区的 media 文件夹。"; color:Theme.muted; font.family:Theme.font; font.pixelSize:12; wrapMode:Text.Wrap; lineHeight:1.4 }
+                TButton { text:"打开视频目录"; onClicked:workspaces.action("mediaFolder",{}) }
             }
+        }
+        Text {
+            Layout.fillWidth:true; visible:!!(backend.state.mediaInbox || {}).blocked
+            text:(backend.state.mediaInbox || {}).blocked || ""; textFormat:Text.PlainText
+            color:Theme.muted; font.family:Theme.font; font.pixelSize:12; wrapMode:Text.Wrap
         }
         TButton { Layout.fillWidth:true; text:root.selected.length ? "加入处理队列 · " + root.selected.length + " 个" : "勾选视频后加入队列"; primary:root.selected.length>0; enabled:root.selected.length>0; onClicked:{backend.command("enqueue",{paths:root.selected});root.selected=[]} }
     }
@@ -66,6 +73,7 @@ Item {
             Text { textFormat:Text.PlainText; text:"媒体库"; color:Theme.text; font.family:Theme.font; font.pixelSize:16 }
             Text { textFormat:Text.PlainText; Layout.fillWidth:true; text:"可同时选择多个视频；扫描文件夹仅建立索引，不复制媒体。"; color:Theme.muted; font.family:Theme.font; font.pixelSize:12; wrapMode:Text.Wrap }
             TButton { text:"打开数据文件夹"; onClicked:backend.command("openDataFolder",{}) }
+            TButton { text:"扫描工作区 media 文件夹"; onClicked:backend.command("scanWorkspaceMedia",{}) }
             Text { textFormat:Text.PlainText; Layout.fillWidth:true; text:backend.state.dataDir || ""; color:Theme.muted; font.family:Theme.font; font.pixelSize:10; wrapMode:Text.WrapAnywhere }
         }
     }

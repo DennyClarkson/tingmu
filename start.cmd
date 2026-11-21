@@ -1,5 +1,9 @@
 @echo off
 setlocal EnableExtensions DisableDelayedExpansion
+set "PYTHONDONTWRITEBYTECODE=1"
+set "PYTHONPYCACHEPREFIX="
+set "PYTHONNOUSERSITE=1"
+set "PYTHONPATH="
 cd /d "%~dp0"
 if errorlevel 1 exit /b 1
 set "UV_CACHE_DIR=%~dp0.cache\uv"

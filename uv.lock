@@ -901,10 +901,13 @@ widechars = [
 
 [[package]]
 name = "tingmu"
-version = "0.5.0"
+version = "0.10.0"
 source = { editable = "." }
 dependencies = [
     { name = "faster-whisper" },
+    { name = "filelock" },
+    { name = "numpy" },
+    { name = "onnxruntime" },
     { name = "openai" },
     { name = "opencc-python-reimplemented" },
     { name = "pycantonese" },
@@ -929,9 +932,12 @@ gpu = [
 [package.metadata]
 requires-dist = [
     { name = "faster-whisper", specifier = ">=1.1,<2" },
+    { name = "filelock", specifier = ">=3.12,<4" },
+    { name = "numpy", specifier = ">=1.26,<3" },
     { name = "nvidia-cublas-cu12", marker = "extra == 'gpu'", specifier = "==12.9.2.10" },
     { name = "nvidia-cuda-runtime-cu12", marker = "extra == 'gpu'", specifier = "==12.9.79" },
     { name = "nvidia-cudnn-cu12", marker = "extra == 'gpu'", specifier = ">=9.8,<10" },
+    { name = "onnxruntime", specifier = ">=1.17,<2" },
     { name = "openai", specifier = ">=1.60,<3" },
     { name = "opencc-python-reimplemented", specifier = ">=0.1.7,<1" },
     { name = "pycantonese", specifier = ">=3.4,<4" },

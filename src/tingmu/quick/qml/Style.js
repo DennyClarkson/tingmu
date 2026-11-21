@@ -5,5 +5,5 @@ function time(ms) {
     return (h ? h + ":" : "") + (m < 10 ? "0" : "") + m + ":" + (s < 10 ? "0" : "") + s
 }
 function status(s) {
-    return ({cleared:"已清除",queued:"等待",running:"处理中",paused:"已暂停",failed:"失败",completed:"已完成",ready:"已准备",new:"未准备",unprepared:"未准备",partial:"已识别",missing:"文件缺失"})[s] || s || "未准备"
+    return ({cleared:"已清除",queued:"等待",running:"处理中",paused:"已暂停",failed:"失败",completed:"已完成",ready:"已准备",subtitleOnly:"仅有原文字幕",lessonDraft:"译稿待复核",new:"未准备",unprepared:"未准备",partial:"已识别",missing:"文件缺失"})[s] || s || "未准备"
 }

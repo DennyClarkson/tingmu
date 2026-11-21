@@ -4,4 +4,4 @@ from .runtime import configure_local_caches
 
 configure_local_caches()
 
-__version__ = "0.5.0"
+__version__ = "0.10.0"

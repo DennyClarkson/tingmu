@@ -242,6 +242,36 @@ class ReviewSchedulerTests(unittest.TestCase):
         self.assertEqual(set(request["segmentation_repairs"]), {"one", "two"})
         self.assertEqual(reviewer.batch_metadata[0]["status"], "completed")
 
+    def test_one_invalid_reason_retries_only_that_row_after_saving_its_neighbors(self):
+        reviewer = self.reviewer()
+        reviewer.chunk_size = 6
+        reviewer.max_workers = 1
+        timeline = self.cues(10)
+        calls, snapshots = [], []
+
+        def complete(worker, system, payload, schema):
+            ids = [r["id"] for r in payload["cues"]]
+            calls.append(ids)
+            worker.last_response_metadata = {"returned_model": "deepseek-flash"}
+            worker.response_metadata.append(worker.last_response_metadata)
+            rows = [dict(id=r["id"], text=r["text"], reason="", uncertain=False, segmented_texts=[r["text"]])
+                    for r in payload["cues"]]
+            if len(calls) == 1:
+                rows[2]["reason"] = None
+            else:
+                self.assertIn("reason", payload["cues"][0]["validation_error"])
+                self.assertNotIn("document_context", payload)
+                self.assertIn("Line 2", payload["read_only_neighbors_in_cue_order"][0]["before"])
+                self.assertEqual(snapshots[0], ["1", "2", "4", "5", "6"])
+            return json.dumps({"cues": rows})
+
+        with patch.object(LearningAgent, "_complete", complete):
+            output = reviewer.review(timeline[1:7], LanguagePair("en", "en"), context_cues=timeline,
+                                     checkpoint=lambda rows: snapshots.append([r.id for r in rows]))
+        self.assertEqual(calls, [["1", "2", "3", "4", "5", "6"], ["3"]])
+        self.assertEqual([c.id for c in output], calls[0])
+        self.assertEqual(set(reviewer.review_metadata), set(calls[0]))
+
     def test_cancel_preserves_inflight_and_resume_skips_completed(self):
         reviewer = self.reviewer()
         reviewer.max_workers = 1

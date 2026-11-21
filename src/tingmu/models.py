@@ -4,6 +4,16 @@ from dataclasses import asdict, dataclass, field, fields
 import math
 
 
+MAX_LLM_CONCURRENCY = 16
+DEFAULT_LLM_CONCURRENCY = 4
+
+
+def preparation_identity_settings(settings: dict) -> dict:
+    """Scheduling changes can resume the same material and queue entry."""
+    return {key: value for key, value in settings.items()
+            if key not in ("llm_high_concurrency", "llm_max_concurrency")}
+
+
 @dataclass
 class Token:
     text: str
@@ -25,6 +35,7 @@ class Cue:
     uncertain: bool = False
     # Text-only review boundaries; source identity, raw text and acoustic times stay above.
     segmented_texts: list[str] = field(default_factory=list)
+    speaker: str = ""
 
     def __post_init__(self):
         if not math.isfinite(self.start) or not math.isfinite(self.end) or self.start < 0 or self.end < self.start:
@@ -68,6 +79,7 @@ class StudyDocument:
 @dataclass
 class AppSettings:
     library_path: str = ""
+    auto_prepare_media: bool = False
     source_language: str = "zh-CN"
     target_language: str = "yue"
     level: str = "beginner"
@@ -76,6 +88,7 @@ class AppSettings:
     asr_model: str = "large-v3-turbo"
     device: str = "auto"
     audio_track: int = 0
+    audio_output_id: str = ""
     subtitle_offset_ms: int = 0
     cloud_text_enabled: bool = True
     companion_provider: str = "openai"
@@ -96,6 +109,34 @@ class AppSettings:
     companion_profile_id: str = ""
     companion_reasoning_effort: str = "default"
     teaching_preferences: str = ""
+    asr_backend: str = "local"
+    asr_endpoint: str = "https://api.openai.com/v1/audio/transcriptions"
+    external_asr_model: str = "whisper-1"
+    asr_key_env: str = "TINGMU_ASR_API_KEY"
+    asr_response_format: str = "verbose_json"
+    allow_audio_upload: bool = False
+    suppress_bgm: bool = True
+    speaker_turns: bool = True
+    local_asr_endpoint: str = "http://127.0.0.1:8000/v1/audio/transcriptions"
+    local_asr_api_model: str = "whisper-1"
+    local_asr_key_env: str = ""
+    local_asr_response_format: str = "verbose_json"
+    text_models_enabled: bool = True
+    llm_high_concurrency: bool = True
+    llm_max_concurrency: int = DEFAULT_LLM_CONCURRENCY
+
+    def __post_init__(self):
+        if not isinstance(self.llm_high_concurrency, bool):
+            self.llm_high_concurrency = str(self.llm_high_concurrency).lower() in ("true", "1")
+        try:
+            limit = int(self.llm_max_concurrency)
+        except (TypeError, ValueError, OverflowError):
+            limit = DEFAULT_LLM_CONCURRENCY
+        self.llm_max_concurrency = max(1, min(MAX_LLM_CONCURRENCY, limit))
+
+    @property
+    def llm_workers(self) -> int:
+        return self.llm_max_concurrency if self.llm_high_concurrency else 1
 
     @property
     def language(self) -> LanguagePair:

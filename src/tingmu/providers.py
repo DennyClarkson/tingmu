@@ -18,6 +18,8 @@ import urllib.error
 import urllib.request
 import uuid
 from pathlib import Path
+from email.utils import parsedate_to_datetime
+from math import ceil
 from urllib.parse import urlsplit, quote
 
 from .credentials import CredentialError, protect, unprotect
@@ -26,10 +28,11 @@ from .credentials import CredentialError, protect, unprotect
 class ProviderError(RuntimeError):
     """Safe provider error: never includes a response body, headers or URL."""
 
-    def __init__(self, message, *, status=None, category=None):
+    def __init__(self, message, *, status=None, category=None, retry_after=None):
         super().__init__(message)
         self.status = status
         self.category = category
+        self.retry_after = retry_after
 
 
 class RequestCancelled(ProviderError):
@@ -43,13 +46,29 @@ PRESETS = [
     {"provider": "gemini", "label": "Gemini（OpenAI 兼容）", "protocol": "openai", "base_url": "https://generativelanguage.googleapis.com/v1beta/openai", "env_var": "GEMINI_API_KEY", "model": ""},
     {"provider": "anthropic", "label": "Anthropic", "protocol": "anthropic", "base_url": "https://api.anthropic.com/v1", "env_var": "ANTHROPIC_API_KEY", "model": ""},
     {"provider": "ollama", "label": "Ollama（本机）", "protocol": "openai", "base_url": "http://127.0.0.1:11434/v1", "env_var": "", "key_source": "none", "model": ""},
+    {"provider": "lmstudio", "label": "LM Studio（本机）", "protocol": "openai", "base_url": "http://127.0.0.1:1234/v1", "env_var": "", "key_source": "none", "model": ""},
+    {"provider": "local_compatible", "label": "本机 OpenAI 兼容服务", "protocol": "openai", "base_url": "http://127.0.0.1:8000/v1", "env_var": "", "key_source": "none", "model": ""},
     {"provider": "custom", "label": "自定义 OpenAI 兼容", "protocol": "openai", "base_url": "", "env_var": "", "model": ""},
 ]
 _LOCKS = {}
 _LOCKS_LOCK = threading.Lock()
+LOCAL_PROVIDERS = frozenset({"ollama", "lmstudio", "local_compatible"})
 
 
-def validate_base_url(value: str, *, key_source="environment") -> str:
+def loopback_url(value):
+    try:
+        host = urlsplit(value or "").hostname
+        return bool(host and (host.lower() == "localhost" or ipaddress.ip_address(host).is_loopback))
+    except (TypeError, ValueError):
+        return False
+
+
+def text_allowed(settings, profile):
+    return settings.text_models_enabled and (settings.cloud_text_enabled or
+                                              bool(profile and loopback_url(profile.get("base_url"))))
+
+
+def validate_base_url(value: str, *, key_source="environment", local_connection=False) -> str:
     if not isinstance(value, str) or len(value) > 2000 or any(c.isspace() or ord(c) < 32 for c in value):
         raise ProviderError("API 地址无效。")
     try:
@@ -59,17 +78,13 @@ def validate_base_url(value: str, *, key_source="environment") -> str:
                 or parsed.query or parsed.fragment or "\\" in value or "%" in parsed.netloc
                 or any(c in parsed.netloc for c in "{}")):
             raise ValueError()
-        local = parsed.hostname.lower() == "localhost"
-        try:
-            local = local or ipaddress.ip_address(parsed.hostname).is_loopback
-        except ValueError:
-            pass
-        if parsed.scheme != "https" and not (parsed.scheme == "http" and local and key_source == "none"):
+        local = loopback_url(value)
+        if parsed.scheme != "https" and not (parsed.scheme == "http" and local and (key_source == "none" or local_connection)):
             raise ValueError()
         if port == 0:
             raise ValueError()
     except (ValueError, TypeError):
-        raise ProviderError("API 地址须为 HTTPS；仅无密钥的本机服务允许 HTTP。") from None
+        raise ProviderError("远程 API 地址须为 HTTPS。本机 HTTP 如需密钥，请选择本机预设并填写回环地址。") from None
     return value.rstrip("/")
 
 
@@ -80,7 +95,10 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def _open(request, timeout):
-    return urllib.request.build_opener(NoRedirect()).open(request, timeout=timeout)
+    handlers = [NoRedirect()]
+    if loopback_url(request.full_url):
+        handlers.append(urllib.request.ProxyHandler({}))
+    return urllib.request.build_opener(*handlers).open(request, timeout=timeout)
 
 
 def _check_cancel(cancelled):
@@ -505,10 +523,20 @@ def _http_error_category(exc):
         return "invalid_request"
 
 
+def _retry_after_seconds(value):
+    if not isinstance(value, str) or len(value) > 64:
+        return None
+    try:
+        seconds = int(value) if value.strip().isdigit() else ceil(parsedate_to_datetime(value).timestamp() - time.time())
+    except (TypeError, ValueError, OSError, OverflowError):
+        return None
+    return max(0, seconds)
+
+
 def request(config, path, body=None, *, timeout=120, on_delta=None, cancelled=None, on_reasoning=None):
     _check_cancel(cancelled)
     source = config.get("key_source", "environment")
-    base = validate_base_url(config["base_url"], key_source=source)
+    base = validate_base_url(config["base_url"], key_source=source, local_connection=config.get("provider") in LOCAL_PROVIDERS)
     secret = config.get("_secret")
     key = secret() if callable(secret) else config.get("_key", "")
     if source == "none":
@@ -569,11 +597,23 @@ def request(config, path, body=None, *, timeout=120, on_delta=None, cancelled=No
             return normalized
     except urllib.error.HTTPError as exc:
         category = _http_error_category(exc)
+        retry_after = _retry_after_seconds((exc.headers or {}).get("Retry-After"))
         exc.close()
-        hint = ("工具参数格式不被服务接受；请检查工具协议兼容性。" if category == "tool_schema" else
-                "模型不接受所选思考设置；请选择模型默认或该模型支持的强度。" if category == "reasoning_parameter" else
-                "请检查模型权限、余额和 API 地址。")
-        raise ProviderError(f"模型服务 HTTP {exc.code}；{hint}", status=exc.code, category=category) from None
+        hints = {401: "密钥未被接受，请检查此连接的 API 密钥。",
+                 402: "此连接的余额或计费额度不足，请检查服务账户。",
+                 403: "此连接没有调用权限，请检查密钥的权限和模型授权。",
+                 404: "找不到接口或模型，请检查 API 地址与模型 ID。",
+                 408: "服务等待请求超时，可稍后重试。",
+                 413: "输入超过服务的请求大小限制，请检查模型上下文与接口限制。",
+                 429: "请求达到服务的速率或配额限制。"}
+        hint = hints.get(exc.code)
+        if not hint:
+            hint = ("工具参数格式不被服务接受，请检查工具协议兼容性。" if category == "tool_schema" else
+                    "模型不接受所选思考设置，请选择模型默认或该模型支持的强度。" if category == "reasoning_parameter" else
+                    "模型服务暂时不可用，可稍后重试。" if 500 <= exc.code < 600 else
+                    "请检查请求参数、模型 ID 和接口协议。")
+        raise ProviderError(f"模型服务 HTTP {exc.code}。{hint}", status=exc.code, category=category,
+                            retry_after=retry_after) from None
     except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException):
         _check_cancel(cancelled)
         raise ProviderError("模型服务网络连接失败或超时。") from None
@@ -644,6 +684,7 @@ class ModelRegistry:
     def _public(self, profile):
         allowed = {"id", "label", "provider", "protocol", "base_url", "model", "key_source", "env_var", "models", "reasoning_effort", "max_tokens"}
         public = {key: copy.deepcopy(value) for key, value in profile.items() if key in allowed}
+        public["is_loopback"] = loopback_url(profile.get("base_url"))
         try:
             public["has_key"] = bool(self._secret_for(profile))
         except ProviderError:
@@ -682,6 +723,8 @@ class ModelRegistry:
                     raise ProviderError("模型名称或环境变量名称无效。")
             if p["env_var"] and not re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*", p["env_var"]):
                 raise ProviderError("环境变量名称无效。")
+            if provider in LOCAL_PROVIDERS and p["key_source"] == "environment" and not p["env_var"]:
+                raise ProviderError("请填写本机服务的密钥环境变量名，或选择无需密钥。")
             if "max_tokens" in p:
                 try:
                     p["max_tokens"] = int(p["max_tokens"])
@@ -691,7 +734,9 @@ class ModelRegistry:
                     raise ProviderError("输出长度须在 256–128000 之间。")
             if p.get("reasoning_effort", "") not in ("", "none", "minimal", "low", "medium", "high", "xhigh"):
                 raise ProviderError("推理强度无效。")
-            p["base_url"] = validate_base_url(p["base_url"], key_source=p["key_source"])
+            p["base_url"] = validate_base_url(p["base_url"], key_source=p["key_source"], local_connection=provider in LOCAL_PROVIDERS)
+            if provider in {"lmstudio", "local_compatible"} and not loopback_url(p["base_url"]):
+                raise ProviderError("本机连接请填写 localhost、127.0.0.1 或 [::1] 的地址。")
             if old and (p["base_url"] != old["base_url"] or p["protocol"] != old["protocol"]):
                 p["models"] = []
                 if p["key_source"] == "manual" and not api_key:
@@ -739,7 +784,26 @@ class ModelRegistry:
             result["_secret"] = secret
             return result
 
-    def discover_models(self, ident):
+    def text_role(self, settings, role):
+        if role not in {"annotation", "review", "companion"}:
+            raise ValueError("模型用途无效。")
+        if not settings.text_models_enabled:
+            return False, None
+        ident = getattr(settings, role + "_profile_id")
+        if not ident:
+            provider = settings.provider if role == "annotation" else getattr(settings, role + "_provider")
+            return bool(settings.cloud_text_enabled and provider != "local"), None
+        with self._lock:
+            profile = self._read().get(ident)
+            if profile is None and not settings.cloud_text_enabled:
+                return False, None
+            if profile is None:
+                raise ProviderError("所选模型配置不存在，请重新选择。")
+            if not text_allowed(settings, profile):
+                return False, None
+            return True, self.resolve(ident)
+
+    def discover_models(self, ident, *, cancelled=None):
         with self._lock:
             profile = copy.deepcopy(self._read().get(ident))
             if profile is None:
@@ -759,7 +823,8 @@ class ModelRegistry:
                 path += f"?page_no={page}&page_size=100&capabilities=TG"
             elif cursor:
                 path += "?after_id=" + quote(cursor, safe="")
-            result = request(config, path, timeout=30)
+            _check_cancel(cancelled)
+            result = request(config, path, timeout=30, cancelled=cancelled)
             if is_qwen:
                 output = result.get("output", {})
                 rows = output.get("models") if isinstance(output, dict) else None
@@ -788,6 +853,7 @@ class ModelRegistry:
                 cursor = next_cursor
         else:
             raise ProviderError("模型列表过大；请直接填写模型 ID。")
+        _check_cancel(cancelled)
         with self._lock:
             profiles = self._read()
             if ident in profiles and profiles[ident] == profile:

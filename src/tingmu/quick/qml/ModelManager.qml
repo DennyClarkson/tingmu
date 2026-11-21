@@ -12,6 +12,16 @@ Window {
     property string provider:"openai"
     property string protocol:"openai"
     property bool advanced:false
+    function roleStatus(role) {
+        var fallback = role === "annotation" ? "词典" : "已停用"
+        if (!backend.settings.text_models_enabled || (role === "review" && !backend.settings.review_enabled))
+            return fallback
+        var id = backend.settings[role + "_profile_id"]
+        var profile = (backend.modelProfiles || []).find(function(p){ return p.id === id })
+        if (profile && profile.is_loopback) return "本机 API"
+        if (role === "annotation" && !id && backend.settings.provider === "local") return "词典"
+        return backend.settings.cloud_text_enabled ? "远程 API" : fallback
+    }
     readonly property var discoveredChoices:{var profile=(backend.modelProfiles || []).find(function(p){return p.id===root.profileId});return profile ? (profile.models || []) : []}
     function open(){backend.command("refreshModels",{});if(!root.profileId && !label.text)root.populate((backend.modelPresets || [])[0] || {});show();raise();requestActivate()}
     function populate(p){
@@ -29,6 +39,7 @@ Window {
         ColumnLayout {
             Layout.preferredWidth:200;Layout.fillHeight:true;spacing:12
             Text{text:"模型连接";color:Theme.text;font.family:Theme.serif;font.pixelSize:24}
+            TextModelPolicy { Layout.fillWidth:true }
             TButton{objectName:"newModelButton";text:"＋ 新建连接";Layout.fillWidth:true;onClicked:root.populate((backend.modelPresets || [])[0] || {})}
             ListView {
                 Layout.fillWidth:true;Layout.fillHeight:true;clip:true;spacing:6;model:backend.modelProfiles || []
@@ -55,16 +66,16 @@ Window {
                 Text{text:"服务预设";color:Theme.muted;font.family:Theme.font;font.pixelSize:12}
                 Choice{objectName:"modelPresetChoice";Layout.fillWidth:true;model:backend.modelPresets || [];textRole:"label";currentIndex:model.findIndex(function(p){return p.provider===root.provider});onActivated:{var p=model[currentIndex];root.populate(Object.assign({},p,{id:""}))}}
                 Text{visible:protocolChoice.visible;text:"接口协议";color:Theme.muted;font.family:Theme.font;font.pixelSize:12}
-                Choice{id:protocolChoice;objectName:"modelProtocolChoice";visible:root.provider==="openai" || root.provider==="custom";Layout.fillWidth:true;model:["Chat Completions","Responses（思考摘要）"];currentIndex:root.protocol==="responses" ? 1 : 0;onActivated:root.protocol=currentIndex===1 ? "responses" : "openai"}
+                Choice{id:protocolChoice;objectName:"modelProtocolChoice";visible:["openai","custom","lmstudio","local_compatible"].includes(root.provider);Layout.fillWidth:true;model:["Chat Completions","Responses（思考摘要）"];currentIndex:root.protocol==="responses" ? 1 : 0;onActivated:root.protocol=currentIndex===1 ? "responses" : "openai"}
                 Text{visible:protocolChoice.visible;Layout.fillWidth:true;text:"由服务和模型决定是否返回思考内容。Responses 可请求思考摘要；兼容服务需明确支持该接口。已有连接不会自动切换。";color:Theme.muted;font.family:Theme.font;font.pixelSize:11;wrapMode:Text.Wrap}
                 Text{text:"显示名称";color:Theme.muted;font.family:Theme.font;font.pixelSize:12}
                 Field{id:label;objectName:"modelLabel";Layout.fillWidth:true;placeholderText:"例如：学习搭档 / 本地 Ollama"}
                 Text{text:"API 地址（Base URL）";color:Theme.muted;font.family:Theme.font;font.pixelSize:12}
                 Field{id:endpoint;objectName:"modelBaseUrl";Layout.fillWidth:true;placeholderText:"https://api.openai.com/v1"}
-                Text{Layout.fillWidth:true;text:"支持兼容 OpenAI 的端点，也可以使用本机 Ollama。地址和模型名称请以服务方为准。";color:Theme.muted;font.family:Theme.font;font.pixelSize:11;wrapMode:Text.Wrap}
+                Text{Layout.fillWidth:true;text:["ollama","lmstudio","local_compatible"].includes(root.provider) ? "先启动本机服务并加载模型。填写服务的 /v1 基础地址，可选无需密钥、环境变量或本机加密密钥。" : "填写服务的 API 基础地址与实际模型 ID。";color:Theme.muted;font.family:Theme.font;font.pixelSize:11;wrapMode:Text.Wrap}
                 Text{text:"凭据来源";color:Theme.muted;font.family:Theme.font;font.pixelSize:12}
                 Choice{id:keySource;objectName:"modelKeySource";Layout.fillWidth:true;model:["环境变量","输入密钥 · 本机保护","无需密钥 · 本地服务"]}
-                Field{id:envName;objectName:"modelEnvName";Layout.fillWidth:true;visible:keySource.currentIndex===0;placeholderText:"OPENAI_API_KEY"}
+                Field{id:envName;objectName:"modelEnvName";Layout.fillWidth:true;visible:keySource.currentIndex===0;placeholderText:["ollama","lmstudio","local_compatible"].includes(root.provider) ? "本机服务的环境变量名" : "OPENAI_API_KEY"}
                 Field{id:secret;objectName:"modelSecret";Layout.fillWidth:true;visible:keySource.currentIndex===1;echoMode:TextInput.Password;placeholderText:root.profileId ? "输入新密钥以替换；留空保留原密钥" : "API 密钥（保存后不再显示）"}
                 Text{Layout.fillWidth:true;visible:!!backend.state.error;text:backend.state.error || "";color:Theme.error;font.family:Theme.font;font.pixelSize:12;wrapMode:Text.Wrap}
                 Text{text:"模型名称（可先留空，保存后加载列表）";color:Theme.muted;font.family:Theme.font;font.pixelSize:12}
@@ -97,6 +108,7 @@ Window {
                         Layout.fillWidth:true
                         Text{Layout.preferredWidth:80;text:modelData.label;color:Theme.muted;font.family:Theme.font;font.pixelSize:12}
                         Choice{Layout.fillWidth:true;model:[{id:"",label:"沿用默认设置"}].concat(backend.modelProfiles || []);textRole:"label";currentIndex:Math.max(0,model.findIndex(function(p){return p.id===backend.settings[modelData.role+"_profile_id"]}));onActivated:backend.command("selectModel",{role:modelData.role,id:model[currentIndex].id})}
+                        Text{Layout.preferredWidth:60;text:root.roleStatus(modelData.role);color:Theme.muted;font.family:Theme.font;font.pixelSize:11}
                     }
                 }
             }

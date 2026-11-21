@@ -449,8 +449,7 @@ def test_reasoning_collapses_streams_copies_and_keeps_stopped_history(quick, qtb
     assert reasoning.property("visible") and not reasoning.property("expanded")
     assert "思考过程" in find(reasoning, "toggleChatReasoning").property("text")
     assert reasoning.property("elapsedSeconds") == 2
-    qtbot.wait(1100)
-    assert reasoning.property("elapsedSeconds") >= 3
+    qtbot.waitUntil(lambda: reasoning.property("elapsedSeconds") >= 3, timeout=4000)
     click(floating, find(reasoning, "toggleChatReasoning"))
     qtbot.wait(30)
     assert reasoning.property("expanded")

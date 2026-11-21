@@ -11,11 +11,13 @@ $cacheRoot = Join-Path $projectRoot '.cache'
 $cacheEnvironment = [ordered]@{
     UV_CACHE_DIR = Join-Path $cacheRoot 'uv'
     UV_PYTHON_INSTALL_DIR = Join-Path $cacheRoot 'python'
+    UV_PYTHON_BIN_DIR = Join-Path $cacheRoot 'python-bin'
     PIP_CACHE_DIR = Join-Path $cacheRoot 'pip'
     HF_HOME = Join-Path $cacheRoot 'huggingface'
     TORCH_HOME = Join-Path $cacheRoot 'torch'
     TEMP = Join-Path $cacheRoot 'tmp'
     TMP = Join-Path $cacheRoot 'tmp'
+    TMPDIR = Join-Path $cacheRoot 'tmp'
     UV_PROJECT_ENVIRONMENT = Join-Path $projectRoot '.venv'
 }
 $previousEnvironment = @{}

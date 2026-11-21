@@ -69,19 +69,18 @@ Item {
             ColumnLayout {
                 width:settingsScroll.availableWidth; spacing:9
                 Text { textFormat:Text.PlainText; text:"字幕处理"; color:Theme.text; font.family:Theme.font; font.pixelSize:16 }
-                Text { textFormat:Text.PlainText; text:"本地语音识别"; color:Theme.muted; font.family:Theme.font; font.pixelSize:11 }
-                Choice { Layout.fillWidth:true; model:["qwen3-asr-1.7b","large-v3-turbo","large-v3"]; currentIndex:Math.max(0,model.indexOf(backend.settings.asr_model)); onActivated:backend.setting("asr_model",currentText) }
-                Choice { Layout.fillWidth:true; model:["auto","cuda","cpu"]; currentIndex:Math.max(0,model.indexOf(backend.settings.device)); onActivated:backend.setting("device",currentText) }
+                LlmConcurrencySettings { Layout.fillWidth:true }
+                SpeechSettings { Layout.fillWidth:true }
                 Text { textFormat:Text.PlainText; text:"处理音轨（从 0 开始）"; color:Theme.muted; font.family:Theme.font; font.pixelSize:11 }
                 Field { Layout.fillWidth:true; text:String(backend.settings.audio_track || 0); validator:IntValidator{bottom:0;top:20} onEditingFinished:backend.setting("audio_track",Number(text)) }
                 TButton{text:"管理模型与任务分配";Layout.fillWidth:true;onClicked:models.open()}
                 Toggle { text:"全文文本复核"; checked:backend.settings.review_enabled; onToggled:backend.setting("review_enabled",checked) }
-                Choice { Layout.fillWidth:true; model:["gpt-6-astra","gpt-6.1-sol"]; currentIndex:Math.max(0,model.indexOf(backend.settings.review_model)); onActivated:backend.setting("review_model",currentText) }
-                Text { textFormat:Text.PlainText; text:"批量讲解模型"; color:Theme.muted; font.family:Theme.font; font.pixelSize:11 }
-                Choice { Layout.fillWidth:true; model:["openai","deepseek","local"]; currentIndex:Math.max(0,model.indexOf(backend.settings.provider)); onActivated:backend.setting("provider",currentText) }
-                Field { Layout.fillWidth:true; text:backend.settings.model || ""; onEditingFinished:backend.setting("model",text) }
-                Toggle { text:"允许云端文本分析"; checked:backend.settings.cloud_text_enabled; onToggled:backend.setting("cloud_text_enabled",checked) }
-                Text { textFormat:Text.PlainText; Layout.fillWidth:true; text:"新加入的任务使用当前设置。音视频始终在本地，模型复核不等于人工确认。"; color:Theme.muted; font.family:Theme.font; font.pixelSize:11; wrapMode:Text.Wrap }
+                Field { Layout.fillWidth:true; visible:backend.settings.review_enabled && !backend.settings.review_profile_id; text:backend.settings.review_model || ""; placeholderText:"默认复核模型 ID"; onEditingFinished:backend.setting("review_model",text) }
+                Text { textFormat:Text.PlainText; visible:!backend.settings.annotation_profile_id; text:"默认批量讲解"; color:Theme.muted; font.family:Theme.font; font.pixelSize:11 }
+                Choice { Layout.fillWidth:true; visible:!backend.settings.annotation_profile_id; property var providers:["openai","deepseek","local"]; model:["OpenAI","DeepSeek","仅使用本地词典"]; currentIndex:Math.max(0,providers.indexOf(backend.settings.provider)); onActivated:backend.setting("provider",providers[currentIndex]) }
+                Field { Layout.fillWidth:true; visible:!backend.settings.annotation_profile_id && backend.settings.provider!=="local"; text:backend.settings.model || ""; placeholderText:"默认讲解模型 ID"; onEditingFinished:backend.setting("model",text) }
+                TextModelPolicy { Layout.fillWidth:true }
+                Text { textFormat:Text.PlainText; Layout.fillWidth:true; text:"新加入的任务使用当前设置。文本复核保留原始字幕。"; color:Theme.muted; font.family:Theme.font; font.pixelSize:11; wrapMode:Text.Wrap }
             }
         }
     }

@@ -42,7 +42,7 @@ def checks(before, after, language):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--live', action='store_true', help='Make real billed API calls using configured keys; sends text only')
-    parser.add_argument('--models', nargs='*', default=['deepseek:deepseek-flash','deepseek:deepseek-v4-pro','openai:gpt-4.1-mini','openai:gpt-5.4-mini'])
+    parser.add_argument('--models', nargs='+', default=['deepseek:deepseek-flash'])
     parser.add_argument('--input', type=Path, help='StudyDocument JSON for a small real ASR excerpt (first six cues)')
     parser.add_argument('--output', type=Path, default=Path('reports/model-evaluation.json'))
     parser.add_argument('--only-real', action='store_true')

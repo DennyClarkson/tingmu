@@ -231,6 +231,48 @@ def test_notebook_draft_debounces_closes_and_recovers_after_restart(quick, qtbot
     assert engine._tingmu_warnings == []
 
 
+def test_concurrency_controls_share_workspace_and_queue_settings(quick, qtbot):
+    _, bridge, engine, window = quick
+    setup = find(window, "workspaceSetup")
+    invoke(setup, "openTextSettings")
+    qtbot.waitUntil(lambda: setup.property("opened"))
+    toggle = find(setup, "llmHighConcurrency")
+    count = find(setup, "llmConcurrencyCount")
+    assert count.property("count") == 16 and count.property("currentText") == "4"
+    assert QMetaObject.invokeMethod(count, "activated", Qt.ConnectionType.DirectConnection, Q_ARG(int, 7))
+    assert bridge.store.load_settings().llm_workers == 8
+    invoke(toggle, "click")
+    assert bridge.store.load_settings().llm_workers == 1 and not count.property("enabled")
+    invoke(setup, "close")
+    invoke(window, "openModule", "queue")
+    panel = find(window, "queueModule").property("loadedItem")
+    invoke(panel, "openSettings")
+    other_count = find(panel, "llmConcurrencyCount")
+    assert other_count.property("currentText") == "8" and not other_count.property("enabled")
+    invoke(find(panel, "llmHighConcurrency"), "click")
+    assert bridge.store.load_settings().llm_workers == 8 and other_count.property("enabled")
+    assert engine._tingmu_warnings == []
+
+
+def test_running_progress_uses_queue_counts_without_reloading_every_film(quick, tmp_path, monkeypatch):
+    _, bridge, _, _ = quick
+    bridge.timer.stop()
+    films = [tmp_path / name for name in ("one.mkv", "two.mkv")]
+    for film in films:
+        film.touch()
+    bridge.catalog.add(films)
+    bridge.queue.enqueue(films[:1], bridge._settings)
+    job = bridge.queue._jobs[0]
+    job["status"] = "running"
+    bridge._refresh_jobs()
+    with monkeypatch.context() as scoped:
+        scoped.setattr(bridge.store, "load_document", lambda *_: pytest.fail("unnecessary library rescan"))
+        job.update(progress="译文核验 24/96", total_cues=96, completed_cues=24)
+        bridge._refresh_jobs()
+    row = next(item for item in bridge.library if item["path"] == str(films[0]))
+    assert (row["status"], row["cueCount"], row["progress"]) == ("running", 96, "译文核验 24/96")
+
+
 def test_queue_failure_is_readable_and_retry_buttons_dispatch(quick, qtbot, monkeypatch):
     _, bridge, engine, window = quick
     bridge.timer.stop()  # Keep this synthetic presentation snapshot independent of disk jobs.

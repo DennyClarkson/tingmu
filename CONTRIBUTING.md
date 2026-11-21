@@ -1,6 +1,6 @@
 # 参与听幕开发
 
-本仓库用于听幕 v0.5 的团队源码协作。先按 [开发环境](docs/development.md) 安装、运行和验证，再修改代码。请先阅读 [AGENTS.md](AGENTS.md)、[长期规则](skill.md)、[当前交接](handoff.md) 和 [接口约定](docs/contracts.md)；约定中的历史章节以最新 Revision 7 及后续明确决定为准。
+本仓库用于听幕的团队源码协作。修改前请阅读协作规则、当前版本交接和接口约定，并按开发环境说明安装、运行和验证项目。[开发环境](docs/development.md) · [协作规则](AGENTS.md) · [长期规则](skill.md) · [当前交接](handoff.md) · [接口约定](docs/contracts.md)
 
 ## 分支与评审
 

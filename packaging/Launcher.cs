@@ -35,6 +35,9 @@ internal static class Launcher
             info.WorkingDirectory = root;
             info.EnvironmentVariables["TINGMU_PORTABLE_ROOT"] = root;
             info.EnvironmentVariables["PYTHONNOUSERSITE"] = "1";
+            info.EnvironmentVariables["PYTHONDONTWRITEBYTECODE"] = "1";
+            info.EnvironmentVariables.Remove("PYTHONPYCACHEPREFIX");
+            info.EnvironmentVariables.Remove("PYTHONPATH");
             info.EnvironmentVariables["PATH"] = Path.Combine(root, "bin") + ";" + info.EnvironmentVariables["PATH"];
             using (var process = Process.Start(info))
             {

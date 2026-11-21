@@ -19,19 +19,34 @@ def main(argv=None) -> int:
     prepare = commands.add_parser("prepare", help="准备字幕与学习材料")
     prepare.add_argument("path", type=Path)
     prepare.add_argument("--subtitle", type=Path)
-    prepare.add_argument("--source", default="zh-CN")
-    prepare.add_argument("--target", default="yue")
-    prepare.add_argument("--provider", choices=["local", "deepseek", "openai"], default="local")
+    prepare.add_argument("--source")
+    prepare.add_argument("--target")
+    prepare.add_argument("--provider", choices=["local", "workspace", "deepseek", "openai"], default="local",
+                         help="local 使用本地词典，workspace 使用本工作区已分配的文本模型")
     prepare.add_argument("--model")
-    prepare.add_argument("--asr-model", default="large-v3-turbo")
-    prepare.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto")
-    prepare.add_argument("--audio-track", type=int, default=0)
+    prepare.add_argument("--asr-model", help="本机 ASR 模型")
+    prepare.add_argument("--asr-backend", choices=["local", "local_api", "external"])
+    prepare.add_argument("--asr-endpoint", help="完整的语音转写接口地址")
+    prepare.add_argument("--external-asr-model")
+    prepare.add_argument("--asr-key-env", help="保存语音服务密钥的环境变量名")
+    prepare.add_argument("--asr-response-format", choices=["verbose_json", "diarized_json"])
+    prepare.add_argument("--allow-audio-upload", action="store_true", help="本次命令允许发送所选音轨")
+    prepare.add_argument("--suppress-bgm", action=argparse.BooleanOptionalAction)
+    prepare.add_argument("--speaker-turns", action=argparse.BooleanOptionalAction)
+    prepare.add_argument("--device", choices=["auto", "cpu", "cuda"])
+    prepare.add_argument("--audio-track", type=int)
     prepare.add_argument("--start", type=float, default=0)
     prepare.add_argument("--duration", type=float)
     prepare.add_argument("--srt", type=Path)
     doctor = commands.add_parser("doctor", help="检查本地运行环境（不输出密钥）")
     doctor.add_argument("--media", type=Path)
     args = parser.parse_args(argv)
+    from .runtime import inside_installation
+    if args.data_dir:
+        try:
+            args.data_dir = inside_installation(args.data_dir)
+        except ValueError as exc:
+            parser.error(str(exc))
     if args.command == "doctor":
         from .agent import provider_status
         from .media import probe_media
@@ -45,21 +60,37 @@ def main(argv=None) -> int:
         print(json.dumps(report, ensure_ascii=False, indent=2))
         return 0
     if args.command == "prepare":
-        from .models import AppSettings
         from .pipeline import prepare_media
         from .storage import Store
         from .media import save_srt
-        settings = AppSettings(source_language=args.source, target_language=args.target,
-                               provider=args.provider, model=args.model or (
-                                   "gpt-5.4-mini" if args.provider == "openai" else "deepseek-flash"),
-                               cloud_text_enabled=args.provider != "local", asr_model=args.asr_model,
-                               device=args.device, audio_track=args.audio_track)
-        store = Store(args.data_dir)
+        from .runtime import data_root
+        from .workspaces import WorkspaceCatalog
+        from .export_paths import export_path
+        store = Store(args.data_dir or WorkspaceCatalog(data_root()).active_dir)
+        settings = store.load_settings()
+        settings.source_language = args.source or settings.source_language
+        settings.target_language = args.target or settings.target_language
+        if args.provider != "workspace":
+            settings.provider = args.provider
+            settings.cloud_text_enabled = args.provider != "local"
+            settings.text_models_enabled = args.provider != "local"
+            settings.annotation_profile_id = ""
+            settings.model = args.model or ("gpt-5.4-mini" if args.provider == "openai" else "deepseek-flash")
+        settings.allow_audio_upload = args.allow_audio_upload
+        for name in ("asr_model", "device", "audio_track", "asr_backend", "suppress_bgm", "speaker_turns"):
+            if getattr(args, name) is not None:
+                setattr(settings, name, getattr(args, name))
+        keys = {"asr_endpoint": "local_asr_endpoint", "asr_key_env": "local_asr_key_env",
+                "external_asr_model": "local_asr_api_model", "asr_response_format": "local_asr_response_format"}
+        for name, local_name in keys.items():
+            if getattr(args, name) is not None:
+                setattr(settings, local_name if settings.asr_backend == "local_api" else name, getattr(args, name))
         try:
+            destination = export_path(store.data_dir, args.srt, (".srt",)) if args.srt else None
             doc = prepare_media(args.path, settings, store, args.subtitle, args.start, args.duration,
                                 progress=lambda s: print(s, flush=True))
-            if args.srt:
-                save_srt(doc.cues, args.srt)
+            if destination:
+                save_srt(doc.cues, destination)
             print(f"材料：{store.save_document(doc)}")
             return 0
         except KeyboardInterrupt:

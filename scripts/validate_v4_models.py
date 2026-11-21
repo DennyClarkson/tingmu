@@ -24,15 +24,15 @@ def main():
     root = Path(__file__).resolve().parents[1]
     store = Store(root / ".data/v4-model-validation")
     registry = ModelRegistry(store.data_dir)
-    _, base, _ = _config("openai")
-    profile = registry.save_profile({"id": "validation-astra", "provider": "openai", "label": "隔离验收模型",
-                                     "base_url": base, "model": "gpt-6-astra", "key_source": "environment",
-                                     "env_var": "OPENAI_API_KEY"})
+    _, base, _ = _config("deepseek")
+    profile = registry.save_profile({"id": "validation-flash", "provider": "deepseek", "label": "隔离验收模型",
+                                     "base_url": base, "model": "deepseek-flash", "key_source": "environment",
+                                     "env_var": "DEEPSEEK_API_KEY"})
     report = {"synthetic_text_only": True, "no_user_media_uploaded": True, "checks": {}}
     started = time.monotonic()
     models = registry.discover_models(profile["id"])
     report["models_discovered"] = len(models)
-    report["checks"]["model_discovery"] = "gpt-6-astra" in models
+    report["checks"]["model_discovery"] = profile["model"] in models
     print("model discovery completed", flush=True)
     resolved = registry.resolve(profile["id"])
     language = LanguagePair()
@@ -48,7 +48,7 @@ def main():
     report["review_responses"] = [{k: row.get(k) for k in ("requested_model", "returned_model", "usage", "latency_seconds")}
                                   for row in reviewer.response_metadata]
     print("text review completed", flush=True)
-    teacher = LearningAgent("openai", "gpt-5.4-mini")
+    teacher = LearningAgent(profile=resolved)
     teacher.preserve_text = True
     annotated = teacher.annotate(reviewed, language)
     report["checks"]["teacher_preserved_reviewed_text"] = all(a.text == b.text for a, b in zip(reviewed, annotated))
@@ -81,7 +81,7 @@ def main():
     report["checks"]["formatted_reply"] = "|" in reply
     report["chat"] = {"tool_calls": tool_calls, "delta_count": len(deltas), "reply": reply,
                       "metadata": companion.last_response_metadata}
-    book.organize("yue", LearningAgent("openai", "gpt-6-astra", profile=resolved))
+    book.organize("yue", LearningAgent(profile=resolved))
     report["checks"]["organized_markdown"] = bool(book.snapshot("yue")["topics"])
     report["elapsed_seconds"] = round(time.monotonic()-started, 2)
     report["passed"] = all(report["checks"].values())
