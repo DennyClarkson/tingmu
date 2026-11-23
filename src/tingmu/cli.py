@@ -19,10 +19,12 @@ def main(argv=None) -> int:
     prepare = commands.add_parser("prepare", help="准备字幕与学习材料")
     prepare.add_argument("path", type=Path)
     prepare.add_argument("--subtitle", type=Path)
+    prepare.add_argument("--workflow", choices=["classic", "subtitle_agent"],
+                         help="使用经典流程或字幕 Agent，默认沿用工作区设置")
     prepare.add_argument("--source")
     prepare.add_argument("--target")
     prepare.add_argument("--provider", choices=["local", "workspace", "deepseek", "openai"], default="local",
-                         help="local 使用本地词典，workspace 使用本工作区已分配的文本模型")
+                         help="local 使用本地词典，workspace 按当前工作区的权限使用全局分配的文本模型")
     prepare.add_argument("--model")
     prepare.add_argument("--asr-model", help="本机 ASR 模型")
     prepare.add_argument("--asr-backend", choices=["local", "local_api", "external"])
@@ -68,6 +70,8 @@ def main(argv=None) -> int:
         from .export_paths import export_path
         store = Store(args.data_dir or WorkspaceCatalog(data_root()).active_dir)
         settings = store.load_settings()
+        if args.workflow:
+            settings.preparation_workflow = args.workflow
         settings.source_language = args.source or settings.source_language
         settings.target_language = args.target or settings.target_language
         if args.provider != "workspace":

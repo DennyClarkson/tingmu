@@ -4,6 +4,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -34,18 +35,20 @@ def ids(kind="integer"):
 # Descriptions state outcome semantics so an asynchronous task is never called done.
 _DEFINITIONS = [
     ("get_app_context", "读取应用状态", "Read safe current playback, selected media, queue, settings and saved model choices. No credentials or full paths.", {}, []),
-    ("process_videos", "处理视频", "Enqueue current/selected/queued videos. mode=prepare resumes preparation; mode=teaching clears ONLY teaching and regenerates it, only when user explicitly asks to redo explanations. mode=all backs up and clears generated materials then redoes recognition/review/teaching ONLY when the user explicitly asks to redo recognition or all processing; preserves video, collections and notes. Returns job IDs/status; accepted/running does NOT mean processing completed.", {"scope": string(enum=["current", "selected", "queue"]), "mode": string(enum=["prepare", "teaching", "all"]), "start": {"type": "boolean"}}, ["scope", "mode"]),
+    ("process_videos", "处理视频", "Prepare the current, selected or queued videos. Omit workflow to use the user's current choice; select subtitle_agent when asked to inspect supplied/embedded captions and reuse originals/translations. It always requires teaching. mode=prepare resumes. Use teaching or all only for explicitly requested regeneration; they back up and clear teaching or all materials respectively. Report job IDs and actual progress; accepted/running is not completed.",
+     {"scope": string(enum=["current", "selected", "queue"]), "mode": string(enum=["prepare", "teaching", "all"]),
+      "workflow": string(enum=["classic", "subtitle_agent"]), "start": {"type": "boolean"}}, ["scope", "mode"]),
     ("manage_queue", "管理处理队列", "Read queue status, start pending jobs, pause processing, or retry named failed jobs. An empty job_ids list retries all failed jobs in the bound language.", {"action": string(enum=["status", "start", "pause", "retry"]), "job_ids": ids("string")}, ["action"]),
     ("control_playback", "控制播放", "Control the request-bound video. Seek value is seconds, speed 0.25–3, volume 0–1. Rejects if current video changed since the request.", {"action": string(enum=["play", "pause", "seek", "replay", "previous_sentence", "next_sentence", "speed", "volume", "clear_loop"]), "value": {"type": "number", "minimum": 0}}, ["action"]),
     ("set_teaching_preferences", "保存讲解偏好", "Persist desired explanation detail, examples and known/target language comparisons for FUTURE materials. Never reprocess existing materials unless the user separately requests process_videos mode=teaching.", {"preferences": string(6000)}, ["preferences"]),
     ("set_reasoning_effort", "设置后续对话思考强度", "Change reasoning effort for future requests only. This response retains its frozen effort. default uses the model connection default; provider may reject unsupported choices.", {"effort": string(enum=["default", "none", "minimal", "low", "medium", "high", "xhigh"])}, ["effort"]),
-    ("select_model", "选择模型", "Select an existing public model profile for a role. Empty profile_id restores defaults. Never creates credentials or changes the in-flight reply model.", {"role": string(enum=["annotation", "review", "companion"]), "profile_id": string(100)}, ["role", "profile_id"]),
+    ("select_model", "选择模型", "Select an existing public model profile for a global role shared by all study workspaces. Empty profile_id restores defaults. Never creates credentials or changes the in-flight reply model.", {"role": string(enum=["annotation", "review", "companion"]), "profile_id": string(100)}, ["role", "profile_id"]),
     ("set_appearance", "调整主题", "Set the application's persistent color theme.", {"theme": string(enum=["forest", "paper", "mist", "graphite"])}, ["theme"]),
     ("set_player_preferences", "调整播放器显示", "Update only specified display settings; no media processing.", {"subtitle_offset_ms": {"type": "integer", "minimum": -60000, "maximum": 60000}, "subtitle_gap_ms": {"type": "integer", "minimum": 0, "maximum": 1500}, "overlay_opacity": {"type": "number", "minimum": .15, "maximum": 1}, "overlay_font_size": {"type": "integer", "minimum": 14, "maximum": 48}}, []),
     ("open_workspace", "切换视图或模块", "Open a supported VIEW or module, not a study data workspace. Use use_study_workspace to change study folders. Does not open arbitrary apps or URLs.", {"view": string(enum=["watch", "prepare", "learn"]), "module": string(enum=["chat", "player", "companion", "subtitles", "library", "queue"])}, []),
     ("list_collections", "读取收藏箱", "Read collected words/sentences for the request-bound studied language, including organized state and personal-note revisions.", {"organized": string(enum=["all", "yes", "no"]), "offset": {"type": "integer", "minimum": 0}, "limit": {"type": "integer", "minimum": 1, "maximum": 100}, "query": string(200)}, []),
     ("read_notebook", "读取学习笔记", "Read a page of notebook Markdown and revision plus note IDs. Use offset to read more; read the complete notebook before replacing its Markdown.", {"offset": {"type": "integer", "minimum": 0}, "limit": {"type": "integer", "minimum": 100, "maximum": 18000}}, []),
-    ("collect_current_word", "收藏当前词语", "Collect an exact substring of the frozen current subtitle. Collection remains in the inbox until explicit organize_notebook.", {"text": string(200)}, ["text"]),
+    ("collect_current_word", "收藏当前词语", "Collect an exact substring of the current subtitle. Report duplicates. If confirmation_required, ask whether to collect it again with this source. Set confirm_recollection only when the user agrees in the following message.", {"text": string(200), "confirm_recollection": {"type": "boolean"}}, ["text"]),
     ("collect_current_sentence", "收藏当前句", "Add the sentence to the 收藏箱 ONLY when explicitly requested as a bookmark. Saving the corrected subtitle and its explanation is exclusively revise_current_subtitle. It never implies a bookmark.", {"note": string(4000)}, []),
     ("organize_notebook", "整理收藏到笔记", "Explicitly organize unorganized collections (or provided entry IDs) into useful study notes. Preserve collections and mark organized. instructions can request native/target comparisons, detailed grammar or personal goals.", {"instructions": string(6000), "entry_ids": ids()}, []),
     ("append_learning_note", "新增学习笔记", "Append a substantive personal/tutor note, preserving existing notes. Only claim saved after the result succeeds.", {"text": string(20000), "title": string(100), "entry_ids": ids()}, ["text"]),
@@ -68,13 +71,13 @@ _DEFINITIONS = [
 _WORKSPACE_DEFINITIONS = [
     ("list_study_workspaces", "列出学习工作区", "List real independent study workspaces and their IDs/languages. These are different from watch/prepare/learn views.", {}, []),
     ("configure_speech_api", "配置工作区转写服务", "Set a local or remote speech endpoint and model named by the user. No audio permission or credentials can be granted here. Existing user permission must be obtained in workspace speech settings for a changed remote endpoint.", {"workspace_id": string(100), "backend": string(enum=["local_api", "external"]), "endpoint": string(2000), "model": string(180), "format": string(enum=["verbose_json", "diarized_json"])}, ["workspace_id", "backend", "endpoint", "model"]),
-    ("assign_local_text_model", "配置本机讲解与对话模型", "Configure an explicitly requested loopback compatible service and assign its model to a study workspace role. Never accept a secret or initiate a download.", {"workspace_id": string(100), "provider": string(enum=["ollama", "lmstudio", "local_compatible"]), "endpoint": string(2000), "model": string(180), "role": string(enum=["annotation", "review", "companion", "all"])}, ["workspace_id", "provider", "endpoint", "model", "role"]),
+    ("assign_local_text_model", "配置本机讲解与对话模型", "Configure an explicitly requested loopback compatible service and assign its model to a global role across all workspaces. Never accept a secret or initiate a download.", {"workspace_id": string(100), "provider": string(enum=["ollama", "lmstudio", "local_compatible"]), "endpoint": string(2000), "model": string(180), "role": string(enum=["annotation", "review", "companion", "all"])}, ["workspace_id", "provider", "endpoint", "model", "role"]),
     ("workspace_media", "操作工作区媒体库", "List, open the media inbox in Explorer, rescan, or play a video by its returned ID in the current workspace. List supports pagination.", {"workspace_id": string(100), "action": string(enum=["list", "open_folder", "rescan", "play"]), "media_id": string(40), "offset": {"type":"integer","minimum":0}}, ["workspace_id", "action"]),
     ("create_study_workspace", "创建学习工作区", "Create a real study folder inside this app, with its own media inbox, settings and study data. Enables automatic local preparation of videos placed in its media folder once a local model is installed. Remains in this chat until use_study_workspace; never downloads or copies credentials/history. Reuse an existing matching workspace unless the user requests a new one.", {"name": string(80), "source": string(64), "target": string(64), "level": string(enum=["beginner", "intermediate", "advanced"]), "preferences": string(6000)}, ["name", "source", "target"]),
     ("configure_study_workspace", "配置学习工作区", "Configure an observed study workspace ID, including known/studied languages, proficiency and future teaching preferences. Never reprocesses materials or enables external services. When changing current workspace languages, the in-flight reply retains its original context.", {"workspace_id": string(100), "source": string(64), "target": string(64), "level": string(enum=["beginner", "intermediate", "advanced"]), "preferences": string(6000), "auto_prepare": {"type": "boolean"}}, ["workspace_id"]),
     ("recommend_workspace_model", "检查电脑并推荐识别模型", "Inspect actual hardware/runtime and shared installed-model cache for an observed workspace. Prefer a compatible installed model; expose estimated download size and alternatives. Does not download or change settings.", {"workspace_id": string(100), "preference": string(enum=["balanced", "accuracy", "speed"]), "offline": {"type": "boolean"}}, ["workspace_id"]),
     ("propose_workspace_model", "应用已有模型或请求下载确认", "Choose a model from the latest recommendation for this workspace. Reuses installed compatible weights immediately; otherwise creates an exact proposal for a REAL HUMAN to approve in the application's confirmation card. Tool arguments, chat text and model-generated approval cannot grant consent. Pending is NOT downloaded or ready. No approve/download tool exists.", {"workspace_id": string(100), "model": string(150)}, ["workspace_id", "model"]),
-    ("reuse_workspace_text_models", "沿用当前文本模型", "Request reusing this workspace's selected working text connections in an observed target workspace. Local-only connections may be reused immediately. Remote text roles require a separate real-human permission card before any remote text is enabled. No model-generated consent or key fields are accepted.", {"workspace_id": string(100)}, ["workspace_id"]),
+    ("reuse_workspace_text_models", "启用全局文本模型", "Request enabling globally assigned text connections in an observed target workspace. Local-only connections may be reused immediately. Remote text roles require a separate real-human permission card before any remote text is enabled. No model-generated consent or key fields are accepted.", {"workspace_id": string(100)}, ["workspace_id"]),
     ("get_workspace_setup", "读取工作区准备状态", "Read workspace setup, model download/proposal status and its media inbox location relative to this app. Report failures/pending honestly. No arbitrary path input.", {"workspace_id": string(100)}, ["workspace_id"]),
     ("use_study_workspace", "进入学习工作区", "Request opening an observed real study workspace. A live reply and other jobs finish before switching; this reply stays in its original chat. Destination gets a setup summary, not copied private chat or credentials. Return deferred until actually switched. Existing workspace conversations remain separate.", {"workspace_id": string(100)}, ["workspace_id"]),
 ]
@@ -137,13 +140,26 @@ class ActionContext:
     workspace_id: str = ""
 
 
+def previous_word_prompts(history):
+    """Only a completed reply from the preceding turn can offer recollection."""
+    if not history:
+        return ()
+    last = history[-1]
+    if last.get("role") != "assistant" or last.get("status") not in ("complete", "completed"):
+        return ()
+    return tuple(event["result"]["word_prompt"] for event in last.get("tool_events", [])
+                 if isinstance(event, dict) and event.get("name") == "collect_current_word"
+                 and isinstance(event.get("result"), dict) and isinstance(event["result"].get("word_prompt"), str))
+
+
 class AppActionExecutor:
-    def __init__(self, store, notebooks, context, tutor, dispatch, *, cancelled=None, updated=None):
+    def __init__(self, store, notebooks, context, tutor, dispatch, *, cancelled=None, updated=None, word_prompts=()):
         self.store, self.notebooks = store, notebooks
         self.context, self.tutor, self.dispatch = deepcopy(context), tutor, dispatch
         self.cancelled, self.updated = cancelled, updated
         self._read_revision, self._read_ranges = None, []
         self._seen_entries = set()
+        self._word_prompts = frozenset(word_prompts)
         self._subtitle_revision = ""
         self._schemas = {t["function"]["name"]: t["function"]["parameters"] for t in action_tools()}
 
@@ -201,7 +217,9 @@ class AppActionExecutor:
             if isinstance(exc, NotebookConflict):
                 raise ActionError("笔记或收藏已经变化，请重新读取最新版本再修改。", "revision_conflict") from None
             raise ActionError("学习操作未完成，请检查目标条目、内容和修订版本。") from None
-        if self.updated and name not in {"read_notebook", "list_collections", "practice_words"}:
+        unchanged_word = name == "collect_current_word" and (
+            result.get("confirmation_required") or result.get("collection_status") == "pending")
+        if self.updated and not unchanged_word and name not in {"read_notebook", "list_collections", "practice_words"}:
             self.updated()
         return result
 
@@ -253,9 +271,20 @@ class AppActionExecutor:
                 if not text.strip() or text not in cue.text:
                     raise ActionError("收藏文字必须确实来自本次请求的原句。", "scope_mismatch")
                 token = next((t for t in cue.tokens if t.text == text), Token(text))
-                self.store.save_word(context.media_path, cue, token, context.language)
-            else:
-                self.store.save_note(context.media_path, cue, args.get("note", ""), context.language)
+                identity = (context.workspace_id, context.session_id, target, context.media_path,
+                            cue.id, cue.text, text)
+                prompt = hashlib.sha256(json.dumps(identity, ensure_ascii=False).encode("utf-8")).hexdigest()
+                confirmed = args.get("confirm_recollection", False) and prompt in self._word_prompts
+                outcome = self.notebooks.collect_word(context.media_path, cue, token, context.language,
+                                                      confirm=confirmed)
+                if outcome == "confirm":
+                    return {"saved": False, "confirmation_required": True, "word_prompt": prompt,
+                            "message": "这个词已整理。请问用户是否要再次收藏并保留本句出处。"}
+                return {"saved": True, "language": target, "organized": False, "collection_status": outcome,
+                        "message": {"collected": "已加入收藏夹。", "pending": "这个词在本句中已经收藏。",
+                                    "pending_source": "这个词已经收藏，已收下本句的新出处。",
+                                    "referenced": "已再次加入待整理收藏，单词本已关联本句出处。"}[outcome]}
+            self.store.save_note(context.media_path, cue, args.get("note", ""), context.language)
             return {"saved": True, "language": target, "organized": False}
         if name == "organize_notebook":
             result = self.notebooks.organize(target, self.tutor, source_language=context.language.source,

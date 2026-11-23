@@ -61,7 +61,7 @@ class MediaLibrary:
             self.save()
         return added, removed
 
-    def copy_files(self, paths, progress, cancelled):
+    def copy_files(self, paths, progress, cancelled, *, agent_workflow=False):
         """Publish complete copies atomically. Keep original names and matching subtitle files."""
         if self.media_dir.resolve() != self.media_dir:
             raise ValueError("媒体目录必须位于当前工作区")
@@ -74,9 +74,14 @@ class MediaLibrary:
             if path.is_relative_to(self.media_dir):
                 result.append(path)
                 continue
-            files = [path] + sorted(p for p in path.parent.iterdir()
-                                    if p.is_file() and p.suffix.lower() in SUBTITLE_EXTENSIONS
+            if agent_workflow:
+                from .subtitle_sources import discover_sidecars
+                companions = discover_sidecars(path)
+            else:
+                companions = sorted(p for p in path.parent.iterdir() if p.is_file()
+                                    and p.suffix.lower() in SUBTITLE_EXTENSIONS
                                     and (p.stem == path.stem or p.stem.startswith(path.stem + ".")))
+            files = [path, *companions]
             fingerprints = [(str(p), p.stat().st_size, p.stat().st_mtime_ns) for p in files]
             identity = hashlib.sha256(json.dumps(fingerprints).encode()).hexdigest()[:16]
             target = self.media_dir / identity

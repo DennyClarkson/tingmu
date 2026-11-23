@@ -1,8 +1,16 @@
 from types import SimpleNamespace
+import json
 
-from PySide6.QtCore import QMetaObject, Qt, Q_ARG
+from PySide6.QtCore import QMetaObject, QPoint, QPointF, Qt, Q_ARG
+from PySide6.QtGui import QColor, QImage
+from PySide6.QtMultimedia import QVideoFrame
+from PySide6.QtTest import QTest
+import pytest
 
+from tingmu.embedded_subtitles import Events
 from tingmu.models import Cue, LanguagePair, StudyDocument
+from tingmu.quick.main import create_qml_app
+from tingmu.storage import Store
 from tingmu.quick.playback_sources import DisplayTrack, PlaybackSources
 from test_qml_v4 import find, invoke, quick as quick
 from test_qml_v5 import click
@@ -104,6 +112,125 @@ def test_long_overlapping_cue_keeps_original_end():
     assert track.at(60) == "long\ntwo"
     assert track.at(99) == "long"
     assert track.at(100) == ""
+
+
+def drag_caption(window, hit, delta):
+    start = hit.mapToScene(QPointF(hit.width() / 2, hit.height() / 2)).toPoint()
+    finish = start + delta
+    QTest.mousePress(window, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, start)
+    QTest.mouseMove(window, finish, delay=30)
+    QTest.mouseRelease(window, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, finish)
+    return hit.mapToScene(QPointF(hit.width() / 2, hit.height() / 2)).toPoint() - start
+
+
+@pytest.mark.parametrize("bitmap", [False, True])
+def test_drag_actual_subtitles_in_both_windows_and_persist(quick, qtbot, tmp_path, bitmap):
+    _, bridge, engine, window = quick
+    player = find(window, "playerModule").property("loadedItem")
+    frame = QImage(640, 360, QImage.Format.Format_ARGB32)
+    frame.fill(QColor("black"))
+    bridge._player.videoSink().setVideoFrame(QVideoFrame(frame))
+    if bitmap:
+        path = tmp_path / "subtitle.png"
+        frame.fill(QColor("transparent"))
+        frame.setPixelColor(320, 280, QColor("white"))
+        assert frame.save(str(path))
+        bridge._embedded.image = path.as_uri()
+        bridge._embedded.bounds = {"x": 0.4, "y": 0.74, "width": 0.2, "height": 0.08}
+        bridge._update_playback()
+    else:
+        bridge._set_document(StudyDocument("sample.mkv", LanguagePair(), [Cue("a", 0, 1, "字幕位置")]))
+    key = "bitmapPosition" if bitmap else "textPosition"
+    target = "bitmapCaptionDrag" if bitmap else "textCaptionDrag"
+    layer = find(window, "playbackCaptionLayer")
+    qtbot.waitUntil(lambda: layer.width() > 100)
+    qtbot.wait(40)
+    hit = visual(window, target)
+    assert hit.width() > 12 and hit.height() > 5
+    displacement = QPoint(26, -31)
+    assert (drag_caption(window, hit, displacement) - displacement).manhattanLength() <= 2
+    initial = player.property(key).toVariant()
+    invoke(player, "toggleFullscreen")
+    qtbot.waitUntil(lambda: player.property("fullscreenGeometryReady"))
+    player.setProperty("overlayVisible", False)
+    full = find(window, "fullscreenWindow")
+    point = hit.mapToItem(layer, QPointF(hit.width()/2, hit.height()/2))
+    assert point.x() / layer.width() == pytest.approx(initial["x"], abs=0.01)
+    assert point.y() / layer.height() == pytest.approx(initial["y"], abs=0.01)
+    displacement = QPoint(-33, -28)
+    assert (drag_caption(full, hit, displacement) - displacement).manhattanLength() <= 2
+    invoke(player, "toggleFullscreen")
+    invoke(window, "saveWorkspace")
+    saved = json.loads((bridge.store.data_dir / "quick-layout.json").read_text("utf-8"))
+    assert saved["preferences"]["player"][key] == player.property(key).toVariant() != initial
+    _, restored, other_engine = create_qml_app(bridge.store.data_dir)
+    try:
+        other_player = find(other_engine.rootObjects()[0], "playerModule").property("loadedItem")
+        assert other_player.property(key) == saved["preferences"]["player"][key]
+        assert other_engine._tingmu_warnings == []
+    finally:
+        restored.shutdown()
+        other_engine.deleteLater()
+        qtbot.wait(20)
+    assert engine._tingmu_warnings == []
+
+
+def test_sentence_button_saves_source_and_keeps_remarks_in_both_windows(quick, qtbot):
+    _, bridge, engine, window = quick
+    media = str(bridge.store.data_dir / "media/sample.mkv")
+    bridge.media_path = media
+    bridge._set_state(mediaPath=media)
+    source = Cue("whole", 1.5, 4, "前半句。后半句。", translation="整句译文", segmented_texts=["前半句。", "后半句。"])
+    bridge._set_document(StudyDocument(media, LanguagePair(), [source]))
+    bridge._sync_cue(3700)
+    companion = find(window, "companionModule").property("loadedItem")
+    button = find(companion, "saveSentenceButton")
+    qtbot.wait(60)
+    click(window, button)
+    assert button.property("text") == "已收藏整句"
+    assert find(companion, "sentenceCollectionFeedback").property("visible")
+    existing = Store(bridge.store.data_dir)
+    entry, = existing.entries(media)
+    assert (entry["cue_id"], entry["text"], entry["meaning"], entry["start"]) == (
+        source.id, source.text, source.translation, source.start)
+    existing.save_note(media, source, "手写备注", LanguagePair())
+    player = find(window, "playerModule").property("loadedItem")
+    invoke(player, "toggleFullscreen")
+    qtbot.waitUntil(lambda: player.property("fullscreenGeometryReady"))
+    full = find(window, "fullscreenWindow")
+    overlay = find(window, "overlayScroll")
+    click(full, find(overlay, "saveSentenceButton"))
+    qtbot.wait(30)
+    saved, = existing.entries(media)
+    assert saved["id"] == entry["id"] and saved["note"] == "手写备注"
+    assert find(overlay, "sentenceCollectionFeedback").property("text") == "整句已加入收藏箱"
+    assert saved["id"] in {row["id"] for row in bridge.notebooks["entries"]}
+    assert engine._tingmu_warnings == []
+
+
+def test_sentence_button_uses_current_display_only_source(quick, qtbot):
+    _, bridge, engine, window = quick
+    media = str(bridge.store.data_dir / "media/test.mkv")
+    bridge.media_path = media
+    bridge._set_state(mediaPath=media)
+    bridge.sources.open(media)
+    bridge.sources.install(DisplayTrack("外部.srt", [(1000, 2500, "相同台词"), (2500, 3700, "相同台词")]))
+    bridge.sources.update_position(2900)
+    companion = find(window, "companionModule").property("loadedItem")
+    button = find(companion, "saveSentenceButton")
+    qtbot.wait(40)
+    click(window, button)
+    entry, = bridge.store.entries(media)
+    assert (entry["start"], entry["text"]) == (2.5, "相同台词")
+    bridge.sources.update_position(3800)
+    bridge._embedded.track = 1
+    bridge._embedded._source = Events((3010, 4900), ("内嵌台词", ""))
+    bridge._embedded.position(3800)
+    qtbot.wait(40)
+    click(window, button)
+    assert [(e["text"], e["start"]) for e in bridge.store.entries(media)] == [
+        ("相同台词", 2.5), ("内嵌台词", 3.01)]
+    assert engine._tingmu_warnings == []
 
 
 def test_preferred_output_is_restored_after_reconnection():

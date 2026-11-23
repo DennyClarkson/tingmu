@@ -19,6 +19,8 @@ Item {
     property bool displayImported:true
     property int bitmapScale:100
     property int bitmapShift:0
+    property var textPosition:null
+    property var bitmapPosition:null
     property bool reserveBar:true
     property bool autoHide:true
     property bool showLoop:true
@@ -27,18 +29,22 @@ Item {
     property var appearance:Object.assign({}, Styles.base)
     property var savedStyles:({})
     property int settingsTab:0
-    readonly property bool playing:backend.playback.playing
+    readonly property bool playing:backend.playbackDetails.playing
     readonly property bool settingsOpen:settingsPopup.opened
     property int aspectMode:0
     property bool fullscreenGeometryReady:false
     function savePlayerPrefs(){
         if(workspace) workspace.savePreference("player",{displayCaption,displayTranslation,displayImported,aspectMode,reserveBar,autoHide,
-            showLoop,remainingTime,hideDelay,appearance,savedStyles,bitmapScale,bitmapShift})
+            showLoop,remainingTime,hideDelay,appearance,savedStyles,bitmapScale,bitmapShift,textPosition,bitmapPosition})
     }
     function selectTrack(index) {
         backend.command("setSubtitleTrack",{index:index})
     }
-    function setAppearance(next){appearance=next;savePlayerPrefs()}
+    function setAppearance(next){
+        if(next.align!==appearance.align || next.horizontalMargin!==appearance.horizontalMargin || next.verticalMargin!==appearance.verticalMargin)
+            textPosition=null
+        appearance=next;savePlayerPrefs()
+    }
     function openSettings(){ settingsPopup.open() }
     function closeSettings(){settingsPopup.close()}
     function focusPlayback(){if(fullscreen)fullVideoHost.forceActiveFocus();else root.forceActiveFocus()}
@@ -62,9 +68,10 @@ Item {
             appearance=Object.assign({},Styles.base,prefs.captionSize ? {size:prefs.captionSize} : {},prefs.appearance || {})
             savedStyles=prefs.savedStyles || {}
             bitmapScale=prefs.bitmapScale || 100;bitmapShift=prefs.bitmapShift || 0
+            textPosition=prefs.textPosition || null;bitmapPosition=prefs.bitmapPosition || null
         }
     }
-    Timer { id:hideControls; interval:root.hideDelay*1000; onTriggered:if(root.autoHide && backend.playback.playing && !barHover.hovered && !overlayDrag.pressed && !resizeGrip.pressed && !settingsPopup.opened)root.controlsVisible=false }
+    Timer { id:hideControls; interval:root.hideDelay*1000; onTriggered:if(root.autoHide && backend.playbackDetails.playing && !barHover.hovered && !overlayDrag.pressed && !resizeGrip.pressed && !settingsPopup.opened)root.controlsVisible=false }
     Timer {
         id:sceneSettled
         interval:120
@@ -81,8 +88,8 @@ Item {
             Rectangle { anchors.fill:parent; color:Theme.video }
             Column {
                 anchors.centerIn:parent; spacing:16; visible:!backend.state.mediaPath
-                Text { textFormat:Text.PlainText; anchors.horizontalCenter:parent.horizontalCenter; text:"听 幕"; color:Theme.captionText; font.family:Theme.font; font.pixelSize:36; font.weight:Font.Light }
-                TButton { anchors.horizontalCenter:parent.horizontalCenter; text:"打开视频"; iconSource:"arrow-up-right"; primary:true; onClicked:backend.command("openFiles",{}) }
+                Text { textFormat:Text.PlainText; anchors.horizontalCenter:parent.horizontalCenter; text:qsTranslate("Tingmu", "听 幕"); color:Theme.captionText; font.family:Theme.font; font.pixelSize:36; font.weight:Font.Light }
+                TButton { anchors.horizontalCenter:parent.horizontalCenter; text:qsTranslate("Tingmu", "打开视频"); iconSource:"arrow-up-right"; primary:true; onClicked:backend.command("openFiles",{}) }
             }
             MouseArea { anchors.fill:parent; onDoubleClicked:root.toggleFullscreen(); onClicked:backend.command("playPause",{}) }
         }
@@ -91,6 +98,7 @@ Item {
     VideoOutput {
         id:video; objectName:"playerVideo"
         parent:root.fullscreen ? fullVideoHost : normalVideoHost
+        z:1
         anchors.fill:parent
         fillMode:root.aspectMode===1 ? VideoOutput.PreserveAspectCrop : root.aspectMode===2 ? VideoOutput.Stretch : VideoOutput.PreserveAspectFit
         clip:true
@@ -99,15 +107,31 @@ Item {
             x:captions.x;y:captions.y;width:captions.width;height:captions.height;clip:true
             readonly property rect rect:video.contentRect
             readonly property real factor:root.bitmapScale/100
-            readonly property var bounds:backend.playback.embeddedBounds || ({})
+            readonly property var bounds:backend.playbackDetails.embeddedBounds || ({})
             readonly property real centerX:bounds.width ? bounds.x + bounds.width/2 : 0.5
             readonly property real centerY:bounds.height ? bounds.y + bounds.height/2 : 0.9
             Image {
                 id:embeddedBitmap;objectName:"embeddedBitmap"
-                x:bitmapViewport.rect.x-bitmapViewport.x+bitmapViewport.centerX*(bitmapViewport.rect.width-width)
-                y:bitmapViewport.rect.y-bitmapViewport.y+bitmapViewport.centerY*(bitmapViewport.rect.height-height)+root.bitmapShift*bitmapViewport.rect.height/100
+                x:root.bitmapPosition ? Math.max(0,Math.min(bitmapViewport.width-bitmapDrag.width,
+                      root.bitmapPosition.x*bitmapViewport.width-bitmapDrag.width/2))-(bitmapViewport.bounds.x || 0)*width
+                    : bitmapViewport.rect.x-bitmapViewport.x+bitmapViewport.centerX*(bitmapViewport.rect.width-width)
+                y:root.bitmapPosition ? Math.max(0,Math.min(bitmapViewport.height-captions.controlsClearance-bitmapDrag.height,
+                      root.bitmapPosition.y*bitmapViewport.height-bitmapDrag.height/2))-(bitmapViewport.bounds.y || 0)*height
+                    : bitmapViewport.rect.y-bitmapViewport.y+bitmapViewport.centerY*(bitmapViewport.rect.height-height)+root.bitmapShift*bitmapViewport.rect.height/100
                 width:bitmapViewport.rect.width*bitmapViewport.factor;height:bitmapViewport.rect.height*bitmapViewport.factor
-                source:backend.playback.embeddedImage || "";cache:false;fillMode:Image.Stretch
+                source:backend.playbackDetails.embeddedImage || "";cache:false;fillMode:Image.Stretch
+            }
+            CaptionDrag {
+                id:bitmapDrag;objectName:"bitmapCaptionDrag"
+                enabled:width>0 && height>0 && !!backend.playbackDetails.embeddedImage
+                viewport:bitmapViewport
+                x:embeddedBitmap.x+(bitmapViewport.bounds.x || 0)*embeddedBitmap.width
+                y:embeddedBitmap.y+(bitmapViewport.bounds.y || 0)*embeddedBitmap.height
+                width:(bitmapViewport.bounds.width || 0)*embeddedBitmap.width
+                height:(bitmapViewport.bounds.height || 0)*embeddedBitmap.height
+                center:Qt.point(x+width/2,y+height/2)
+                onReposition:(cx,cy)=>root.bitmapPosition=({x:cx,y:cy})
+                onCommitted:root.savePlayerPrefs()
             }
         }
         CaptionLayer {
@@ -115,24 +139,27 @@ Item {
             x:Math.max(0,video.contentRect.x);y:Math.max(0,video.contentRect.y)
             width:Math.max(0,Math.min(video.width,video.contentRect.width));height:Math.max(0,Math.min(video.height,video.contentRect.height))
             appearance:root.appearance
+            movable:true;placement:root.textPosition
+            onReposition:(cx,cy)=>root.textPosition=({x:cx,y:cy})
+            onCommitted:root.savePlayerPrefs()
             readonly property var bitmap:bitmapViewport.bounds
             readonly property real bitmapTop:embeddedBitmap.y + (bitmap.y || 0)*embeddedBitmap.height
             readonly property real bitmapBottom:bitmapTop + (bitmap.height || 0)*embeddedBitmap.height
-            readonly property string embeddedCaption:backend.playback.embeddedText || ""
-            clearance:Math.max(root.fullscreen && !root.reserveBar && root.controlsVisible ? Math.max(0, y+height-fullWindow.height+transport.height+8) : 0,
-                               bitmap.height && bitmapTop>height/2 ? height-bitmapTop+5 : 0)
+            readonly property string embeddedCaption:backend.playbackDetails.embeddedText || ""
+            readonly property real controlsClearance:root.fullscreen && !root.reserveBar && root.controlsVisible ? Math.max(0, y+height-fullWindow.height+transport.height+8) : 0
+            clearance:Math.max(controlsClearance, !placement && bitmap.height && bitmapTop>height/2 ? height-bitmapTop+5 : 0)
             topClearance:bitmap.height && bitmapTop<=height/2 ? bitmapBottom+5 : 0
             fontScale:root.fullscreen ? 1.2 : 1
             lines:[
                 root.displayCaption && backend.activeCue.text ? (backend.activeCue.speaker ? backend.activeCue.speaker+"  " : "") + backend.activeCue.text : "",
-                root.displayTranslation && backend.activeCue.translationVerified ? backend.activeCue.translation : "",
+                root.displayTranslation && (backend.activeCue.translationVerified || backend.activeCue.translationProvided) ? backend.activeCue.translation : "",
                 embeddedCaption, root.displayImported ? backend.sources.importedText : ""
             ].filter(t=>!!t)
         }
     }
     Window {
         id:fullWindow; objectName:"fullscreenWindow"
-        title:"听幕 · 全屏"
+        title:qsTranslate("Tingmu", "听幕 · 全屏")
         color:Theme.video; visible:false
         onVisibleChanged:{if(visible)root.showControls();sceneSettled.restart()}
         onClosing:function(close){close.accepted=false;root.fullscreen=false;hide()}
@@ -140,13 +167,15 @@ Item {
         onHeightChanged:if(visible){root.fullscreenGeometryReady=false;sceneSettled.restart()}
         onVisibilityChanged:sceneSettled.restart()
         PlaybackShortcuts{player:root;active:root.fullscreen}
-        Item { id:fullVideoHost;objectName:"fullscreenVideoArea"; anchors.fill:parent;anchors.bottomMargin:root.reserveBar ? transport.height : 0 }
-        MouseArea {
-            anchors.fill:parent; hoverEnabled:true
-            cursorShape:root.controlsVisible ? Qt.ArrowCursor : Qt.BlankCursor
-            onPositionChanged:root.showControls()
-            onClicked:backend.command("playPause",{})
-            onDoubleClicked:root.toggleFullscreen()
+        Item {
+            id:fullVideoHost;objectName:"fullscreenVideoArea";anchors.fill:parent;anchors.bottomMargin:root.reserveBar ? transport.height : 0
+            MouseArea {
+                anchors.fill:parent;hoverEnabled:true
+                cursorShape:root.controlsVisible ? Qt.ArrowCursor : Qt.BlankCursor
+                onPositionChanged:root.showControls()
+                onClicked:backend.command("playPause",{})
+                onDoubleClicked:root.toggleFullscreen()
+            }
         }
         Rectangle {
             anchors.top:parent.top; width:parent.width; height:90
@@ -154,9 +183,9 @@ Item {
             gradient:Gradient { GradientStop{position:0;color:Theme.scrim} GradientStop{position:1;color:Theme.transparent} }
             RowLayout {
                 anchors.left:parent.left; anchors.right:parent.right; anchors.top:parent.top; anchors.margins:24
-                Text { textFormat:Text.PlainText; Layout.fillWidth:true; text:backend.state.mediaName || "听幕"; color:Theme.text; font.family:Theme.font; font.pixelSize:16; elide:Text.ElideMiddle }
-                TButton { text:root.overlayVisible ? "隐藏伴侣" : "显示伴侣"; onClicked:{root.overlayVisible=!root.overlayVisible;root.saveOverlay()} }
-                TButton { text:"退出全屏  Esc"; onClicked:root.toggleFullscreen() }
+                Text { textFormat:Text.PlainText; Layout.fillWidth:true; text:backend.state.mediaName || qsTranslate("Tingmu", "听幕"); color:Theme.text; font.family:Theme.font; font.pixelSize:16; elide:Text.ElideMiddle }
+                TButton { text:root.overlayVisible ? qsTranslate("Tingmu", "隐藏伴侣") : qsTranslate("Tingmu", "显示伴侣"); onClicked:{root.overlayVisible=!root.overlayVisible;root.saveOverlay()} }
+                TButton { text:qsTranslate("Tingmu", "退出全屏  Esc"); onClicked:root.toggleFullscreen() }
             }
         }
         Rectangle {
@@ -172,7 +201,7 @@ Item {
                 anchors.fill:parent; anchors.margins:16; spacing:9
                 Item {
                     Layout.fillWidth:true; Layout.preferredHeight:26
-                    Text { textFormat:Text.PlainText; anchors.left:parent.left; anchors.verticalCenter:parent.verticalCenter; text:"听幕  /  学习伴侣"; color:Theme.accent; font.family:Theme.font; font.pixelSize:11 }
+                    Text { textFormat:Text.PlainText; anchors.left:parent.left; anchors.verticalCenter:parent.verticalCenter; text:qsTranslate("Tingmu", "听幕  /  学习伴侣"); color:Theme.accent; font.family:Theme.font; font.pixelSize:11 }
                     MouseArea {
                         id:overlayDrag; objectName:"overlayDrag"
                         anchors.fill:parent; anchors.rightMargin:35
@@ -182,10 +211,11 @@ Item {
                         onPositionChanged:function(mouse){if(pressed){var p=mapToGlobal(mouse.x,mouse.y);overlay.x+=p.x-lastGlobal.x;overlay.y+=p.y-lastGlobal.y;lastGlobal=p;root.clampOverlay()}}
                         onReleased:root.saveOverlay()
                     }
-                    TButton { anchors.right:parent.right; iconSource:"close"; quiet:true; implicitHeight:26; tip:"隐藏伴侣浮层"; onClicked:{root.overlayVisible=false;root.saveOverlay()} }
+                    TButton { anchors.right:parent.right; iconSource:"close"; quiet:true; implicitHeight:26; tip:qsTranslate("Tingmu", "隐藏伴侣浮层"); onClicked:{root.overlayVisible=false;root.saveOverlay()} }
                 }
                 CompanionContent {
                     objectName:"overlayScroll"
+                    displayImported:root.displayImported
                     onLearningRequested:{if(root.fullscreen)root.toggleFullscreen();if(root.workspace)root.workspace.changeView("learn")}
                     Layout.fillWidth:true; Layout.fillHeight:true
                     compact:true
@@ -229,13 +259,13 @@ Item {
             spacing:10
             RowLayout {
                 Layout.fillWidth:true
-                Text { Layout.fillWidth:true;text:"播放器设置";color:Theme.text;font.family:Theme.font;font.pixelSize:18;font.bold:true }
-                TButton { iconSource:"close";tip:"关闭设置";quiet:true;onClicked:settingsPopup.close() }
+                Text { Layout.fillWidth:true;text:qsTranslate("Tingmu", "播放器设置");color:Theme.text;font.family:Theme.font;font.pixelSize:18;font.bold:true }
+                TButton { iconSource:"close";tip:qsTranslate("Tingmu", "关闭设置");quiet:true;onClicked:settingsPopup.close() }
             }
             RowLayout {
                 Layout.fillWidth:true;spacing:4
                 Repeater {
-                    model:["控制栏","声音","字幕","样式","伴侣"]
+                    model:[qsTranslate("Tingmu", "控制栏"),qsTranslate("Tingmu", "声音"),qsTranslate("Tingmu", "字幕"),qsTranslate("Tingmu", "样式"),qsTranslate("Tingmu", "伴侣")]
                     delegate:TButton {
                         required property string modelData
                         required property int index
@@ -254,61 +284,64 @@ Item {
                     width:settingsScroll.availableWidth-4;spacing:10
                     ColumnLayout {
                         visible:root.settingsTab===0;Layout.fillWidth:true;spacing:10
-                        SectionLabel { text:"视频缩放" }
-                        Choice { Layout.fillWidth:true;model:["适应画面","填满裁切","拉伸画面"];currentIndex:root.aspectMode;onActivated:{root.aspectMode=currentIndex;root.savePlayerPrefs()} }
-                        SectionLabel { text:"播放栏" }
-                        Toggle { text:"显示 A–B 循环工具";checked:root.showLoop;onToggled:{root.showLoop=checked;root.savePlayerPrefs()} }
-                        Toggle { text:"时间轴右侧显示剩余时间";checked:root.remainingTime;onToggled:{root.remainingTime=checked;root.savePlayerPrefs()} }
-                        SectionLabel { text:"全屏" }
-                        Toggle { objectName:"reserveFullscreenBar";text:"为下方控制栏预留空间";checked:root.reserveBar;onToggled:{root.reserveBar=checked;root.savePlayerPrefs()} }
-                        Toggle { text:"自动隐藏控制栏";checked:root.autoHide;onToggled:{root.autoHide=checked;root.showControls();root.savePlayerPrefs()} }
-                        SectionLabel { visible:root.autoHide;text:"鼠标静止 "+root.hideDelay+" 秒后隐藏" }
+                        SectionLabel { text:qsTranslate("Tingmu", "视频缩放") }
+                        Choice { Layout.fillWidth:true;translateOptions:true;model:["适应画面","填满裁切","拉伸画面"];currentIndex:root.aspectMode;onActivated:{root.aspectMode=currentIndex;root.savePlayerPrefs()} }
+                        SectionLabel { text:qsTranslate("Tingmu", "播放栏") }
+                        Toggle { text:qsTranslate("Tingmu", "显示 A–B 循环工具");checked:root.showLoop;onToggled:{root.showLoop=checked;root.savePlayerPrefs()} }
+                        Toggle { text:qsTranslate("Tingmu", "时间轴右侧显示剩余时间");checked:root.remainingTime;onToggled:{root.remainingTime=checked;root.savePlayerPrefs()} }
+                        SectionLabel { text:qsTranslate("Tingmu", "全屏") }
+                        Toggle { objectName:"reserveFullscreenBar";text:qsTranslate("Tingmu", "为下方控制栏预留空间");checked:root.reserveBar;onToggled:{root.reserveBar=checked;root.savePlayerPrefs()} }
+                        Toggle { text:qsTranslate("Tingmu", "自动隐藏控制栏");checked:root.autoHide;onToggled:{root.autoHide=checked;root.showControls();root.savePlayerPrefs()} }
+                        SectionLabel { visible:root.autoHide;text:qsTranslate("Tingmu", "鼠标静止 ")+root.hideDelay+qsTranslate("Tingmu", " 秒后隐藏") }
                         TrackSlider { visible:root.autoHide;Layout.fillWidth:true;from:1;to:10;stepSize:1;value:root.hideDelay;onMoved:{root.hideDelay=Math.round(value);root.savePlayerPrefs()} }
                     }
                     ColumnLayout {
                         visible:root.settingsTab===1;Layout.fillWidth:true;spacing:10
-                        SectionLabel { text:"音频输出设备" }
-                        Choice { objectName:"audioOutputChoice";Layout.fillWidth:true;model:backend.sources.audioOutputs;textRole:"name";currentIndex:backend.sources.outputIndex;onActivated:backend.command("setAudioOutput",{id:model[currentIndex].id}) }
-                        SectionLabel { text:"视频音轨" }
-                        Choice { Layout.fillWidth:true;model:backend.playback.audioTracks || [];textRole:"name";enabled:count>0;currentIndex:backend.playback.audioTrack;onActivated:backend.command("setAudioTrack",{index:currentIndex}) }
-                        SectionLabel { text:"音量 · "+Math.round(backend.playback.volume*100)+"%" }
-                        TrackSlider { Layout.fillWidth:true;from:0;to:1;value:backend.playback.volume;onMoved:backend.command("setVolume",{value:value}) }
-                        Toggle { text:"静音";checked:backend.playback.muted;onToggled:backend.command("setMuted",{value:checked}) }
+                        SectionLabel { text:qsTranslate("Tingmu", "音频输出设备") }
+                        Choice { objectName:"audioOutputChoice";Layout.fillWidth:true;optionLabel:(i,value)=>i===0 ? qsTranslate("TingmuStatus",value) : value;model:backend.sources.audioOutputs;textRole:"name";currentIndex:backend.sources.outputIndex;onActivated:backend.command("setAudioOutput",{id:model[currentIndex].id}) }
+                        SectionLabel { text:qsTranslate("Tingmu", "视频音轨") }
+                        Choice { Layout.fillWidth:true;model:backend.playbackDetails.audioTracks || [];textRole:"name";enabled:count>0;currentIndex:backend.playbackDetails.audioTrack;onActivated:backend.command("setAudioTrack",{index:currentIndex}) }
+                        SectionLabel { text:qsTranslate("Tingmu", "音量 · ")+Math.round(backend.playbackDetails.volume*100)+"%" }
+                        TrackSlider { Layout.fillWidth:true;from:0;to:1;value:backend.playbackDetails.volume;onMoved:backend.command("setVolume",{value:value}) }
+                        Toggle { text:qsTranslate("Tingmu", "静音");checked:backend.playbackDetails.muted;onToggled:backend.command("setMuted",{value:checked}) }
                     }
                     ColumnLayout {
                         visible:root.settingsTab===2;Layout.fillWidth:true;spacing:7
-                        Toggle { objectName:"showLearningTrack";text:"显示学习字幕";checked:root.displayCaption;onToggled:{root.displayCaption=checked;root.savePlayerPrefs()} }
-                        Toggle { objectName:"showTranslationTrack";text:"显示"+backend.lessonModel.language+"译文";checked:root.displayTranslation;onToggled:{root.displayTranslation=checked;root.savePlayerPrefs()} }
+                        SectionLabel { text:qsTranslate("Tingmu", "拖动画面中的字幕可调整位置。文字字幕一起移动，图像字幕可单独移动。") }
+                        TButton { text:qsTranslate("Tingmu", "恢复字幕位置");enabled:!!root.textPosition || !!root.bitmapPosition || root.bitmapShift!==0
+                            onClicked:{root.textPosition=null;root.bitmapPosition=null;root.bitmapShift=0;root.savePlayerPrefs()} }
+                        Toggle { objectName:"showLearningTrack";text:qsTranslate("Tingmu", "显示学习字幕");checked:root.displayCaption;onToggled:{root.displayCaption=checked;root.savePlayerPrefs()} }
+                        Toggle { objectName:"showTranslationTrack";text:qsTranslate("Tingmu", "显示")+qsTranslate("TingmuLanguage", backend.lessonModel.language || "")+qsTranslate("Tingmu", "译文");checked:root.displayTranslation;onToggled:{root.displayTranslation=checked;root.savePlayerPrefs()} }
                         LessonPreparation {}
-                        TButton { text:"准备当前视频";visible:!backend.cues.length;enabled:!!backend.state.mediaPath;onClicked:backend.command("prepareCurrent",{}) }
+                        TButton { text:qsTranslate("Tingmu", "准备当前视频");visible:!backend.cueCount;enabled:!!backend.state.mediaPath;onClicked:backend.command("prepareCurrent",{}) }
                         Rectangle { Layout.fillWidth:true;height:1;color:Theme.line }
                         Toggle {
-                            objectName:"showEmbeddedTrack";text:"显示内嵌字幕";enabled:embeddedChoice.count>0
-                            checked:backend.playback.subtitleTrack>=0
+                            objectName:"showEmbeddedTrack";text:qsTranslate("Tingmu", "显示内嵌字幕");enabled:embeddedChoice.count>0
+                            checked:backend.playbackDetails.subtitleTrack>=0
                             onToggled:root.selectTrack(checked ? Math.max(0,embeddedChoice.currentIndex) : -1)
                         }
                         Choice {
                             id:embeddedChoice;objectName:"embeddedTrackChoice";Layout.fillWidth:true
-                            model:backend.playback.subtitleTracks || [];textRole:"name";enabled:count>0
+                            model:backend.playbackDetails.subtitleTracks || [];textRole:"name";enabled:count>0
                             currentIndex: {
                                 if(!count) return -1
-                                if(backend.playback.subtitleTrack>=0) return backend.playback.subtitleTrack
+                                if(backend.playbackDetails.subtitleTrack>=0) return backend.playbackDetails.subtitleTrack
                                 const choice=backend.sources.embeddedChoice
                                 return choice ? Math.min(count-1,choice.index) : 0
                             }
                             onActivated:root.selectTrack(currentIndex)
                         }
-                        SectionLabel { visible:!embeddedChoice.count || !!backend.playback.embeddedStatus;text:backend.playback.embeddedStatus || "此视频没有可选择的内嵌字幕轨。" }
-                        SectionLabel { visible:embeddedChoice.count>0;text:"图像字幕大小 · "+root.bitmapScale+"%" }
+                        SectionLabel { visible:!embeddedChoice.count || !!backend.playbackDetails.embeddedStatus;text:qsTranslate("TingmuStatus", backend.playbackDetails.embeddedStatus || "") || qsTranslate("Tingmu", "此视频没有可选择的内嵌字幕轨。") }
+                        SectionLabel { visible:embeddedChoice.count>0;text:qsTranslate("Tingmu", "图像字幕大小 · ")+root.bitmapScale+"%" }
                         TrackSlider { visible:embeddedChoice.count>0;Layout.fillWidth:true;from:60;to:150;stepSize:5;value:root.bitmapScale;onMoved:{root.bitmapScale=Math.round(value);root.savePlayerPrefs()} }
-                        SectionLabel { visible:embeddedChoice.count>0;text:"图像字幕垂直偏移 · "+root.bitmapShift+"%" }
-                        TrackSlider { visible:embeddedChoice.count>0;Layout.fillWidth:true;from:-30;to:30;stepSize:1;value:root.bitmapShift;onMoved:{root.bitmapShift=Math.round(value);root.savePlayerPrefs()} }
+                        SectionLabel { visible:embeddedChoice.count>0;text:qsTranslate("Tingmu", "图像字幕垂直偏移 · ")+root.bitmapShift+"%" }
+                        TrackSlider { visible:embeddedChoice.count>0;Layout.fillWidth:true;from:-30;to:30;stepSize:1;value:root.bitmapShift;onMoved:{root.bitmapPosition=null;root.bitmapShift=Math.round(value);root.savePlayerPrefs()} }
                         Rectangle { Layout.fillWidth:true;height:1;color:Theme.line }
-                        Toggle { objectName:"showImportedTrack";text:"显示导入字幕";checked:root.displayImported;onToggled:{root.displayImported=checked;root.savePlayerPrefs()} }
-                        SectionLabel { text:backend.sources.importedName || "可导入 SRT、VTT、ASS 或 SSA 作为独立播放字幕。" }
+                        Toggle { objectName:"showImportedTrack";text:qsTranslate("Tingmu", "显示导入字幕");checked:root.displayImported;onToggled:{root.displayImported=checked;root.savePlayerPrefs()} }
+                        SectionLabel { text:backend.sources.importedName || qsTranslate("Tingmu", "可导入 SRT、VTT、ASS 或 SSA 作为独立播放字幕。") }
                         RowLayout {
-                            TButton { text:backend.sources.importedName ? "更换字幕文件…" : "导入字幕文件…";enabled:!!backend.state.mediaPath;onClicked:backend.command("importSubtitle",{}) }
-                            TButton { text:"移除";visible:!!backend.sources.importedName;onClicked:backend.command("removeDisplaySubtitle",{}) }
+                            TButton { text:backend.sources.importedName ? qsTranslate("Tingmu", "更换字幕文件…") : qsTranslate("Tingmu", "导入字幕文件…");enabled:!!backend.state.mediaPath;onClicked:backend.command("importSubtitle",{}) }
+                            TButton { text:qsTranslate("Tingmu", "移除");visible:!!backend.sources.importedName;onClicked:backend.command("removeDisplaySubtitle",{}) }
                         }
                     }
                     Loader {
@@ -322,15 +355,15 @@ Item {
                     }
                     ColumnLayout {
                         visible:root.settingsTab===4;Layout.fillWidth:true;spacing:10
-                        SectionLabel { text:"全屏伴侣浮层" }
-                        Toggle { text:"显示浮层";checked:root.overlayVisible;onToggled:{root.overlayVisible=checked;root.saveOverlay()} }
-                        SectionLabel { text:"透明度" }
+                        SectionLabel { text:qsTranslate("Tingmu", "全屏伴侣浮层") }
+                        Toggle { text:qsTranslate("Tingmu", "显示浮层");checked:root.overlayVisible;onToggled:{root.overlayVisible=checked;root.saveOverlay()} }
+                        SectionLabel { text:qsTranslate("Tingmu", "透明度") }
                         TrackSlider { Layout.fillWidth:true;from:0.25;to:1;value:backend.settings.overlay_opacity || 0.86;onMoved:backend.setting("overlay_opacity",value) }
-                        SectionLabel { text:"字号 · "+(backend.settings.overlay_font_size || 20) }
+                        SectionLabel { text:qsTranslate("Tingmu", "字号 · ")+(backend.settings.overlay_font_size || 20) }
                         TrackSlider { Layout.fillWidth:true;from:14;to:36;stepSize:1;value:backend.settings.overlay_font_size || 20;onMoved:backend.setting("overlay_font_size",Math.round(value)) }
-                        Toggle { text:"读音";checked:root.overlayReading;onToggled:{root.overlayReading=checked;root.saveOverlay()} }
-                        Toggle { text:"释义";checked:root.overlayTranslation;onToggled:{root.overlayTranslation=checked;root.saveOverlay()} }
-                        Toggle { text:"讲解";checked:root.overlayExplanation;onToggled:{root.overlayExplanation=checked;root.saveOverlay()} }
+                        Toggle { text:qsTranslate("Tingmu", "读音");checked:root.overlayReading;onToggled:{root.overlayReading=checked;root.saveOverlay()} }
+                        Toggle { text:qsTranslate("Tingmu", "释义");checked:root.overlayTranslation;onToggled:{root.overlayTranslation=checked;root.saveOverlay()} }
+                        Toggle { text:qsTranslate("Tingmu", "讲解");checked:root.overlayExplanation;onToggled:{root.overlayExplanation=checked;root.saveOverlay()} }
                     }
                 }
             }

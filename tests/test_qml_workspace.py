@@ -1,6 +1,7 @@
 """Real QML interaction checks, not string snapshots of the implementation."""
 
 import os
+from threading import Event
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -149,3 +150,43 @@ def test_developer_window_lists_local_events_and_hides_when_disabled(quick, qtbo
     qtbot.wait(50)
     assert not dev.isVisible()
     assert engine._tingmu_warnings == []
+
+
+def test_manual_model_size_confirmation_and_live_transfer(quick, qtbot, monkeypatch):
+    from tingmu.task_progress import Progress
+    _, bridge, engine, window = quick
+    setup = find(window, "workspaceSetup")
+    confirm = find(window, "manualModelDownload")
+    release = Event()
+    calls = []
+    monkeypatch.setattr("tingmu.quick.workspace_controller.model_inventory",
+                        lambda _: {"installed": False, "download_bytes": 2**31, "estimated_download_bytes": 2**32})
+
+    def download(model, progress, cancel):
+        calls.append(model)
+        progress(Progress("下载测试文件", component="测试文件", completed=float(2**31), total=float(2**32),
+                          received=65536., rate=32768.))
+        release.wait(4)
+        return model
+
+    monkeypatch.setattr("tingmu.quick.workspace_controller.download_model", download)
+    try:
+        invoke(setup, "open")
+        qtbot.waitUntil(lambda: setup.property("opened"))
+        invoke(find(window, "workspaceModelsTab"), "click")
+        invoke(find(window, "workspaceDownload"), "click")
+        qtbot.waitUntil(lambda: confirm.property("opened"))
+        labels = [obj.property("text") for obj in confirm.findChildren(QObject)
+                  if isinstance(obj.property("text"), str)]
+        assert any("总量约 4.0 GiB" in text for text in labels)
+        assert any("下载 2.0 GiB" in text for text in labels)
+        assert not calls
+        invoke(find(window, "approveManualDownload"), "click")
+        qtbot.waitUntil(lambda: bool(bridge.state.get("downloadProgress")))
+        bars = setup.findChildren(QObject, "downloadProgressBar")
+        assert any(bar.isVisible() and bar.property("value") == .5 for bar in bars)
+        assert bridge.state["downloadProgress"]["rate"] == 32768 and len(calls) == 1
+        assert not engine._tingmu_warnings
+    finally:
+        release.set()
+        qtbot.waitUntil(lambda: not bridge.state.get("modelDownloading"))

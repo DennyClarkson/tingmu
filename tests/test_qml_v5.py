@@ -1,4 +1,6 @@
 """v0.5 regressions exercise actual windows, focus and user controls."""
+import sys
+
 from PySide6.QtCore import QCoreApplication, QMetaObject, QPoint, QPointF, QRectF, Qt, Q_ARG, Q_RETURN_ARG
 from PySide6.QtGui import QWheelEvent
 from PySide6.QtTest import QTest
@@ -34,6 +36,39 @@ def test_companion_distinguishes_unopened_unprepared_processing_and_gap(quick, q
     bridge._sync_cue(10500)
     qtbot.wait(20)
     assert text.property("text") == "下一句"
+    assert engine._tingmu_warnings == []
+
+
+def test_playback_and_subtitle_gaps_do_not_fetch_the_full_qml_cue_list(quick):
+    app, bridge, engine, window = quick
+    bridge._set_state(mediaPath="synthetic.mp4")
+    cues = [Cue(str(i), i*3, i*3+1, f"第 {i} 句") for i in range(100)]
+    bridge._set_document(StudyDocument("synthetic.mp4", LanguagePair(), cues))
+    app.processEvents()
+    getter = type(bridge).cues.fget.__code__
+    reads = []
+
+    def profile(frame, event, arg):
+        if event == "call" and frame.f_code is getter:
+            reads.append(1)
+
+    previous = sys.getprofile()
+    sys.setprofile(profile)
+    try:
+        bridge.cuesChanged.emit()
+        app.processEvents()
+        assert reads, "the QML subtitle list should read its model on a document update"
+        reads.clear()
+        for position in (100, 1100, 1500, 3200, 4200):
+            bridge._position_changed(position)
+            app.processEvents()
+        bridge.audio.setMuted(True)  # Also reevaluates the gap's embedded-caption hint.
+        app.processEvents()
+        assert not reads, "checking a subtitle gap or ticking the player fetched the full cue list"
+    finally:
+        sys.setprofile(previous)
+    pane = find(window, "companionModule").property("loadedItem")
+    assert "没有当前字幕" in find(pane, "selectableCueText").property("text")
     assert engine._tingmu_warnings == []
 
 
@@ -263,6 +298,125 @@ def test_paused_fullscreen_mouse_selection_saves_exact_source_text(quick, qtbot)
     qtbot.wait(30)
     assert any(entry["text"] == "我哋" for entry in bridge.store.entries())
     assert find(window, "playerModule").property("loadedItem").property("fullscreen")
+    assert engine._tingmu_warnings == []
+
+
+def test_selection_confirmation_only_applies_to_same_cue_text_and_control(quick, qtbot):
+    _, bridge, engine, window = quick
+    media = str(bridge.store.data_dir / "media" / "lesson.mkv")
+    bridge.media_path = media
+    bridge._set_state(mediaPath=media)
+    cues = [Cue("a", 1, 3, "一起飲茶", tokens=[Token("飲茶")]),
+            Cue("b", 4, 6, "飲茶好嗎", tokens=[Token("飲茶")])]
+    bridge._set_document(StudyDocument(media, LanguagePair(), cues))
+    bridge.store.save_word(media, cues[0], cues[0].tokens[0], LanguagePair())
+    first, = bridge.store.entries()
+    bridge.notebook_manager.append_note("yue", "飲茶", "呢句點用", [first["id"]])
+    bridge._refresh_notebooks()
+    pane = find(window, "companionModule").property("loadedItem")
+    source = find(pane, "selectableCueText")
+    button = find(pane, "saveSelectionButton")
+
+    def select(start, end):
+        assert QMetaObject.invokeMethod(source, "select", Qt.ConnectionType.DirectConnection,
+                                        Q_ARG("int", start), Q_ARG("int", end))
+
+    bridge._sync_cue(4500)
+    select(0, 2)
+    qtbot.wait(20)
+    assert button.property("text") == "已整理"
+    invoke(button, "clicked")
+    assert button.property("text") == "再次点击确认"
+    assert "已收藏" in find(pane, "sentenceCollectionFeedback").property("text")
+    select(2, 4)
+    select(0, 2)
+    assert button.property("text") == "已整理"
+    invoke(button, "clicked")
+    card = visual_find(pane, "wordCard0")
+    invoke(card, "clicked")
+    assert card.property("statusLabel") == "再次点击确认"
+    assert button.property("text") == "已整理"
+    assert [e["id"] for e in bridge.entries] == [first["id"]]
+
+    bridge._sync_cue(1500)
+    bridge._sync_cue(4500)
+    card = visual_find(pane, "wordCard0")
+    assert card.property("statusLabel") == "已整理"
+    organized_color = card.property("ink")
+    select(0, 2)
+    invoke(button, "clicked")
+    invoke(button, "clicked")
+    assert card.property("statusLabel") == button.property("text") == "已收藏"
+    assert card.property("ink") != organized_color
+    invoke(button, "clicked")
+    note, = bridge.notebooks["notes"]
+    assert len(note["entry_ids"]) == len(bridge.entries) == 2
+    assert engine._tingmu_warnings == []
+
+
+def test_word_cards_lookup_once_per_visible_cue_and_skip_position_ticks(quick, monkeypatch):
+    _, bridge, engine, window = quick
+    media = str(bridge.store.data_dir / "timing.mkv")
+    bridge.media_path = media
+    bridge._set_state(mediaPath=media)
+    bridge._refresh_notebooks()
+    cues = [Cue(str(n), n, n + 1, f"Word{n}", tokens=[Token(f"Word{n}")]) for n in range(1, 11)]
+    bridge._set_document(StudyDocument(media, LanguagePair(), cues))
+    import tingmu.quick.bridge as bridge_module
+    word_queries = []
+    original = bridge_module.word_key
+    def count(text, language):
+        word_queries.append(text)
+        return original(text, language)
+    monkeypatch.setattr(bridge_module, "word_key", count)
+    for n in range(1, 11):
+        bridge._sync_cue(n * 1000)
+        for _ in range(5):
+            bridge.playbackChanged.emit()
+    assert word_queries == [cue.text for cue in cues]
+    pane = find(window, "companionModule").property("loadedItem")
+    pane.setProperty("page", 1)
+    for n in range(1, 11):
+        bridge._sync_cue(n * 1000)
+    assert len(word_queries) == len(cues)
+    assert engine._tingmu_warnings == []
+
+
+def test_notebook_sidebar_opens_archived_word_at_its_own_cue(quick, qtbot):
+    _, bridge, engine, window = quick
+    media = str(bridge.store.data_dir / "media" / "lesson.mkv")
+    bridge.media_path = media
+    bridge._set_state(mediaPath=media)
+    cues = [Cue("one", 1, 2, "一起飲茶"), Cue("two", 4, 6, "飲茶好嗎")]
+    bridge._set_document(StudyDocument(media, LanguagePair(), cues))
+    for cue in cues:
+        bridge.store.save_word(media, cue, Token("飲茶"), LanguagePair())
+    ids = {entry["cue_id"]: entry["id"] for entry in bridge.store.entries()}
+    bridge.notebook_manager.append_note("yue", "飲茶", "每句都引用。", list(ids.values()))
+    for entry_id in ids.values():
+        bridge.store.delete_entry(entry_id)
+    bridge._refresh_notebooks()
+    bridge.setting("subtitle_offset_ms", 500)
+    for cue in cues:
+        invoke(window, "changeView", "learn")
+        learning = find(window, "learningWorkspace")
+        invoke(learning, "selectNote", bridge.notebooks["notes"][0]["id"])
+        sidebar = find(learning, "notebookSources")
+        qtbot.waitUntil(lambda: sidebar.property("count") == 2 and sidebar.isVisible())
+        qtbot.wait(20)
+        source = visual_find(sidebar, f"openNoteSource{ids[cue.id]}")
+        assert source.property("text").endswith(f"00:0{int(cue.start)}")
+        invoke(source, "clicked")
+        assert window.property("viewMode") == "watch"
+        assert bridge.activeCue["id"] == cue.id
+    window.setWidth(980)
+    invoke(window, "changeView", "learn")
+    invoke(learning, "selectNote", bridge.notebooks["notes"][0]["id"])
+    qtbot.waitUntil(lambda: not sidebar.isVisible())
+    preview = visual_find(find(learning, "notebookPreview"), "markdownBody")
+    assert QMetaObject.invokeMethod(preview, "linkActivated", Qt.ConnectionType.DirectConnection,
+                                    Q_ARG(str, f"tingmu://entry/{ids['one']}"))
+    assert window.property("viewMode") == "watch" and bridge.activeCue["id"] == "one"
     assert engine._tingmu_warnings == []
 
 

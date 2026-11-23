@@ -15,8 +15,8 @@ ItemDelegate {
     contentItem: RowLayout {
         ColumnLayout {
             Layout.fillWidth: true; spacing: 0
-            Text { Layout.fillWidth: true; text: row.modelData.name; color: Theme.text; font.family: Theme.font; font.pixelSize: 13; elide: Text.ElideRight; textFormat: Text.PlainText }
-            Text { Layout.fillWidth: true; text: row.modelData.languages; color: Theme.muted; font.family: Theme.font; font.pixelSize: 11; elide: Text.ElideRight; textFormat: Text.PlainText }
+            Text { Layout.fillWidth: true; text: (row.modelData.id === "default" ? qsTranslate("Tingmu", row.modelData.name) : row.modelData.name); color: Theme.text; font.family: Theme.font; font.pixelSize: 13; elide: Text.ElideRight; textFormat: Text.PlainText }
+            Text { Layout.fillWidth: true; text: qsTranslate("TingmuLanguage", row.modelData.languages || ""); color: Theme.muted; font.family: Theme.font; font.pixelSize: 11; elide: Text.ElideRight; textFormat: Text.PlainText }
         }
         Text { visible: row.currentWorkspace; text: "✓"; color: Theme.accent }
     }

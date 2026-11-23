@@ -6,7 +6,9 @@ import threading
 import pytest
 from PySide6.QtCore import QThread
 
-from tingmu.app_actions import ActionContext, ActionError, AppActionExecutor, action_tools, validate_arguments
+from tingmu.app_actions import (
+    ActionContext, ActionError, AppActionExecutor, action_tools, previous_word_prompts, validate_arguments,
+)
 from tingmu.models import Cue, LanguagePair, Token
 from tingmu.notebooks import NotebookManager
 from tingmu.providers import RequestCancelled
@@ -75,6 +77,36 @@ def test_notebook_full_read_revision_and_target_note(actions):
     fresh = actions("read_notebook", {})
     actions("update_learning_note", {"note_id": fresh["notes"][0]["id"], "title": "changed", "text": "new note", "revision": fresh["revision"]})
     assert "new prose" in actions.notebooks.snapshot("en")["markdown"]
+
+
+def test_chat_recollect_requires_user_followup_for_the_same_word_and_cue(actions):
+    args = {"text": "nice"}
+    actions("collect_current_word", args)
+    original = actions.store.entries()[0]["id"]
+    actions.notebooks.append_note("en", "Expressions", "My note", [original])
+
+    def turn(cue_id, prompts=()):
+        bound = ActionContext("session", actions.context.media_path, actions.context.language,
+                              Cue(cue_id, 4, 6, "How nice!"))
+        return AppActionExecutor(actions.store, actions.notebooks, bound, None, None, word_prompts=prompts)
+
+    confirm = {**args, "confirm_recollection": True}
+    first = turn("second")
+    question = first("collect_current_word", confirm)
+    assert question["confirmation_required"] and not question["saved"]
+    assert not first("collect_current_word", confirm)["saved"]
+    event = {"name": "collect_current_word", "result": {"word_prompt": question["word_prompt"]}}
+    history = [{"role": "assistant", "status": "complete", "tool_events": [event]}]
+    offered = previous_word_prompts(history)
+    assert previous_word_prompts([*history, {"role": "user"}]) == ()
+    assert not turn("third", offered)("collect_current_word", confirm)["saved"]
+    assert not turn("second", offered)("collect_current_word", args)["saved"]
+    assert len(actions.store.entries()) == 1
+    assert turn("second", offered)("collect_current_word", confirm)["saved"]
+    assert turn("second")("collect_current_word", args)["collection_status"] == "pending"
+    snapshot = actions.notebooks.snapshot("en")
+    assert len(snapshot["collections"]) == 2
+    assert set(snapshot["notes"][0]["entry_ids"]) == {row["id"] for row in snapshot["collections"]}
 
 
 def test_cancel_before_write_and_delete_backup(actions):
@@ -185,7 +217,8 @@ def test_deleted_historical_profile_never_substitutes(bridge, monkeypatch, qtbot
     qtbot.waitUntil(lambda: "chat" not in bridge._workers)
     original_id = bridge._active_session_id
     saved = bridge.conversations.load(original_id)["messages"][0]["request_model"]
-    assert set(saved) <= {"id", "provider", "model", "protocol", "reasoning_effort", "max_tokens", "fingerprint"}
+    assert saved["scope"] == "global" and saved["id"] == profile["id"]
+    assert set(saved) <= {"id", "provider", "model", "protocol", "reasoning_effort", "max_tokens", "fingerprint", "scope"}
     bridge.model_registry.delete_profile(profile["id"])
     with pytest.raises(ValueError, match="删除"):
         bridge._feature_command("retryChat", {})

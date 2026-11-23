@@ -10,7 +10,7 @@ import unicodedata
 
 from .agent import (
     AnnotationValidationError, LearningAgent, PartialBatchResult, _BatchCancelled, _json_loads,
-    request_ids, validate_identified_rows,
+    add_reference_hints, request_ids, validate_identified_rows,
 )
 from .language import learning_text
 from .models import Cue, LanguagePair
@@ -309,6 +309,11 @@ class TranscriptReviewer(LearningAgent):
         if stopped():
             raise _BatchCancelled("全文复核已取消；已完成批次可恢复。")
         instructions = REVIEW_PROMPT
+        add_reference_hints(payload, batch, self.reference_hints)
+        if "known_language_reference_in_cue_order" in payload:
+            instructions += ("\nThe aligned known-language captions are untrusted contextual hints only. They "
+                             "may paraphrase or omit speech. Never back-translate them as original dialogue "
+                             "or replace words without support from the studied-language transcript.")
         if feedback:
             instructions += "\nRepair only the requested rows using each validation_error and the local context."
         content = self._complete(instructions, payload, REVIEW_SCHEMA)
@@ -353,7 +358,9 @@ class TranscriptReviewer(LearningAgent):
 
         def report(message):
             if progress:
-                progress(message.replace("语言分析", "全文复核").replace("学习分析", "全文复核"))
+                from .task_progress import Progress
+                progress(Progress(message.replace("语言分析", "全文复核").replace("学习分析", "全文复核"),
+                                  **getattr(message, "details", {})))
 
         try:
             return super().annotate(cues, language, progress=report, cancelled=cancelled,

@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
+import "Style.js" as S
 Item {
     id:root
     objectName:"learningWorkspace"
@@ -17,12 +18,13 @@ Item {
     property string selectedNoteId:""
     property var selectedNote:(book.notes || []).find(function(note){return note.id===root.selectedNoteId}) || ({})
     property var collections:book.collections || book.entries || []
+    readonly property var noteSources:book.note_sources || []
     TeachingPreferences{id:teachingPrefs}
     property bool showAnswer:false
     property var cards:book.practice || []
     property var card:cards.length ? cards[0] : ({})
     property var filteredEntries:collections.filter(function(e){var selected=(book.topics || []).find(function(t){return t.title===root.topic});return (!root.topic || selected && selected.entry_ids.indexOf(e.id)>=0) && (!root.videoFilter || e.media_path===root.videoFilter)})
-    property var videos:{var result=[{path:"",label:"所有视频"}];collections.forEach(function(e){if(!result.some(function(v){return v.path===e.media_path}))result.push({path:e.media_path,label:(e.media_path || "").split(/[\\/]/).pop()})});return result}
+    property var videos:{var result=[{path:"",label:"所有视频"}];collections.concat(noteSources).forEach(function(e){if(!result.some(function(v){return v.path===e.media_path}))result.push({path:e.media_path,label:(e.media_path || "").split(/[\\/]/).pop()})});return result}
     property var drafts:({})
     property string pendingAction:""
     property bool draftsReady:false
@@ -43,35 +45,35 @@ Item {
     }
     RowLayout{
         anchors.top:parent.top;anchors.left:parent.left;anchors.right:parent.right;anchors.margins:20;height:36;spacing:6
-        TButton{objectName:"collectionsTab";text:"收藏";checked:root.activeTab==="collections";quiet:true;onClicked:root.activeTab="collections"}
-        TButton{objectName:"notesTab";text:"笔记";checked:root.activeTab==="notes";quiet:true;onClicked:root.activeTab="notes"}
-        TButton{objectName:"reviewTab";text:"复习";checked:root.activeTab==="review";quiet:true;onClicked:{root.activeTab="review";backend.command("practiceNotebook",{})}}
+        TButton{objectName:"collectionsTab";text:qsTranslate("Tingmu", "收藏");checked:root.activeTab==="collections";quiet:true;onClicked:root.activeTab="collections"}
+        TButton{objectName:"notesTab";text:qsTranslate("Tingmu", "笔记");checked:root.activeTab==="notes";quiet:true;onClicked:root.activeTab="notes"}
+        TButton{objectName:"reviewTab";text:qsTranslate("Tingmu", "复习");checked:root.activeTab==="review";quiet:true;onClicked:{root.activeTab="review";backend.command("practiceNotebook",{})}}
         Item{Layout.fillWidth:true}
-        TButton{objectName:"learningTeachingPreferencesButton";text:"我的讲解偏好";quiet:true;onClicked:teachingPrefs.open()}
+        TButton{objectName:"learningTeachingPreferencesButton";text:qsTranslate("Tingmu", "我的讲解偏好");quiet:true;onClicked:teachingPrefs.open()}
     }
     RowLayout {
         anchors.fill:parent;anchors.margins:20;anchors.topMargin:72;spacing:20
         ColumnLayout {
             Layout.preferredWidth:170;Layout.maximumWidth:170;Layout.minimumWidth:170;Layout.fillHeight:true;spacing:12
-            Text{text:"学习资料";color:Theme.text;font.family:Theme.serif;font.pixelSize:26}
-            Text{text:"所学语言";color:Theme.muted;font.family:Theme.font;font.pixelSize:11}
-            Choice{objectName:"notebookLanguageChoice";Layout.fillWidth:true;model:root.book.books || [];textRole:"title";currentIndex:Math.max(0,model.findIndex(function(b){return b.language===root.book.language}));onActivated:root.selectLanguage(model[currentIndex].language)}
-            Choice{objectName:"notebookVideoFilter";Layout.fillWidth:true;model:root.videos;textRole:"label";onActivated:root.videoFilter=model[currentIndex].path}
-            Text{Layout.fillWidth:true;text:((root.book.stats || {}).total || 0)+" 条收藏 · "+((root.book.stats || {}).due || 0)+" 条待复习";color:Theme.muted;font.family:Theme.font;font.pixelSize:11;wrapMode:Text.Wrap}
+            Text{text:qsTranslate("Tingmu", "学习资料");color:Theme.text;font.family:Theme.serif;font.pixelSize:26}
+            Text{text:qsTranslate("Tingmu", "所学语言");color:Theme.muted;font.family:Theme.font;font.pixelSize:11}
+            Choice{objectName:"notebookLanguageChoice";Layout.fillWidth:true;optionLabel:(i,value)=>interfaceLanguage.code === "zh-CN" || !model[i] ? value : qsTranslate("Tingmu", "%1学习笔记").arg(qsTranslate("TingmuLanguage", model[i].language));model:root.book.books || [];textRole:"title";currentIndex:Math.max(0,model.findIndex(function(b){return b.language===root.book.language}));onActivated:root.selectLanguage(model[currentIndex].language)}
+            Choice{objectName:"notebookVideoFilter";Layout.fillWidth:true;optionLabel:(i,value)=>i===0 ? qsTranslate("Tingmu",value) : value;model:root.videos;textRole:"label";onActivated:root.videoFilter=model[currentIndex].path}
+            Text{Layout.fillWidth:true;text:((root.book.stats || {}).total || 0)+qsTranslate("Tingmu", " 条收藏 · ")+((root.book.stats || {}).due || 0)+qsTranslate("Tingmu", " 条待复习");color:Theme.muted;font.family:Theme.font;font.pixelSize:11;wrapMode:Text.Wrap}
             Rectangle{Layout.fillWidth:true;height:1;color:Theme.line}
-            TButton{visible:root.activeTab==="collections";text:"全部主题";checked:!root.topic;quiet:true;Layout.fillWidth:true;onClicked:{root.topic="";root.activeTab="collections"}}
+            TButton{visible:root.activeTab==="collections";text:qsTranslate("Tingmu", "全部主题");checked:!root.topic;quiet:true;Layout.fillWidth:true;onClicked:{root.topic="";root.activeTab="collections"}}
             ListView {
                 visible:root.activeTab==="collections";Layout.fillWidth:true;Layout.fillHeight:true;spacing:4;clip:true;model:root.book.topics || []
                 delegate:TButton{required property var modelData;width:ListView.view.width;text:modelData.title;checked:root.topic===modelData.title;quiet:true;onClicked:{root.topic=modelData.title;root.activeTab="collections"}}
             }
-            TButton{visible:root.activeTab==="notes";text:"整本笔记";checked:!root.selectedNoteId;quiet:true;Layout.fillWidth:true;onClicked:root.selectNote("")}
+            TButton{visible:root.activeTab==="notes";text:qsTranslate("Tingmu", "整本笔记");checked:!root.selectedNoteId;quiet:true;Layout.fillWidth:true;onClicked:root.selectNote("")}
             ListView{objectName:"organizedNotesList";visible:root.activeTab==="notes";Layout.fillWidth:true;Layout.fillHeight:true;clip:true;spacing:6;model:root.book.notes || []
-                delegate:TButton{required property var modelData;width:ListView.view.width;text:modelData.title || "学习笔记";checked:root.selectedNoteId===modelData.id;quiet:true;tip:text;onClicked:root.selectNote(modelData.id)}
+                delegate:TButton{required property var modelData;width:ListView.view.width;text:modelData.title || qsTranslate("Tingmu", "学习笔记");checked:root.selectedNoteId===modelData.id;quiet:true;tip:text;onClicked:root.selectNote(modelData.id)}
             }
             Item{Layout.fillHeight:true;visible:root.practiceMode}
-            TButton{objectName:"practiceNotebookButton";text:"间隔复习";Layout.fillWidth:true;checked:root.practiceMode;onClicked:{root.activeTab="review";root.showAnswer=false;backend.command("practiceNotebook",{})}}
-            TButton{text:"打开笔记文件";quiet:true;Layout.fillWidth:true;onClicked:root.fileAction("openNotebook")}
-            TButton{text:"导出 Markdown";quiet:true;Layout.fillWidth:true;onClicked:root.fileAction("exportNotebook")}
+            TButton{objectName:"practiceNotebookButton";text:qsTranslate("Tingmu", "间隔复习");Layout.fillWidth:true;checked:root.practiceMode;onClicked:{root.activeTab="review";root.showAnswer=false;backend.command("practiceNotebook",{})}}
+            TButton{text:qsTranslate("Tingmu", "打开笔记文件");quiet:true;Layout.fillWidth:true;onClicked:root.fileAction("openNotebook")}
+            TButton{text:qsTranslate("Tingmu", "导出 Markdown");quiet:true;Layout.fillWidth:true;onClicked:root.fileAction("exportNotebook")}
         }
         Rectangle{width:1;Layout.fillHeight:true;color:Theme.line}
         CollectionInbox{Layout.fillWidth:true;Layout.fillHeight:true;visible:root.activeTab==="collections";entries:root.filteredEntries;canOrganize:!root.dirty;onOpenSource:function(url){backend.command("openLink",{url:url});if(root.workspace)root.workspace.changeView("watch")}}
@@ -80,12 +82,12 @@ Item {
             Layout.fillWidth:true;Layout.fillHeight:true;spacing:14
             RowLayout {
                 Layout.fillWidth:true
-                Text{Layout.fillWidth:true;text:root.practiceMode ? "把表达变成记忆" : root.selectedNote.title || "学习笔记";color:Theme.text;font.family:Theme.serif;font.pixelSize:25;elide:Text.ElideRight}
-                TButton{text:root.editing ? "预览" : root.drafts[root.book.language] ? "恢复草稿" : root.selectedNoteId ? "编辑整本" : "编辑";visible:!root.practiceMode;onClicked:{if(root.editing){if(root.dirty){discardDialog.open()}else root.editing=false}else root.startEdit()}}
-                TButton{objectName:"saveNotebookButton";text:root.dirty ? "保存修改" : "已保存";visible:root.editing && !root.practiceMode;enabled:root.dirty && !backend.state.learningBusy;primary:true;onClicked:backend.command("saveNotebook",{language:root.editLanguage,markdown:editor.text,revision:root.editRevision})}
-                TButton{text:"从收藏整理";visible:!root.practiceMode;onClicked:root.activeTab="collections"}
+                Text{Layout.fillWidth:true;text:root.practiceMode ? qsTranslate("Tingmu", "把表达变成记忆") : root.selectedNote.title || qsTranslate("Tingmu", "学习笔记");color:Theme.text;font.family:Theme.serif;font.pixelSize:25;elide:Text.ElideRight}
+                TButton{text:root.editing ? qsTranslate("Tingmu", "预览") : root.drafts[root.book.language] ? qsTranslate("Tingmu", "恢复草稿") : root.selectedNoteId ? qsTranslate("Tingmu", "编辑整本") : qsTranslate("Tingmu", "编辑");visible:!root.practiceMode;onClicked:{if(root.editing){if(root.dirty){discardDialog.open()}else root.editing=false}else root.startEdit()}}
+                TButton{objectName:"saveNotebookButton";text:root.dirty ? qsTranslate("Tingmu", "保存修改") : qsTranslate("Tingmu", "已保存");visible:root.editing && !root.practiceMode;enabled:root.dirty && !backend.state.learningBusy;primary:true;onClicked:backend.command("saveNotebook",{language:root.editLanguage,markdown:editor.text,revision:root.editRevision})}
+                TButton{text:qsTranslate("Tingmu", "从收藏整理");visible:!root.practiceMode;onClicked:root.activeTab="collections"}
             }
-            Text{Layout.fillWidth:true;visible:root.editing && !root.practiceMode;text:"Markdown 编辑 · 手写内容会保留；只有显式整理的收藏才会加入笔记。";color:Theme.muted;font.family:Theme.font;font.pixelSize:11;wrapMode:Text.Wrap}
+            Text{Layout.fillWidth:true;visible:root.editing && !root.practiceMode;text:qsTranslate("Tingmu", "Markdown 编辑 · 手写内容会保留；只有显式整理的收藏才会加入笔记。");color:Theme.muted;font.family:Theme.font;font.pixelSize:11;wrapMode:Text.Wrap}
             Rectangle {
                 Layout.fillWidth:true;Layout.fillHeight:true;color:Theme.panel;radius:10;border.color:Theme.line
                 ScrollView {
@@ -106,50 +108,57 @@ Item {
                     Timer{id:cursorFollowTimer;interval:0;onTriggered:notebookScroll.revealCursor()}
                     ColumnLayout {
                         width:notebookScroll.availableWidth;spacing:18
-                        MarkdownView{objectName:"notebookPreview";visible:!root.editing;Layout.fillWidth:true;blocks:root.previewBlocks();textSize:15}
+                        MarkdownView{objectName:"notebookPreview";visible:!root.editing;Layout.fillWidth:true;blocks:root.previewBlocks();textSize:15;onSourceOpened:if(root.workspace)root.workspace.changeView("watch")}
                         TextArea{id:editor;objectName:"notebookEditor";visible:root.editing;Layout.fillWidth:true;Layout.minimumHeight:notebookScroll.availableHeight;textFormat:TextEdit.PlainText;color:Theme.text;font.family:Theme.mono;font.pixelSize:13;wrapMode:TextArea.Wrap;selectByMouse:true;background:null
                             onCursorRectangleChanged:if(root.editing && activeFocus)cursorFollowTimer.restart()
                             onTextChanged:if(root.editing){root.dirty=text!==(root.book.markdown || "");draftTimer.restart();if(activeFocus)cursorFollowTimer.restart()}
                         }
-                        Text{visible:!root.editing && !root.book.markdown;Layout.fillWidth:true;text:"把收藏变成理解\n\n在“收藏”中选好词句并明确整理后，会生成包含用法、例句与语言对比的笔记。你也可以直接开始写。";color:Theme.muted;font.family:Theme.font;font.pixelSize:15;wrapMode:Text.Wrap;lineHeight:1.6}
+                        Text{visible:!root.editing && !root.book.markdown;Layout.fillWidth:true;text:qsTranslate("Tingmu", "把收藏变成理解\n\n在“收藏”中选好词句并明确整理后，会生成包含用法、例句与语言对比的笔记。你也可以直接开始写。");color:Theme.muted;font.family:Theme.font;font.pixelSize:15;wrapMode:Text.Wrap;lineHeight:1.6}
                     }
                 }
                 ColumnLayout {
                     anchors.fill:parent;anchors.margins:28;spacing:20;visible:root.practiceMode
-                    Text{Layout.fillWidth:true;text:root.cards.length ? "待复习 · "+root.cards.length : "本轮复习已完成";color:Theme.accent;font.family:Theme.font;font.pixelSize:12}
-                    Text{Layout.fillWidth:true;text:root.card.question || "收藏新表达后，它们会出现在这里。";color:Theme.text;font.family:Theme.serif;font.pixelSize:24;wrapMode:Text.Wrap}
+                    Text{Layout.fillWidth:true;text:root.cards.length ? qsTranslate("Tingmu", "待复习 · ")+root.cards.length : qsTranslate("Tingmu", "本轮复习已完成");color:Theme.accent;font.family:Theme.font;font.pixelSize:12}
+                    Text{Layout.fillWidth:true;text:root.card.question || qsTranslate("Tingmu", "收藏新表达后，它们会出现在这里。");color:Theme.text;font.family:Theme.serif;font.pixelSize:24;wrapMode:Text.Wrap}
                     ScrollView{Layout.fillWidth:true;Layout.fillHeight:true;clip:true;TextArea{readOnly:true;selectByMouse:true;visible:root.showAnswer;text:root.card.answer || "";color:Theme.text;font.family:Theme.font;font.pixelSize:16;wrapMode:TextArea.Wrap;background:null}}
-                    TButton{text:root.showAnswer ? "收起答案" : "显示答案";visible:root.cards.length>0;onClicked:root.showAnswer=!root.showAnswer}
-                    Flow{Layout.fillWidth:true;spacing:8;visible:root.showAnswer && root.cards.length>0;Repeater{model:[{rating:"again",label:"再学一次"},{rating:"hard",label:"有点难"},{rating:"good",label:"记住了"},{rating:"easy",label:"很熟悉"}];delegate:TButton{required property var modelData;text:modelData.label;onClicked:{backend.command("reviewEntry",{id:root.card.entry_id || root.card.id,rating:modelData.rating});root.showAnswer=false}}}}
-                    TButton{text:"回到视频原句";quiet:true;visible:root.cards.length>0;onClicked:{backend.command("openLink",{url:root.card.source_url || "tingmu://entry/"+root.card.id});if(root.workspace)root.workspace.changeView("watch")}}
+                    TButton{text:root.showAnswer ? qsTranslate("Tingmu", "收起答案") : qsTranslate("Tingmu", "显示答案");visible:root.cards.length>0;onClicked:root.showAnswer=!root.showAnswer}
+                    Flow{Layout.fillWidth:true;spacing:8;visible:root.showAnswer && root.cards.length>0;Repeater{model:[{rating:"again",label:qsTranslate("Tingmu", "再学一次")},{rating:"hard",label:qsTranslate("Tingmu", "有点难")},{rating:"good",label:qsTranslate("Tingmu", "记住了")},{rating:"easy",label:qsTranslate("Tingmu", "很熟悉")}];delegate:TButton{required property var modelData;text:modelData.label;onClicked:{backend.command("reviewEntry",{id:root.card.entry_id || root.card.id,rating:modelData.rating});root.showAnswer=false}}}}
+                    TButton{text:qsTranslate("Tingmu", "回到视频原句");quiet:true;visible:root.cards.length>0;onClicked:{backend.command("openLink",{url:root.card.source_url || "tingmu://entry/"+root.card.id});if(root.workspace)root.workspace.changeView("watch")}}
                 }
             }
-            Text{Layout.fillWidth:true;visible:!!backend.state.error || !!backend.state.learningBusy;text:backend.state.error || "正在整理现有收藏，完成后会更新笔记…";color:backend.state.error ? Theme.error : Theme.muted;font.family:Theme.font;font.pixelSize:12;wrapMode:Text.Wrap}
+            Text{Layout.fillWidth:true;visible:!!backend.state.error || !!backend.state.learningBusy;text:qsTranslate("TingmuStatus", backend.state.error || "") || qsTranslate("Tingmu", "正在整理现有收藏，完成后会更新笔记…");color:backend.state.error ? Theme.error : Theme.muted;font.family:Theme.font;font.pixelSize:12;wrapMode:Text.Wrap}
         }
         ColumnLayout {
             visible:root.activeTab==="notes" && root.width>=1050;Layout.preferredWidth:root.width<1200 ? 230 : 290;Layout.maximumWidth:root.width<1200 ? 230 : 290;Layout.minimumWidth:210;Layout.fillHeight:true;spacing:12
-            Text{text:root.selectedNoteId ? "本条笔记来源" : "笔记来源";color:Theme.text;font.family:Theme.serif;font.pixelSize:22}
+            Text{text:root.selectedNoteId ? qsTranslate("Tingmu", "本条笔记来源") : qsTranslate("Tingmu", "笔记来源");color:Theme.text;font.family:Theme.serif;font.pixelSize:22}
             ListView {
                 id:sources;objectName:"notebookSources"
-                Layout.fillWidth:true;Layout.fillHeight:true;clip:true;spacing:10;model:root.collections.filter(function(e){return (!root.videoFilter || e.media_path===root.videoFilter) && (root.selectedNoteId ? (root.selectedNote.entry_ids || []).indexOf(e.id)>=0 : !!e.organized)})
+                Layout.fillWidth:true;Layout.fillHeight:true;clip:true;spacing:10
+                model: {
+                    const ids = root.selectedNoteId ? new Set(root.selectedNote.entry_ids || []) : null
+                    return root.noteSources.filter(e => (!root.videoFilter || e.media_path === root.videoFilter)
+                        && (!ids || ids.has(e.id)))
+                }
                 ScrollBar.vertical:ScrollBar{}
                 delegate:Rectangle {
                     required property var modelData
                     width:sources.width;height:sourceBody.implicitHeight+24;radius:8;color:Theme.panel;border.color:Theme.line
                     ColumnLayout{id:sourceBody;anchors.left:parent.left;anchors.right:parent.right;anchors.top:parent.top;anchors.margins:12;spacing:8
-                        Text{Layout.fillWidth:true;text:modelData.text || modelData.sentence || "笔记";textFormat:Text.PlainText;color:Theme.text;font.family:Theme.font;font.pixelSize:15;wrapMode:Text.Wrap}
+                        Text{Layout.fillWidth:true;text:modelData.text || modelData.sentence || qsTranslate("Tingmu", "笔记");textFormat:Text.PlainText;color:Theme.text;font.family:Theme.font;font.pixelSize:15;wrapMode:Text.Wrap}
                         Text{Layout.fillWidth:true;text:modelData.reading || "";visible:text.length>0;textFormat:Text.PlainText;color:Theme.accent;font.family:Theme.latin;font.pixelSize:12;wrapMode:Text.Wrap}
                         Text{Layout.fillWidth:true;text:modelData.note || modelData.meaning || "";visible:text.length>0;textFormat:Text.PlainText;color:Theme.muted;font.family:Theme.font;font.pixelSize:12;wrapMode:Text.Wrap;maximumLineCount:4;elide:Text.ElideRight}
-                        TButton{text:"↗ 回到原句";quiet:true;onClicked:{backend.command("openLink",{url:"tingmu://entry/"+modelData.id});if(root.workspace)root.workspace.changeView("watch")}}
+                        Text{Layout.fillWidth:true;text:modelData.sentence || "";visible:!!text && text!==modelData.text;textFormat:Text.PlainText;color:Theme.text;font.family:Theme.font;font.pixelSize:13;wrapMode:Text.Wrap}
+                        Text{Layout.fillWidth:true;text:(modelData.media_path || "").split(/[\\/]/).pop();textFormat:Text.PlainText;color:Theme.muted;font.family:Theme.font;font.pixelSize:11;wrapMode:Text.WrapAnywhere}
+                        TButton{objectName:"openNoteSource"+modelData.id;text:qsTranslate("Tingmu", "回到原句 · ")+S.time(modelData.start*1000);quiet:true;onClicked:{backend.command("openLink",{url:"tingmu://entry/"+modelData.id});if(root.workspace)root.workspace.changeView("watch")}}
                     }
                 }
-                Text{anchors.centerIn:parent;width:parent.width-20;visible:sources.count===0;text:"这个筛选下还没有收藏。\n观看时选词或收藏整句即可。";color:Theme.muted;font.family:Theme.font;font.pixelSize:12;wrapMode:Text.Wrap;lineHeight:1.5}
+                Text{anchors.centerIn:parent;width:parent.width-20;visible:sources.count===0;text:qsTranslate("Tingmu", "这个筛选下还没有收藏。\n观看时选词或收藏整句即可。");color:Theme.muted;font.family:Theme.font;font.pixelSize:12;wrapMode:Text.Wrap;lineHeight:1.5}
             }
-            TButton{text:"用这些收藏练习对话";Layout.fillWidth:true;enabled:root.collections.length>0;onClicked:{backend.command("askNotebook",{text:"请结合我的收藏，给我一道适合当前水平的练习。"});if(root.workspace)root.workspace.openModule("chat")}}
+            TButton{text:qsTranslate("Tingmu", "用这些收藏练习对话");Layout.fillWidth:true;enabled:root.collections.length>0;onClicked:{backend.command("askNotebook",{text:qsTranslate("Tingmu", "请结合我的收藏，给我一道适合当前水平的练习。")});if(root.workspace)root.workspace.openModule("chat")}}
         }
     }
-    AppDialog{width:380;id:fileDialog;title:"当前有未保存的修改";anchors.centerIn:parent;modal:true;standardButtons:Dialog.Cancel
-        contentItem:ColumnLayout{spacing:14;Text{Layout.fillWidth:true;text:"打开或导出的文件只包含已保存内容。请先保存修改，或继续使用上次保存的版本。";color:Theme.text;font.family:Theme.font;wrapMode:Text.Wrap}TButton{text:"继续使用已保存版本";onClicked:{fileDialog.close();backend.command(root.pendingAction,{})}}}
+    AppDialog{width:380;id:fileDialog;title:qsTranslate("Tingmu", "当前有未保存的修改");anchors.centerIn:parent;modal:true;standardButtons:Dialog.Cancel
+        contentItem:ColumnLayout{spacing:14;Text{Layout.fillWidth:true;text:qsTranslate("Tingmu", "打开或导出的文件只包含已保存内容。请先保存修改，或继续使用上次保存的版本。");color:Theme.text;font.family:Theme.font;wrapMode:Text.Wrap}TButton{text:qsTranslate("Tingmu", "继续使用已保存版本");onClicked:{fileDialog.close();backend.command(root.pendingAction,{})}}}
     }
-    AppDialog{width:380;id:discardDialog;title:"保留当前草稿？";anchors.centerIn:parent;modal:true;standardButtons:Dialog.Discard | Dialog.Cancel;background:Rectangle{color:Theme.panel;border.color:Theme.line;radius:8}contentItem:Text{text:"当前修改尚未保存。取消返回编辑，或放弃修改继续。";color:Theme.text;font.family:Theme.font}onDiscarded:{root.dirty=false;root.editing=false;var copy=Object.assign({},root.drafts);delete copy[root.editLanguage];root.drafts=copy}}
+    AppDialog{width:380;id:discardDialog;title:qsTranslate("Tingmu", "保留当前草稿？");anchors.centerIn:parent;modal:true;standardButtons:Dialog.Discard | Dialog.Cancel;background:Rectangle{color:Theme.panel;border.color:Theme.line;radius:8}contentItem:Text{text:qsTranslate("Tingmu", "当前修改尚未保存。取消返回编辑，或放弃修改继续。");color:Theme.text;font.family:Theme.font}onDiscarded:{root.dirty=false;root.editing=false;var copy=Object.assign({},root.drafts);delete copy[root.editLanguage];root.drafts=copy}}
 }

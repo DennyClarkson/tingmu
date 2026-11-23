@@ -116,9 +116,9 @@ class SetupAssistant:
         if created or (ident != catalog["current_workspace_id"] and not workspace.get("text_configured", False)):
             reuse = run("reuse_workspace_text_models", workspace_id=ident)
             if reuse.get("requires_human_confirmation"):
-                response.append("确认沿用逐句讲解模型后，听幕会为每句生成讲解，并核对已知语言的译稿。")
+                response.append("允许此工作区使用远程文本模型后，听幕会为每句生成讲解，并核对已知语言的译稿。")
             elif reuse.get("applied"):
-                response.append("已沿用原工作区的本机文本连接。")
+                response.append("已在此工作区启用全局分配的本机文本连接。")
             elif not workspace.get("text_configured"):
                 response.append("要生成逐句讲解和译稿，请在「工作区设置 → 文本模型与 API」分配讲解模型。")
         if ident != catalog["current_workspace_id"]:

@@ -23,26 +23,26 @@ ColumnLayout {
         wrapMode: Text.Wrap
     }
 
-    Caption { text: "字幕识别方式" }
+    Caption { text: qsTranslate("Tingmu", "字幕识别方式") }
     Choice {
         objectName: "asrBackendChoice"
         Layout.fillWidth: true
-        model: ["内置模型 · 本机运行", "本机 API · 本机语音服务", "外部 API · 远程转写"]
+        translateOptions:true;model:["内置模型 · 本机运行", "本机 API · 本机语音服务", "外部 API · 远程转写"]
         currentIndex: root.external ? 2 : root.localApi ? 1 : 0
         onActivated: backend.setting("asr_backend", ["local", "local_api", "external"][currentIndex])
     }
     Toggle {
-        text: "识别前分离人声、减弱配乐"
+        text: qsTranslate("Tingmu", "识别前分离人声、减弱配乐")
         checked: backend.settings.suppress_bgm
         onToggled: backend.setting("suppress_bgm", checked)
     }
     Caption {
         visible: backend.settings.suppress_bgm
         text: backend.speechModels.bgm === "spleeter-2stems-fp16"
-              ? "当前使用 Spleeter 在本机提取人声。"
-              : "本机未安装人声分离模型，将用频谱分析减弱重复背景声。"
+              ? qsTranslate("Tingmu", "当前使用 Spleeter 在本机提取人声。")
+              : qsTranslate("Tingmu", "本机未安装人声分离模型，将用频谱分析减弱重复背景声。")
     }
-    Caption { visible: root.builtin; text: "本机模型" }
+    Caption { visible: root.builtin; text: qsTranslate("Tingmu", "本机模型") }
     Choice {
         visible: root.builtin
         Layout.fillWidth: true
@@ -53,7 +53,7 @@ ColumnLayout {
     }
     TButton {
         visible: root.builtin
-        text: "选择已有的本机 Whisper 模型…"
+        text: qsTranslate("Tingmu", "选择已有的本机 Whisper 模型…")
         onClicked: backend.chooseWhisperFolder()
     }
     Choice {
@@ -65,76 +65,76 @@ ColumnLayout {
     }
     Toggle {
         visible: root.builtin
-        text: "按检测到的说话人切换分句"
+        text: qsTranslate("Tingmu", "按检测到的说话人切换分句")
         checked: backend.settings.speaker_turns
         onToggled: backend.setting("speaker_turns", checked)
     }
     Caption {
         visible: root.builtin && backend.settings.speaker_turns
         text: backend.speechModels.speaker === "unavailable"
-              ? "本机未安装换人检测模型，当前使用识别器原有的分句。"
-              : "根据换人和词语时间切句。重叠对话或短插话可能漏检，说话人姓名需由字幕或外部服务提供。"
+              ? qsTranslate("Tingmu", "本机未安装换人检测模型，当前使用识别器原有的分句。")
+              : qsTranslate("Tingmu", "根据换人和词语时间切句。重叠对话或短插话可能漏检，说话人姓名需由字幕或外部服务提供。")
     }
     ColumnLayout {
         visible: !root.builtin
         Layout.fillWidth: true
         spacing: 5
-        Caption { text: root.localApi ? "本机语音服务地址（支持 OpenAI 兼容转写的本地服务）" : "远程转写地址（OpenAI 兼容）" }
+        Caption { text: root.localApi ? qsTranslate("Tingmu", "本机语音服务地址（支持 OpenAI 兼容转写的本地服务）") : qsTranslate("Tingmu", "远程转写地址（OpenAI 兼容）") }
         Field {
             Layout.fillWidth: true
             text: backend.settings[root.urlKey]
             onEditingFinished: backend.setting(root.urlKey, text)
         }
-        Caption { text: "语音模型 ID" }
+        Caption { text: qsTranslate("Tingmu", "语音模型 ID") }
         Field {
             Layout.fillWidth: true
             text: backend.settings[root.modelKey]
             onEditingFinished: backend.setting(root.modelKey, text)
         }
-        TButton { text: "查询服务模型"; onClicked: backend.checkSpeechModels() }
+        TButton { text: qsTranslate("Tingmu", "查询服务模型"); onClicked: backend.checkSpeechModels() }
         Choice {
             Layout.fillWidth: true
             visible: count > 0
             model: backend.state.speechModelChoices || []
             currentIndex: model.indexOf(backend.settings[root.modelKey])
-            displayText: currentIndex < 0 ? "选择支持转写的模型" : currentText
+            displayText: currentIndex < 0 ? qsTranslate("Tingmu", "选择支持转写的模型") : currentText
             onActivated: backend.setting(root.modelKey, currentText)
         }
-        Caption { text: "选择该模型支持的字幕格式" }
+        Caption { text: qsTranslate("Tingmu", "选择该模型支持的字幕格式") }
         Choice {
             Layout.fillWidth: true
-            model: ["时间段字幕 · verbose_json", "带说话人 · diarized_json"]
+            translateOptions:true;model:["时间段字幕 · verbose_json", "带说话人 · diarized_json"]
             currentIndex: backend.settings[root.formatKey] === "diarized_json" ? 1 : 0
             onActivated: backend.setting(root.formatKey, currentIndex === 1 ? "diarized_json" : "verbose_json")
         }
-        Caption { text: "密钥环境变量名（可选）" }
+        Caption { text: qsTranslate("Tingmu", "密钥环境变量名（可选）") }
         Field {
             Layout.fillWidth: true
             text: backend.settings[root.envKey]
             onEditingFinished: backend.setting(root.envKey, text)
         }
-        Caption { text: "或为此地址保存工作区密钥（Windows 加密）" }
+        Caption { text: qsTranslate("Tingmu", "或为此地址保存工作区密钥（Windows 加密）") }
         Field {
             id: secret
             objectName: "speechKeyInput"
             Layout.fillWidth: true
             echoMode: TextInput.Password
-            placeholderText: "输入服务密钥"
+            placeholderText: qsTranslate("Tingmu", "输入服务密钥")
         }
         RowLayout {
             TButton {
-                text: "保存密钥"
+                text: qsTranslate("Tingmu", "保存密钥")
                 enabled: secret.text.length > 0
                 onClicked: { if (backend.saveSpeechKey(secret.text)) secret.clear() }
             }
-            TButton { text: "清除已存密钥"; quiet: true; onClicked: {backend.saveSpeechKey(""); secret.clear()} }
+            TButton { text: qsTranslate("Tingmu", "清除已存密钥"); quiet: true; onClicked: {backend.saveSpeechKey(""); secret.clear()} }
         }
-        Caption { text: root.localApi ? "音轨仅发送到本机回环地址。请先启动支持转写的本机服务。"
-                                    : "启用后，生成字幕会把所选音轨分段发送至 " + backend.settings.asr_endpoint }
+        Caption { text: root.localApi ? qsTranslate("Tingmu", "音轨仅发送到本机回环地址。请先启动支持转写的本机服务。")
+                                    : qsTranslate("Tingmu", "启用后，生成字幕会把所选音轨分段发送至 ") + backend.settings.asr_endpoint }
         Toggle {
             visible: root.external
             objectName: "allowAudioUpload"
-            text: "允许此工作区发送音轨"
+            text: qsTranslate("Tingmu", "允许此工作区发送音轨")
             checked: backend.settings.allow_audio_upload
             onToggled: backend.setting("allow_audio_upload", checked)
         }

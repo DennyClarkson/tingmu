@@ -116,6 +116,7 @@ def test_paused_overlay_collects_selected_source_without_resizing(quick, qtbot):
     invoke(find(content, "saveSelectionButton"), "clicked")
     qtbot.wait(30)
     assert any(e["text"] == "我哋" for e in bridge.store.entries())
+    assert find(content, "sentenceCollectionFeedback").property("text") == "所选词句已加入收藏箱"
     assert (overlay.width(), overlay.height()) == before
     invoke(find(content, "openLearningButton"), "clicked")
     qtbot.wait(20)
@@ -198,16 +199,18 @@ def test_notebook_draft_debounces_closes_and_recovers_after_restart(quick, qtbot
     revision = bridge.notebooks["revision"]
     draft = bridge.notebooks["markdown"] + "\n这段长笔记尚未保存。\n"
     editor.setProperty("text", draft)
-    qtbot.wait(700)
     layout_path = bridge.store.data_dir / "quick-layout.json"
-    persisted = json.loads(layout_path.read_text(encoding="utf-8"))
-    assert persisted["preferences"]["notebookDrafts"]["yue"] == {"text": draft, "revision": revision}
+
+    def persisted_drafts():
+        if not layout_path.exists():
+            return {}
+        return json.loads(layout_path.read_text(encoding="utf-8")).get("preferences", {}).get("notebookDrafts", {})
+
+    qtbot.waitUntil(lambda: persisted_drafts().get("yue") == {"text": draft, "revision": revision})
     latest = draft + "退出前最后一句也要保留。\n"
     editor.setProperty("text", latest)
     window.close()  # Before the debounce expires: Main.onClosing must flush.
-    qtbot.wait(20)
-    persisted = json.loads(layout_path.read_text(encoding="utf-8"))
-    assert persisted["preferences"]["notebookDrafts"]["yue"]["text"] == latest
+    assert persisted_drafts()["yue"]["text"] == latest
     bridge.shutdown()
     _, restored_bridge, restored_engine = create_qml_app(bridge.store.data_dir)
     restored_window = restored_engine.rootObjects()[0]
@@ -217,9 +220,7 @@ def test_notebook_draft_debounces_closes_and_recovers_after_restart(quick, qtbot
         assert find(restored_window, "notebookEditor").property("text") == latest
         assert restored_learning.property("editRevision") == revision
         invoke(find(restored_window, "saveNotebookButton"), "clicked")
-        qtbot.wait(700)
-        persisted = json.loads(layout_path.read_text(encoding="utf-8"))
-        assert "yue" not in persisted["preferences"]["notebookDrafts"]
+        qtbot.waitUntil(lambda: "yue" not in persisted_drafts())
         assert latest == restored_bridge.notebooks["markdown"]
         assert restored_engine._tingmu_warnings == []
     finally:
@@ -336,3 +337,26 @@ def test_queue_failure_is_readable_and_retry_buttons_dispatch(quick, qtbot, monk
     qtbot.wait(20)
     assert not start.property("enabled")
     assert engine._tingmu_warnings == []
+
+
+def test_global_role_page_selects_model_independently_of_connection_form(quick, qtbot):
+    _, bridge, engine, window = quick
+    bridge.command("saveModel", {"provider": "ollama", "model": "shared"})
+    manager = find(window, "modelManagerWindow")
+    invoke(manager, "open")
+    invoke(find(manager, "globalModelRoles"), "clicked")
+    qtbot.waitUntil(lambda: manager.property("showRoles"))
+    assert not find(manager, "modelBaseUrl").isVisible()
+    todo = [manager.contentItem()]
+    while todo:
+        item = todo.pop()
+        if item.objectName() == "globalRole_review":
+            break
+        todo.extend(item.childItems())
+    assert item.objectName() == "globalRole_review" and item.isVisible()
+    item.setProperty("currentIndex", 1)
+    assert QMetaObject.invokeMethod(item, "activated", Qt.ConnectionType.DirectConnection, Q_ARG("int", 1))
+    assert bridge.store.load_settings().review_profile_id == bridge.modelProfiles[0]["id"]
+    invoke(find(manager, "newModelButton"), "clicked")
+    assert not manager.property("showRoles") and find(manager, "modelBaseUrl").isVisible()
+    assert not engine._tingmu_warnings

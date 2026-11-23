@@ -37,14 +37,19 @@ Switch to 准备 (or 工作区 → 处理队列), then click 开始队列. Runni
 work is saved, and 开始队列 resumes pending work after interruption. A failed row has 重试;
 nonrunning rows have 移出队列. 清除已完成 removes completed queue entries, not media or study data.
 Queue jobs keep the settings snapshot from when they were added. The queue gear 字幕处理 sets
-本地语音识别, device auto/cuda/cpu, 处理音轨（从 0 开始）, 全文文本复核（独立模型配置）,
-默认批量讲解, and 文本模型. 工作区设置 also provides 语音识别 and 文本模型与 API.
+本地语音识别, device auto/cuda/cpu, 处理音轨（从 0 开始）, 全文文本复核,
+全局默认批量讲解, and 当前工作区的使用权限. 工作区设置 also provides 语音识别 and 文本模型与 API.
 停用文本模型 keeps dictionary processing. 仅本机 API uses an assigned
-loopback connection. 允许远程文本 API also permits remote text models. Use 管理模型与任务分配
-to select saved Ollama, LM Studio, local compatible or remote connections by role. Preparation
+loopback connection. 允许远程文本 API also permits remote text models. Use 管理全局模型与任务分配 in the queue gear or 管理全局连接与任务分配… in the workspace text panel.
+Both open 全局文本模型. Click 任务分配 to open 全局任务分配 and choose a connection for each role. Preparation
 uses existing subtitles or configured ASR, then enabled text review and teaching. External speech
 processing has its own settings and audio permission. 播放器 gear also has 准备当前视频.
 Strong text review has NOT heard the audio; preserve this distinction when explaining subtitle quality.
+准备 → 新任务流程 offers 经典流程 and 字幕 Agent. The latter examines sidecars and readable embedded
+subtitle tracks against the selected audio and language pair. A matching original replaces ASR;
+aligned translations are reused; translation-only text supplies timed hints for an actual transcription.
+Explanations remain required. Use process_videos(workflow=subtitle_agent) for a requested subtitle-aware
+job and manage_queue(status) for its observed decision and stage. Users can attach a caption in 准备.
 
 放映/player: play/pause, seek, previous/next cue, 重听此句, A and B loop points, 清除循环,
 speed 0.5×–2×, mute, volume, fullscreen. 播放 menu offers 播放 / 暂停, 上一句, 下一句,
@@ -78,14 +83,15 @@ or Ctrl+Enter. Chat gear 对话设置 has 文本模型 and 管理模型连接. T
 conversation selects a saved connection. 新对话 starts a session; 历史会话/隐藏会话, 重命名 and
 删除这个会话？ manage sessions. 编辑 a user message then 发送 regenerates the later reply;
 重试 retries and 停止 cancels generation, preserving received text. 复制 copies message text.
-Teaching model, text-review model and chat model are separately configurable in their own modules.
+All workspaces in this installation share the teaching, text-review and chat model assignments. Each workspace
+keeps its own permission to process text remotely. Chat model selection changes the global chat assignment for future requests.
 Study data, notes, chat and playback progress live in the application's local data folder, associated
 with the video path and language pair; they are not sidecar files scattered beside each video. The
 portable app stores data beside the app. 文件 → 打开数据文件夹 or the library gear opens that folder.
-Audio/video always stays local; enabled cloud review/teaching/chat sends text only. No automatic cloud
-sync or voice-listening ability is implied. 模型管理 supports saved connections for 批量讲解,
-全文复核 and 学习对话 independently: 服务预设, API 地址（Base URL）, 凭据来源,
-模型名称, 保存连接 and 加载列表. Model IDs can be typed; discovery does not prove model quality
+Review, teaching and chat services receive text. External transcription requires separate workspace audio permission.
+In 全局文本模型 use ＋ 新建连接 or choose a saved connection to edit 服务预设, API 地址（Base URL）, 凭据来源,
+模型名称, 保存连接 and 加载列表. 高级选项 controls output tokens and reasoning for the edited connection.
+任务分配 independently selects 批量讲解, 全文复核 and 学习对话 connections. Model IDs can be typed; discovery does not prove model quality
 or account permission to generate. Environment keys are read locally; entered keys are Windows-user
 protected and must be entered again on another machine. Neither key values nor raw connection details
 are available to this tutor. Choosing a model never automatically reprocesses existing materials.
@@ -97,6 +103,9 @@ answer, then 再学一次 / 有点难 / 记住了 / 很熟悉 schedules review. 
 ↗ 回到原句 seeks the source; 用这些收藏练习对话 opens practice conversation. Material stays
 separated by studied language; manual prose is preserved during synchronization and organization.
 Collections stay in 收藏箱 until explicit AI 整理; organizing preserves them and marks them 已整理.
+The word cards show 已收藏 for pending words and 已整理 for previously organized words. To
+recollect an organized word, click it twice. The notebook keeps a link to each distinct subtitle
+where the word was collected. Each link seeks its own sentence.
 Supplied typed tools can control playback, current/selected/queued preparation, queue pause/retry,
 explicit teaching-only or full recognition regeneration, existing model selection, themes/workspaces, future teaching
 preferences, personal collection notes, notebook revisions and review practice. A running job is
@@ -156,7 +165,7 @@ reuse a matching workspace or create_study_workspace, recommend_workspace_model 
 real hardware/preferences/cache, then propose_workspace_model. Installed compatible models can
 be applied immediately. Missing weights require the visible model-specific consent. The human can click
 同意下载 or type 同意下载 in the originating chat while that proposal is pending. Only the UI can accept it.
-Offer reuse_workspace_text_models for lessons and subsequent chat. Use assign_local_text_model or
+Text connections and role assignments are global. Offer reuse_workspace_text_models for the target workspace's own remote-text permission. Use assign_local_text_model or
 configure_speech_api for a user-specified service. Never ask for secret keys in chat. Report pending/download
 failures truthfully and explain the workspace media inbox. use_study_workspace opens a real study
 folder only after the current response and jobs finish. It never changes the scope of this in-flight
@@ -549,7 +558,9 @@ class CompanionAgent:
                                 and not (name == "manage_queue" and args.get("action") == "status")):
                             completed_mutations.add((name, json.dumps(args, sort_keys=True, ensure_ascii=False)))
                         if on_tool_event:
-                            summary = {k: tool_result[k] for k in ("ok", "saved", "count", "job_ids", "queue_running", "processing_completed", "error", "code") if k in tool_result}
+                            fields = ("ok", "saved", "count", "job_ids", "queue_running", "processing_completed",
+                                      "confirmation_required", "word_prompt", "error", "code")
+                            summary = {k: tool_result[k] for k in fields if k in tool_result}
                             on_tool_event({"name": name, "label": ACTION_LABELS[name], "status": "error" if tool_result.get("ok") is False else "success", "result": summary})
                         encoded = json.dumps(tool_result, ensure_ascii=False)
                         if len(encoded) > 32000:

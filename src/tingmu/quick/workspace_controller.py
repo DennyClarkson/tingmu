@@ -12,7 +12,7 @@ from PySide6.QtGui import QDesktopServices
 
 from tingmu.runtime import cache_root, confined_path
 from tingmu.workspaces import pair_label
-from tingmu.workspace_text import TextSetupMixin, clone_active_text_roles, text_reuse_offer
+from tingmu.workspace_text import TextSetupMixin, effective_text_roles, enable_global_text, text_reuse_offer
 from tingmu.workspace_models import download_model, model_status, model_inventory
 
 
@@ -151,9 +151,7 @@ class WorkspaceController(TextSetupMixin, QObject):
                 "asr_backend": settings.asr_backend, "audio_upload_allowed": settings.allow_audio_upload,
                 "api_model": settings.local_asr_api_model if settings.asr_backend == "local_api" else settings.external_asr_model,
                 "auto_prepare": getattr(settings, "auto_prepare_media", False),
-                "text_configured": settings.text_models_enabled and bool(
-                    settings.annotation_profile_id or settings.review_profile_id or settings.companion_profile_id
-                    or settings.cloud_text_enabled and (settings.provider != "local" or settings.companion_provider != "local")),
+                "text_configured": bool(effective_text_roles(folder.parent, settings)),
                 "media_folder": str(folder.relative_to(self.catalog.root)),
                 "current": workspace_id == self.workspace_id}
 
@@ -189,22 +187,11 @@ class WorkspaceController(TextSetupMixin, QObject):
                     "current_workspace_id": self.workspace_id}
         if name == "create_study_workspace":
             from tingmu.models import AppSettings
-            from tingmu.workspace_text import clone_active_text_roles
             settings = AppSettings(source_language=args["source"], target_language=args["target"],
                                    level=args.get("level", "beginner"), teaching_preferences=args.get("preferences", ""),
-                                   auto_prepare_media=True, cloud_text_enabled=False, review_enabled=False)
+                                   auto_prepare_media=True, cloud_text_enabled=False)
             workspace_id = self.catalog.create(args["name"], args["source"], args["target"], initial_settings=settings)
-            # The published folder starts with safe settings. Optional connection reuse
-            # must not turn a successfully created folder into a misleading failed tool.
-            text_error = ""
-            try:
-                clone_active_text_roles(self.bridge.store.data_dir, self._store(workspace_id).data_dir,
-                                        self.bridge._settings, settings, allow_remote=False)
-            except (ValueError, RuntimeError, OSError):
-                settings = self._settings_for(workspace_id)
-                text_error = "工作区已创建，本机文本连接未能沿用；可在文本模型设置中重新选择。"
-            self._save_settings(workspace_id, settings)
-            return {"created": True, "workspace": self._workspace_public(workspace_id), "text_setup_error": text_error}
+            return {"created": True, "workspace": self._workspace_public(workspace_id)}
         workspace_id = args["workspace_id"]
         self.catalog.directory(workspace_id)
         if name == "reuse_workspace_text_models":
@@ -235,7 +222,8 @@ class WorkspaceController(TextSetupMixin, QObject):
             candidate = next((item for item in result.get("candidates", []) if item["model"] == args["model"]), None)
             if not candidate or not candidate.get("available"):
                 raise ActionError("此模型不可用于当前电脑，请选择本次推荐中的可用模型。", "model_unavailable")
-            if model_inventory(candidate["model"])["installed"]:
+            inventory = model_inventory(candidate["model"])
+            if inventory["installed"]:
                 if self.proposal.get("workspace_id") == workspace_id and self.proposal.get("status") != "downloading":
                     self.proposal.update(status="superseded", error="", progress="已改用本地现有模型")
                 settings.asr_model = candidate["model"]
@@ -255,8 +243,8 @@ class WorkspaceController(TextSetupMixin, QObject):
                 "workspace_name": workspace["name"], "origin_workspace_id": self.workspace_id,
                 "origin_session_id": context.session_id, "model": candidate["model"],
                 "model_name": candidate.get("name", candidate["model"]), "device": candidate.get("device", "auto"),
-                "download_bytes": candidate.get("download_bytes", 0),
-                "estimated_download_bytes": candidate.get("estimated_download_bytes", 0),
+                "download_bytes": inventory.get("download_bytes", candidate.get("download_bytes", 0)),
+                "estimated_download_bytes": inventory.get("estimated_download_bytes", candidate.get("estimated_download_bytes", 0)),
                 "settings_fingerprint": self._fingerprint(settings), "status": "pending", "error": "", "progress": "",
                 "media_folder": workspace["media_folder"]}
             self.changed.emit()
@@ -278,11 +266,29 @@ class WorkspaceController(TextSetupMixin, QObject):
     def decideTextReuse(self, ident, approved):
         return self.decide_text_reuse(ident, approved)
 
-    @Slot(str, str)
+    @Slot(str, object)
     def _download_progress(self, key, text):
         if key == "model-download" and self.proposal.get("status") == "downloading":
-            self.proposal["progress"] = text
+            if self.proposal.get("progress") != str(text):
+                self.proposal["progress"] = str(text)
+                self.changed.emit()
+
+    @Slot(str, result="QVariantMap")
+    def downloadPlan(self, kind):
+        try:
+            if kind == "downloadSpeech":
+                from tingmu.speech_assets import ARCHIVE_BYTES, planned_download_bytes
+                size = planned_download_bytes(cache_root())
+                return {"kind": kind, "label": "人声分离与换人检测", "bytes": float(size),
+                        "packageBytes": float(sum(ARCHIVE_BYTES.values()))}
+            model = self.bridge._settings.asr_model
+            inventory = model_inventory(model)
+            return {"kind": "download", "label": model, "model": model, "bytes": float(inventory["download_bytes"]),
+                    "packageBytes": float(inventory["estimated_download_bytes"]), "installed": inventory["installed"]}
+        except (ValueError, OSError, RuntimeError) as exc:
+            self.error = str(exc)
             self.changed.emit()
+            return {}
 
     @Slot(str, bool, result=bool)
     def decideProposal(self, proposal_id, approved):
@@ -410,10 +416,9 @@ class WorkspaceController(TextSetupMixin, QObject):
                     signature = values.get("textReuseSignature")
                     if signature and self.textReuseOffer()["signature"] != signature:
                         raise ValueError("文本连接已变更，请重新打开创建窗口核对。")
-                    initial = AppSettings(text_models_enabled=False, cloud_text_enabled=False,
-                                          review_enabled=False, auto_prepare_media=True)
+                    initial = AppSettings(cloud_text_enabled=False, auto_prepare_media=True)
                     def reuse_text(directory, settings):
-                        clone_active_text_roles(self.bridge.store.data_dir, directory, self.bridge._settings,
+                        enable_global_text(self.bridge.store.data_dir, self.bridge._settings,
                                                 settings, allow_remote=True, expected_source=signature)
 
                     workspace_id = self.catalog.create(values["name"], values["source"], values["target"],
@@ -440,6 +445,8 @@ class WorkspaceController(TextSetupMixin, QObject):
                     self.initial_path = None
             elif name in ("download", "downloadSpeech"):
                 model = self.bridge._settings.asr_model
+                if name == "download" and values.get("model", model) != model:
+                    raise ValueError("所选模型已改变，请重新确认下载。")
                 def complete(result):
                     self.readiness = ""
                     self.bridge._set_state(status=f"{result} 模型文件已就绪")

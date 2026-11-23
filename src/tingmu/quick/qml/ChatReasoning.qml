@@ -21,10 +21,10 @@ Rectangle {
         anchors.fill:parent;anchors.margins:8;spacing:8
         RowLayout {
             Layout.fillWidth:true;spacing:4
-            TButton{objectName:"toggleChatReasoning";Layout.fillWidth:true;quiet:true;implicitHeight:30;text:(root.expanded ? "▾ " : "▸ ")+(root.messageData.reasoning_kind==="summary" ? "思考摘要" : "思考过程")+" · "+root.elapsedSeconds+" 秒";onClicked:root.toggleRequested()}
-            TButton{objectName:"copyChatReasoning";text:"复制";quiet:true;implicitHeight:30;onClicked:backend.command("copyText",{text:root.messageData.reasoning_text || ""})}
+            TButton{objectName:"toggleChatReasoning";Layout.fillWidth:true;quiet:true;implicitHeight:30;text:(root.expanded ? "▾ " : "▸ ")+(root.messageData.reasoning_kind==="summary" ? qsTranslate("Tingmu", "思考摘要") : qsTranslate("Tingmu", "思考过程"))+" · "+root.elapsedSeconds+qsTranslate("Tingmu", " 秒");onClicked:root.toggleRequested()}
+            TButton{objectName:"copyChatReasoning";text:qsTranslate("Tingmu", "复制");quiet:true;implicitHeight:30;onClicked:backend.command("copyText",{text:root.messageData.reasoning_text || ""})}
         }
-        Text{objectName:"chatReasoningProgress";Layout.fillWidth:true;visible:root.thinking || root.stopping;text:root.stopping ? "正在停止…等待当前连接结束" : "思考中…";color:Theme.muted;font.family:Theme.font;font.pixelSize:11;wrapMode:Text.Wrap}
+        Text{objectName:"chatReasoningProgress";Layout.fillWidth:true;visible:root.thinking || root.stopping;text:root.stopping ? qsTranslate("Tingmu", "正在停止…等待当前连接结束") : qsTranslate("Tingmu", "思考中…");color:Theme.muted;font.family:Theme.font;font.pixelSize:11;wrapMode:Text.Wrap}
         ScrollView {
             id:scroll;objectName:"chatReasoningScroll"
             visible:root.expanded;Layout.fillWidth:true;Layout.preferredHeight:Math.min(220,reasoningText.implicitHeight+8)
@@ -35,7 +35,7 @@ Rectangle {
                 readOnly:true;selectByMouse:true;wrapMode:TextEdit.Wrap
                 color:Theme.muted;selectionColor:Theme.selection;selectedTextColor:Theme.text
                 font.family:Theme.font;font.pixelSize:12;padding:4;background:null
-                Accessible.name:root.messageData.reasoning_kind==="summary" ? "模型返回的思考摘要" : "模型返回的思考过程"
+                Accessible.name:root.messageData.reasoning_kind==="summary" ? qsTranslate("Tingmu", "模型返回的思考摘要") : qsTranslate("Tingmu", "模型返回的思考过程")
             }
         }
     }

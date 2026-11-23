@@ -1,4 +1,30 @@
-# Integration contracts (2026-11-21)
+# Integration contracts (2026-11-23)
+
+## Optional subtitle Agent and interface language in 0.12
+
+New and existing workspaces default to the classic preparation flow. New queue entries capture the chosen workflow. The subtitle Agent can use an explicitly attached subtitle, matching sidecars, and text streams inside the selected media. It checks the series and episode when identifiable, the selected audio track, actual caption content, timing and coverage. The studied language is `LanguagePair.target`. The known language used for translations and explanations is `LanguagePair.source`.
+
+The Agent uses matched source captions without ASR. An unambiguously paired translation is authoritative for that timed cue. Its teaching request excludes translation output, and supplied translations have separate provenance from model-verified translations. Missing translations take the regular translation and verification path. With translated captions only, the Agent uses actual ASR (or a matching saved acoustic transcript) and supplies conservative time-overlapping references to the text models. A reference is never substituted for what the speaker said. Image subtitles are reported as requiring OCR. All paths require explanations before an Agent job can complete. Text-model setup failures retain the recovered subtitles for retry.
+
+The installation's interface language is stored at the workspace catalog root. Menu, window, and dialog labels can change during playback. Stored study languages, subtitle content, conversations, file names and notes retain their original values.
+
+## Continuous playback
+
+Playback ticks expose a numeric position to QML. Track metadata has a separate change signal. The subtitle list updates when the document changes. Controls needing its length use `cueCount`, including both companion panels during a subtitle gap. The active cue uses its prepared display row. Word and sentence status come from indexes refreshed when the active video, language or collection changes. The next progress checkpoint can skip a busy writer, and explicit saves at pause, video change and exit retain the latest position.
+
+The inbox monitors media and material fingerprints. An unchanged study document reuses its last observed preparation stage. Replaced media, updated documents and a pending publication journal take the normal validation and recovery path. Scan activity updates the media library independently of the player.
+
+## Word collections and notebook sources
+
+Word cards and selected subtitle text expose three states in a study workspace and language pair. An existing pending occurrence is idempotent. Collecting a pending word from another cue adds that occurrence. An organized word requires a second deliberate click on the same word in the same context. Confirmation returns the occurrence to the inbox and links its real source in the notebook. Each citation retains its own video, cue, sentence and seek position. Collecting the same occurrence again reuses its citation. The typed companion action can confirm recollection in a subsequent chat turn for the same word and frozen cue.
+
+Lookup uses Unicode NFC and accepts common initial-capital variants such as English `Nice` and `nice`. Accents, acronyms and internally mixed case remain significant. All citations retain the spelling in their source subtitle. Opening a previous study database builds its spelling index from existing and archived collections.
+
+## Shared text connections
+
+Text connections and the annotation, review and companion assignments belong to the installation's data catalog. The model manager has a dedicated global task-assignment page. Each workspace keeps its own text permission, review toggle, language, teaching preferences and audio settings. New workspaces can use assigned loopback services immediately. Remote processing requires the target workspace's own opt-in.
+
+Legacy profiles merge into the root registry. Existing root profile IDs remain stable. Distinct profiles with conflicting IDs receive deterministic aliases. Explicit legacy role selections prefer the last active workspace, then the default workspace, then catalog order for remaining roles. Legacy role maps are retained. The migration copies protected key blobs without decrypting them. Previously queued requests and chat retries use the workspace's original profile mapping.
 
 ## Batch concurrency in v0.10
 
@@ -10,7 +36,7 @@ For all three stages, ordered unique response IDs may cover a subset of the requ
 
 The known language is `language.source`. A text-enabled preparation produces per-source-cue teaching material and runs an additional bilingual review with the configured annotation model. Each successful verification batch checkpoints the verified cue digest, any ordered split translations, and provider response metadata in `translation_review`. The player and translated SRT use the same split boundaries. A stale digest suppresses the affected verified caption and invalidates the complete SRT. Local-only preparation records its scope explicitly.
 
-`PreparationQueue.enqueue_lessons(path, settings)` schedules one existing media document without re-transcription. Completed drafts and current verification records can be resumed. `documents/<id>.translation.srt` is derived from the study JSON, participates in its publication journal and portable relocation, and can be exported from the File menu. Named workspaces can opt to inherit the text connections shown during creation.
+`PreparationQueue.enqueue_lessons(path, settings)` schedules one existing media document without re-transcription. Completed drafts and current verification records can be resumed. `documents/<id>.translation.srt` is derived from the study JSON, participates in its publication journal and portable relocation, and can be exported from the File menu. New workspaces see the global text connections and may opt into remote processing during creation.
 
 ## Revision 9 — v0.7
 

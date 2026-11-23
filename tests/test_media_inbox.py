@@ -51,6 +51,42 @@ def test_scanner_ignores_symlinks_and_empty_media(tmp_path):
     assert scanner.scan(now=1)["present"] == [str(folder / "empty.mp4")]
 
 
+def test_unchanged_inbox_material_is_not_deserialized_every_two_seconds(tmp_path, monkeypatch):
+    store = Store(tmp_path)
+    video = tmp_path / "episode.mp4"
+    video.write_bytes(b"first")
+    media = str(video)
+    pair = AppSettings().language
+    doc = StudyDocument(media, pair, [Cue("one", 1, 2, "word")], metadata={"stage": "ready"})
+    path = store.save_document(doc)
+    scanner = InboxScanner(tmp_path)
+    reads = []
+    load_document = store.load_document
+
+    def observe(media, language):
+        reads.append(media)
+        return load_document(media, language)
+
+    def stage():
+        return scanner.document_stages(store, {media: media_fingerprint(media)}, pair, lambda: False)[media]
+
+    monkeypatch.setattr(store, "load_document", observe)
+    assert stage() == stage() == "ready"
+    assert reads == [media]
+    doc.metadata["stage"] = "transcribed"
+    store.save_document(doc)
+    assert stage() == stage() == "transcribed"
+    assert len(reads) == 2
+    # An interrupted publish still needs the normal recovery path on a cache hit.
+    path.with_suffix(".pending").touch()
+    assert stage() == "transcribed" and not path.with_suffix(".pending").exists()
+    assert len(reads) == 3
+    video.write_bytes(b"replacement")
+    assert stage() == ""
+    path.unlink()
+    assert stage() == ""
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Windows writer sharing contract")
 def test_copy_handle_must_close_even_when_size_stops_growing(tmp_path):
     path = tmp_path / "copy.mp4"
@@ -308,6 +344,22 @@ def test_scans_are_off_ui_thread_and_stale_results_are_discarded(bridge, qtbot, 
     bridge._inbox_completed({"failure": "old workspace"})
     assert bridge.state == before
     bridge._closed = False
+
+
+def test_idle_inbox_polls_do_not_invalidate_the_player(bridge, qtbot, monkeypatch):
+    qtbot.waitUntil(lambda: bridge._inbox_thread is not None and not bridge._inbox_thread.is_alive()
+                    and not bridge.mediaInbox["scanning"])
+    changes, inbox_changes = [], []
+    bridge.stateChanged.connect(lambda: changes.append(True))
+    bridge.mediaInboxChanged.connect(lambda: inbox_changes.append(True))
+    monkeypatch.setattr(bridge, "_refresh_jobs", lambda: None)
+    result = {"ready": {}, "present": [], "waiting": [], "error": "", "documents": {},
+              "blocked": {}, "settings": asdict(bridge._settings)}
+    for _ in range(3):
+        bridge._set_inbox_state(scanning=True)
+        bridge._inbox_completed(result)
+    assert len(inbox_changes) == 6
+    assert not changes
 
 
 def test_auto_pipeline_is_installed_only_and_rejects_changed_file(tmp_path, monkeypatch):

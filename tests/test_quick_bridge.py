@@ -20,6 +20,55 @@ def bridge(qapp, tmp_path):
     obj.shutdown()
 
 
+def test_progress_checkpoint_leaves_ui_free_and_flushes_latest_position(bridge, tmp_path, monkeypatch):
+    bridge.media_path = str(tmp_path / "episode.mkv")
+    current = [1500]
+    monkeypatch.setattr(bridge.player, "position", lambda: current[0])
+    entered, release = threading.Event(), threading.Event()
+    writes = []
+    save = bridge.store.save_position
+
+    def slow_save(media, position):
+        writes.append((threading.get_ident(), position))
+        entered.set()
+        assert release.wait(2)
+        save(media, position)
+
+    monkeypatch.setattr(bridge.store, "save_position", slow_save)
+    try:
+        bridge._checkpoint_position()
+        assert entered.wait(1)
+        assert writes[0][0] != threading.get_ident()
+        current[0] = 3000
+        bridge._checkpoint_position()
+        assert len(writes) == 1
+    finally:
+        release.set()
+    bridge.save_position()
+    assert [position for _, position in writes] == [1500, 3000]
+    bridge._checkpoint_position()
+    assert bridge._position_future is None
+    assert bridge.store.load_position(bridge.media_path) == 3000
+
+
+def test_playback_lessons_reuse_model_status_until_settings_or_assignment_changes(bridge, monkeypatch):
+    reads = []
+    def text_role(settings, role):
+        reads.append(role)
+        return True, {"key_source": "none"}
+
+    monkeypatch.setattr(bridge.model_registry, "text_role", text_role)
+    bridge.modelsChanged.emit()
+    for _ in range(10):
+        assert bridge.lessonModel["configured"]
+    assert reads == ["annotation"]
+    bridge.settingsChanged.emit()
+    assert bridge.lessonModel["configured"]
+    bridge.modelsChanged.emit()
+    assert bridge.lessonModel["configured"]
+    assert reads == ["annotation"] * 3
+
+
 def test_start_queue_retries_failed_jobs_and_single_retry_starts(bridge, tmp_path, monkeypatch):
     video = tmp_path / "retry.mkv"
     video.touch()
@@ -96,12 +145,33 @@ def test_word_sentence_and_chat_identity_remain_bound_to_selected_video(bridge, 
     bridge.media_path = str(media)
     cue = Cue("a", 1, 2, "唔該", tokens=[Token("唔該", "m4 goi1", "谢谢")])
     bridge._set_document(StudyDocument(str(media), LanguagePair(), [cue]))
+    feedback = []
+    bridge.collectionFeedback.connect(lambda ok, text: feedback.append((ok, text)))
     bridge.command("saveWord", {"cueId": "a", "tokenIndex": 0})
+    assert feedback == [(True, "已收藏「唔該」")]
     bridge.command("saveNote", {"cueId": "a", "note": "问路时使用"})
     assert {e["kind"] for e in bridge.entries} == {"word", "note"}
     assert all(e["media_path"] == str(media) for e in bridge.entries)
     assert len(bridge.store.entries(str(tmp_path / "different.mkv"))) == 0
     assert not (media.parent / "external.json").exists()
+
+
+def test_position_ticks_reuse_cue_and_transport_metadata(bridge, monkeypatch):
+    cues = [Cue("a", 0, 1, "早晨"), Cue("b", 1, 2, "再見")]
+    bridge._set_document(StudyDocument("lesson.mkv", LanguagePair(), cues))
+    assert bridge.cueCount == 2
+    details_updates = []
+    bridge.playbackDetailsChanged.connect(lambda: details_updates.append(bridge.playbackDetails))
+    with monkeypatch.context() as patch:
+        patch.setattr(bridge, "_tracks", lambda *args, **kwargs: pytest.fail("position tick rebuilt track metadata"))
+        patch.setattr(bridge, "_present_cue", lambda *args: pytest.fail("position tick rebuilt the displayed cue"))
+        for position in (500, 1200, 1300):
+            bridge._position_changed(position)
+            assert bridge.playbackPosition == bridge.playback["position"] == position
+            assert bridge.activeCue["id"] == ("a" if position < 1000 else "b")
+    assert not details_updates
+    bridge.audio.setMuted(True)
+    assert details_updates[-1]["muted"] is True
 
 
 def test_multiselect_enqueue_deduplicates_and_retains_setting_snapshot(bridge, tmp_path):
@@ -117,6 +187,47 @@ def test_multiselect_enqueue_deduplicates_and_retains_setting_snapshot(bridge, t
     bridge.setting("target_language", "en")
     assert all(j["settings"]["target_language"] == old for j in bridge.jobs)
     assert len(bridge.library) == 2
+
+
+def test_playback_word_colors_follow_edits_and_perform_no_per_cue_io(bridge, tmp_path, monkeypatch):
+    media = str(tmp_path / "lesson.mkv")
+    bridge.media_path = media
+    first = Cue("a", 1, 2, "Nice day.", tokens=[Token("Nice")])
+    other = Cue("b", 3, 4, "How nice.", tokens=[Token("nice")])
+    bridge.set_languages("zh-CN", "en")
+    bridge._set_document(StudyDocument(media, bridge._settings.language, [first, other]))
+    bridge.command("saveWord", {"cueId": first.id, "tokenIndex": 0})
+    entry_id = bridge.entries[0]["id"]
+    bridge.notebook_manager.append_note("en", "Greetings", "An example", [entry_id])
+    bridge._learningUpdated.emit()
+    bridge.command("deleteEntry", {"id": entry_id})
+    assert bridge.wordCollectionStates(other.id, ["nice"]) == {"nice": "organized"}
+    bridge.command("saveWord", {"cueId": other.id, "tokenIndex": 0, "confirm": True})
+    assert bridge.wordCollectionStates(first.id, ["Nice"]) == {"Nice": "organized"}
+    assert bridge.wordCollectionStates(other.id, ["Nice", "nice", "NICE"]) == {
+        "Nice": "pending", "nice": "pending", "NICE": "unsaved"}
+
+    # The same text can occur in thousands of new cues, or be selected by dragging.
+    # Both companion windows share this index. Unsaved selections do not accumulate.
+    from pathlib import Path
+    index_size = len(bridge._word_states)
+    def forbidden(*args, **kwargs):
+        pytest.fail("Playback opened a database or resolved a path for a word label")
+    with monkeypatch.context() as patch:
+        patch.setattr(bridge.store, "_connection", forbidden)
+        patch.setattr(Path, "resolve", forbidden)
+        for n in range(1000):
+            texts = ["Nice", f"selection {n}"]
+            assert bridge.wordCollectionStates(str(n), texts) == {texts[0]: "organized", texts[1]: "unsaved"}
+    assert len(bridge._word_states) == index_size
+    bridge.media_path = str(tmp_path / "another.mkv")
+    bridge._load_personal()
+    assert bridge.wordCollectionStates(other.id, ["nice"]) == {"nice": "organized"}
+    bridge.set_languages("fr", "en")
+    assert bridge.wordCollectionStates(other.id, ["nice"]) == {"nice": "unsaved"}
+    bridge.set_languages("zh-CN", "en")
+    bridge.command("selectNotebook", {"language": "fr"})
+    assert bridge.wordCollectionStates(other.id, ["nice"]) == {"nice": "organized"}
 
 
 def test_pending_chat_reply_saved_to_original_media_after_user_switches(bridge, tmp_path, monkeypatch, qtbot):

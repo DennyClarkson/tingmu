@@ -23,6 +23,7 @@ QtObject {
     readonly property color pressed:Qt.tint(panel,Qt.rgba(accent.r,accent.g,accent.b,0.23))
     readonly property color dropTint:Qt.rgba(accent.r,accent.g,accent.b,0.16)
     readonly property color warning:name==="paper" || name==="mist" ? "#806018" : "#d7c58c"
+    readonly property color organizedWord:name==="paper" || name==="mist" ? "#654589" : "#cfafe9"
     readonly property color video:"#090b0c"
     readonly property color captionText:"#ffffff"
     readonly property color captionBg:"#b3000000"

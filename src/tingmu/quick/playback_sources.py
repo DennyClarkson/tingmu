@@ -28,10 +28,13 @@ class DisplayTrack:
             last = max(last, end)
             self.last_ends.append(last)
 
-    def at(self, milliseconds):
+    def active(self, milliseconds):
         stop = bisect_right(self.starts, milliseconds)
         start = bisect_right(self.last_ends, milliseconds, 0, stop)
-        return "\n".join(text for _, end, text in self.rows[start:stop] if milliseconds < end)
+        return [row for row in self.rows[start:stop] if milliseconds < row[1]]
+
+    def at(self, milliseconds):
+        return "\n".join(row[2] for row in self.active(milliseconds))
 
 
 class PlaybackSources(QObject):
@@ -45,7 +48,7 @@ class PlaybackSources(QObject):
         self.player = player
         self.output = output
         self.track = DisplayTrack()
-        self._text = ""
+        self._cue = {}
         self._media = ""
         self._choice = {"show": False, "index": 0}
         self.devices = QMediaDevices(self)
@@ -151,11 +154,21 @@ class PlaybackSources(QObject):
 
     @Property(str, notify=textChanged)
     def importedText(self):
-        return self._text
+        return self._cue.get("text", "")
+
+    @Property("QVariantMap", notify=textChanged)
+    def importedCue(self):
+        return self._cue
 
     @Slot(int)
     def update_position(self, value):
-        current = self.track.at(value)
-        if current != self._text:
-            self._text = current
+        rows = self.track.active(value)
+        current = {}
+        if rows:
+            start = max(row[0] for row in rows)
+            current = {"id": f"imported:{self.track.name}:{start}", "start": start / 1000,
+                       "end": min(row[1] for row in rows) / 1000, "text": "\n".join(row[2] for row in rows),
+                       "trackName": self.track.name}
+        if current != self._cue:
+            self._cue = current
             self.textChanged.emit()

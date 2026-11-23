@@ -32,7 +32,7 @@ Item {
     }
     Window {
         id: floating
-        title: dock.title + " · 听幕"
+        title: dock.title + qsTranslate("Tingmu", " · 听幕")
         width:dock.moduleId==="chat" ? 920 : 460; height:dock.moduleId==="chat" ? 760 : 580
         minimumWidth: 330; minimumHeight: 260
         color: Theme.bg
@@ -81,8 +81,8 @@ Item {
                     spacing: 5
                     Text { textFormat:Text.PlainText; text: dock.title; color: Theme.text; font.family: Theme.font; font.pixelSize: 13; font.weight: Font.DemiBold }
                     Text { textFormat:Text.PlainText; text: dock.subtitle; color: Theme.muted; font.family: Theme.font; font.pixelSize: 10; elide: Text.ElideRight; Layout.fillWidth: true }
-                    TButton { iconSource: "settings"; quiet: true; tip: "此模块设置"; objectName: dock.moduleId + "Settings"; onClicked: { if (loader.item && loader.item.openSettings) loader.item.openSettings(); dock.settingsRequested() } }
-                    TButton { iconSource: dock.detached ? "arrow-down-left" : "arrow-up-right"; quiet: true; tip: dock.detached ? "放回工作区" : "浮动窗口 · 也可拖动标题"; objectName: dock.moduleId + "Detach"; onClicked: dock.detach() }
+                    TButton { iconSource: "settings"; quiet: true; tip: qsTranslate("Tingmu", "此模块设置"); objectName: dock.moduleId + "Settings"; onClicked: { if (loader.item && loader.item.openSettings) loader.item.openSettings(); dock.settingsRequested() } }
+                    TButton { iconSource: dock.detached ? "arrow-down-left" : "arrow-up-right"; quiet: true; tip: dock.detached ? qsTranslate("Tingmu", "放回工作区") : qsTranslate("Tingmu", "浮动窗口 · 也可拖动标题"); objectName: dock.moduleId + "Detach"; onClicked: dock.detach() }
                 }
             }
             Rectangle { Layout.fillWidth: true; height: 1; color: Theme.line }
@@ -93,6 +93,6 @@ Item {
         anchors.fill:parent;z:1000;radius:8
         visible:!!dock.workspace && dock.workspace.dropTarget===dock.moduleId
         color:Theme.dropTint;border.color:Theme.accent;border.width:2
-        Text { textFormat:Text.PlainText;anchors.centerIn:parent;text:"放到这里";color:Theme.text;font.family:Theme.font;font.pixelSize:16}
+        Text { textFormat:Text.PlainText;anchors.centerIn:parent;text:qsTranslate("Tingmu", "放到这里");color:Theme.text;font.family:Theme.font;font.pixelSize:16}
     }
 }

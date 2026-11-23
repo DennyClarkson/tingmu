@@ -1,6 +1,6 @@
 """Reuse the assigned text connections without exposing protected credentials to the Agent."""
 
-from copy import deepcopy
+from dataclasses import replace
 import hashlib
 import json
 from urllib.parse import urlsplit
@@ -14,14 +14,19 @@ _ROLES = {"annotation": ("provider", "model", "逐句讲解"), "review": ("revie
           "companion": ("companion_provider", "companion_model", "学习对话")}
 
 
-def _assignments(directory, settings):
+def _assignments(directory, settings, *, include_disabled=False):
     registry = ModelRegistry(directory)
-    with registry._lock:
-        profiles = registry._read()
+    state = registry._state()
+    profiles = state["profiles"]
+    settings = registry.load_roles(replace(settings), state=state)
+    # An offline workspace with only implicit environment defaults should not
+    # surface a remote opt-in during automatic learning setup.
+    explicit_remote = any(p and not loopback_url(p["base_url"]) for role in _ROLES
+                          if (p := profiles.get(getattr(settings, role + "_profile_id"))))
     defaults = provider_status()
     assignments = {}
     for role, (provider_field, model_field, label) in _ROLES.items():
-        if not settings.text_models_enabled or (role == "review" and not settings.review_enabled):
+        if not include_disabled and (not settings.text_models_enabled or (role == "review" and not settings.review_enabled)):
             continue
         ident = getattr(settings, role + "_profile_id")
         profile = profiles.get(ident) if ident else None
@@ -34,10 +39,12 @@ def _assignments(directory, settings):
         else:
             provider, model = getattr(settings, provider_field), getattr(settings, model_field)
             config = defaults.get(provider, {})
+            if not (settings.text_models_enabled and settings.cloud_text_enabled) and not explicit_remote:
+                continue
             if provider == "local" or not config.get("available") or not model:
                 continue
             local, host = False, config.get("endpoint_host", provider)
-        if local or settings.cloud_text_enabled:
+        if include_disabled or local or settings.cloud_text_enabled:
             assignments[role] = {"role": label, "model": model, "host": host, "provider": provider,
                                  "local": local, "profile": profile}
     return assignments
@@ -51,51 +58,25 @@ def _public(rows):
     return [{k: v for k, v in row.items() if k != "profile"} for row in rows.values()]
 
 
+def effective_text_roles(directory, settings):
+    return _public(_assignments(directory, settings))
+
+
 def text_reuse_offer(directory, settings):
-    rows = _assignments(directory, settings)
+    rows = _assignments(directory, settings, include_disabled=True)
     return {"signature": _digest(rows) if rows else "", "roles": _public(rows)}
 
 
-def clone_active_text_roles(origin_dir, dest_dir, origin_settings, target_settings, *, allow_remote=False,
-                            expected_source=None):
-    rows = _assignments(origin_dir, origin_settings)
+def enable_global_text(directory, source_settings, target_settings, *, allow_remote=False, expected_source=None):
+    rows = _assignments(directory, source_settings, include_disabled=True)
     if expected_source and _digest(rows) != expected_source:
-        raise ValueError("原工作区的模型连接已变更，请重新选择。")
+        raise ValueError("全局文本连接已变更，请重新核对。")
     rows = {k: v for k, v in rows.items() if allow_remote or v["local"]}
-    if not rows:
-        return []
-    registry = ModelRegistry(dest_dir)
-    with registry._lock:
-        profiles = registry._read()
-        for role, row in rows.items():
-            profile = row["profile"]
-            ident = ""
-            if profile:
-                ident = profile["id"]
-                # Keep unrelated or independently edited destination connections intact.
-                if ident in profiles and profiles[ident] != profile:
-                    ident = uuid.uuid5(uuid.NAMESPACE_URL, _digest(profile)).hex
-                    if ident in profiles and profiles[ident] != {**profile, "id": ident}:
-                        ident = uuid.uuid4().hex
-                profiles[ident] = {**deepcopy(profile), "id": ident}
-            setattr(target_settings, role + "_profile_id", ident)
-            provider_field, model_field, _ = _ROLES[role]
-            setattr(target_settings, provider_field, row["provider"])
-            setattr(target_settings, model_field, row["model"])
-        if any(row["profile"] for row in rows.values()):
-            registry._write(profiles)
-    target_settings.text_models_enabled = True
-    if allow_remote and any(not row["local"] for row in rows.values()):
-        # Enabling remote text also enables unassigned legacy defaults. Only activate
-        # the roles shown in this consent; a missing role can be configured later.
-        if not target_settings.cloud_text_enabled:
-            for role, (provider_field, _, _) in _ROLES.items():
-                assigned_id = getattr(target_settings, role + "_profile_id")
-                if role not in rows and not loopback_url(profiles.get(assigned_id, {}).get("base_url")):
-                    setattr(target_settings, role + "_profile_id", "")
-                    setattr(target_settings, provider_field, "local")
-        target_settings.cloud_text_enabled = True
-    target_settings.review_enabled = "review" in rows
+    if rows:
+        target_settings.text_models_enabled = True
+        if any(not row["local"] for row in rows.values()):
+            target_settings.cloud_text_enabled = True
+        target_settings.review_enabled = "review" in rows
     return _public(rows)
 
 
@@ -108,15 +89,15 @@ class TextSetupMixin:
         return self.text_proposal.get("status") == "pending"
 
     def propose_text_models(self, workspace_id, context):
-        if workspace_id == self.workspace_id:
-            return {"applied": True, "roles": _public(_assignments(self.bridge.store.data_dir, self.bridge._settings))}
         destination = self._store(workspace_id)
         source = self.bridge._settings
         target = self._settings_for(workspace_id)
-        rows = _assignments(self.bridge.store.data_dir, source)
+        rows = _assignments(self.bridge.store.data_dir, source, include_disabled=True)
+        if target.text_models_enabled and target.cloud_text_enabled:
+            return {"applied": True, "roles": _public(_assignments(destination.data_dir, target))}
         public = _public(rows)
         if not any(not row["local"] for row in rows.values()):
-            applied = clone_active_text_roles(self.bridge.store.data_dir, destination.data_dir, source, target)
+            applied = enable_global_text(self.bridge.store.data_dir, source, target)
             if applied:
                 self._save_settings(workspace_id, target)
             return {"applied": bool(applied), "roles": applied, "requires_human_confirmation": False}
@@ -133,8 +114,7 @@ class TextSetupMixin:
         for role, (provider, model, _) in _ROLES.items():
             keys.extend([role + "_profile_id", provider, model])
         registry = ModelRegistry(store.data_dir)
-        with registry._lock:
-            return _digest([[getattr(settings, key) for key in keys], registry._read()])
+        return _digest([[getattr(settings, key) for key in keys], registry._read()])
 
     def decide_text_reuse(self, ident, approved):
         p = self.text_proposal
@@ -151,7 +131,7 @@ class TextSetupMixin:
             expected, previous = self._text_bindings
             if previous != self._target_text_signature(dest, settings):
                 raise ValueError("目标工作区的文本连接已变更，请重新选择。")
-            clone_active_text_roles(self.bridge.store.data_dir, dest.data_dir, self.bridge._settings, settings,
+            enable_global_text(self.bridge.store.data_dir, self.bridge._settings, settings,
                                     allow_remote=True, expected_source=expected)
             self._save_settings(p["workspace_id"], settings)
             p["status"] = "ready"

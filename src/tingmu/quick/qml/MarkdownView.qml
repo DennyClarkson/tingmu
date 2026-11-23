@@ -5,6 +5,7 @@ ColumnLayout {
     id:root
     property var blocks:[]
     property int textSize:14
+    signal sourceOpened()
     spacing:12
     Repeater {
         model:root.blocks
@@ -17,8 +18,8 @@ ColumnLayout {
                 visible:block.modelData.kind==="code"
                 Layout.fillWidth:true;implicitHeight:34;color:Theme.raised;radius:5
                 RowLayout{anchors.fill:parent;anchors.leftMargin:12;anchors.rightMargin:6
-                    Text{text:block.modelData.language || "代码";textFormat:Text.PlainText;color:Theme.muted;font.family:Theme.latin;font.pixelSize:12;Layout.fillWidth:true}
-                    TButton{objectName:"copyCodeButton";text:"复制代码";quiet:true;implicitHeight:26;onClicked:backend.command("copyText",{text:block.modelData.text || ""})}
+                    Text{text:block.modelData.language || qsTranslate("Tingmu", "代码");textFormat:Text.PlainText;color:Theme.muted;font.family:Theme.latin;font.pixelSize:12;Layout.fillWidth:true}
+                    TButton{objectName:"copyCodeButton";text:qsTranslate("Tingmu", "复制代码");quiet:true;implicitHeight:26;onClicked:backend.command("copyText",{text:block.modelData.text || ""})}
                 }
             }
             Rectangle {
@@ -42,7 +43,10 @@ ColumnLayout {
                     color:Theme.text;selectionColor:Theme.selection;selectedTextColor:Theme.text
                     font.family:block.modelData.kind==="code" ? Theme.mono : Theme.font
                     font.pixelSize:block.modelData.kind==="code" ? root.textSize-1 : root.textSize
-                    onLinkActivated:function(link){backend.command("openLink",{url:link})}
+                    onLinkActivated:function(link){
+                        backend.command("openLink",{url:link})
+                        if (String(link).startsWith("tingmu://entry/")) root.sourceOpened()
+                    }
                 }
             }
         }
