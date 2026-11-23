@@ -1,18 +1,18 @@
 # 本地媒体与语音识别
 
-`tingmu.media` 负责递归媒体扫描、ffprobe 探测、文本字幕和本地语音识别。音视频不会上传；首次使用会从 Hugging Face 下载公开模型权重。项目运行时权重在忽略目录 `.cache/models`，临时 WAV 随作业结束清除；可用 `TINGMU_CACHE_DIR` 指定缓存目录。
+`tingmu.media` 负责递归媒体扫描、ffprobe 探测、文本字幕和本地语音识别。本地识别读取所选音轨，所需模型可以预置或按需下载。其他识别方式及其授权见[本机与远程语音 API](external-asr.md)。项目运行时权重在忽略目录 `.cache/models`，临时 WAV 随作业结束清除；可用 `TINGMU_CACHE_DIR` 指定缓存目录。
 
 ## 运行
 
 ```powershell
 # Windows NVIDIA 依赖由项目 gpu extra 锁定；已安装后直接使用环境 Python。
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/setup.ps1 -Dev
-.venv/Scripts/python.exe scripts/asr_probe.py ../22.mkv --start 180 --duration 120 --device cuda --output reports/private/asr_cuda_turbo.json
+.venv/Scripts/python.exe scripts/asr_probe.py D:\Videos\lesson.mkv --start 180 --duration 120 --device cuda --output reports/private/asr_cuda_turbo.json
 ```
 
 CUDA 故障时可改 `--device cpu`。应用 `auto` 首先尝试 CUDA，失败后会明确报告原因，再用同一模型的 CPU int8 重试。显式 `cuda` 不会隐藏设备失败。CPU 可能较慢；整个识别进程都可取消。
 
-音轨参数是 **音频轨序号**：样片的 `audio_track=0` 是粤语（ffprobe stream 1），`audio_track=1` 是国语（stream 2）。ffmpeg 使用 `-map 0:a:N`，输出单声道 16kHz PCM；不会移动或更改原样片。
+音轨参数是 **音频轨序号**：`audio_track=0` 表示文件里的第一条音轨，实际语言请在播放器中确认。ffmpeg 使用 `-map 0:a:N`，输出单声道 16kHz PCM；不会移动或更改原样片。
 
 ## 模型与粤语
 
@@ -22,7 +22,7 @@ CUDA 故障时可改 `--device cpu`。应用 `auto` 首先尝试 CUDA，失败�
 
 ```powershell
 pwsh -File scripts/setup_qwen.ps1 -DownloadModels
-.venv/Scripts/python.exe scripts/asr_probe.py ../22.mkv --model qwen3-asr-1.7b --start 180 --duration 60 --device cuda --output reports/private/asr_qwen_aligned.json
+.venv/Scripts/python.exe scripts/asr_probe.py D:\Videos\lesson.mkv --model qwen3-asr-1.7b --start 180 --duration 60 --device cuda --output reports/private/asr_qwen_aligned.json
 ```
 
 运行时自动选择隔离环境的 Python，也可通过 `TINGMU_QWEN_PYTHON` 指定已安装环境。权重在 `.cache/qwen-models`；完整缓存优先离线加载，检查索引列出的每个权重分片存在后才使用。若网络代理迟迟不返回大型下载，可使用 `scripts/asr_download.py Qwen/Qwen3-ASR-1.7B Qwen/Qwen3-ForcedAligner-0.6B`：它以有界 Range 请求下载官方 Hugging Face 文件并核验官方 LFS SHA-256。

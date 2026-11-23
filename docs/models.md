@@ -1,8 +1,10 @@
-# 模型适配与实测
+# 批量文本模型适配与历次实测
 
-## 配置与隐私
+当前的模型连接、三项任务分配与工作区权限见[模型配置指南](providers.md)。下文保留早期适配器的接口、模型调用样本和当时的回归结果。报告文件名记录当次运行输出，纳入 Git 的文件见[报告索引](../reports/README.md)。
 
-默认 DeepSeek 模型为 `deepseek-flash`，OpenAI 为 `gpt-5.4-mini`；这是当前账号实际 `/models` 和小样本调用后的选择，不是价格或语言准确率保证。可在 UI 模型框或环境变量覆盖。
+## 早期批量适配器配置
+
+默认 DeepSeek 模型为 `deepseek-flash`，OpenAI 为 `gpt-5.4-mini`；这是当时测试账号实际 `/models` 和小样本调用后的选择，不是价格或语言准确率保证。可在 UI 模型框或环境变量覆盖。
 
 - OpenAI：`OPENAI_API_KEY`，兼容 Windows 环境别名 `OpenAI` / `OPENAI`。
 - DeepSeek：`DEEPSEEK_API_KEY`，兼容 `DEEPSEEK`。
@@ -12,7 +14,7 @@
 
 学习 API 只发送字幕文本、邻近上下文、语言和学习级别。复盘只发送收藏词语、句子和笔记，最多 100 条且 24,000 字符；不发送媒体路径。音视频和声纹不上传。用户可关闭云端或选本地；关闭后的分词、粤拼和拼音由本地库完成，释义留空，不伪造词典释义。
 
-## 接口与失败行为
+## 早期接口与失败行为
 
 `LearningAgent.annotate(cues, language, progress=None, cancelled=None, checkpoint=None)` 每批最多 6 条、约 2,500 输入字符，加入前后各两条语境。`checkpoint` 收到累计已验证字幕的独立副本，父流水线按 ID 合并和保存。
 
