@@ -2,7 +2,7 @@
 
 ## 0.12.0 发布验收
 
-2026-11-23 的发布交接列出了以下结果。要判断某个提交是否通过，查看该提交对应的 CI 运行，或使用开发入门中的离线命令执行。[Windows CI](https://github.com/DennyClarkson/tingmu/actions/workflows/ci.yml) · [0.12.0 交接记录](../handoff.md) · [开发环境与检查命令](../docs/development.md)
+2026-11-23 的发布交接列出了以下结果。日常改动在本机按开发指南验证，结果随 PR 记录。[本次维护最后一次托管检查](https://github.com/DennyClarkson/tingmu/actions/runs/45179352534) · [0.12.0 交接记录](../handoff.md) · [开发环境与检查命令](../docs/development.md)
 
 | 验证对象 | 发布时记录的范围 |
 | --- | --- |

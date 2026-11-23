@@ -41,4 +41,4 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup.ps1 -Dev -Cp
 
 项目使用 Python 3.12 与 Qt Quick/QML。开发文档包含启动、离线回归和打包入口，交接记录按版本保留验收结果和限制。
 
-[贡献指南](CONTRIBUTING.md) · [开发环境与 CI](docs/development.md) · [模块与数据流](docs/architecture.md) · [接口约定](docs/contracts.md) · [版本交接](handoff.md)
+[贡献指南](CONTRIBUTING.md) · [开发环境与本地验证](docs/development.md) · [模块与数据流](docs/architecture.md) · [接口约定](docs/contracts.md) · [版本交接](handoff.md)

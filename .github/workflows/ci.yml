@@ -1,8 +1,7 @@
 name: Windows checks
 
+# Hosted checks are opt-in. Routine validation runs locally.
 on:
-  push:
-  pull_request:
   workflow_dispatch:
 
 permissions:

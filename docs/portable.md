@@ -72,7 +72,7 @@ Agent 按所选音轨、可辨认的剧集编号、实际字幕语言和时间�
 
 ## 维护者构建与验收
 
-以下命令在 Windows 的仓库根目录执行，文内相对链接指向该仓库的文件。源码仓库与 CI 不附带便携运行时或模型。先准备项目的 `.venv/`、独立 Qwen 环境 `.cache/qwen-venv/`，以及 PATH 中的 FFmpeg、FFprobe 和随附许可证。打包使用系统 .NET Framework x64 编译器生成窗口式启动器。[开发环境](development.md)
+以下命令在 Windows 的仓库根目录执行，文内相对链接指向该仓库的文件。源码仓库不附带便携运行时或模型。先准备项目的 `.venv/`、独立 Qwen 环境 `.cache/qwen-venv/`，以及 PATH 中的 FFmpeg、FFprobe 和随附许可证。打包使用系统 .NET Framework x64 编译器生成窗口式启动器。[开发环境](development.md)
 
 1. **制作基础便携目录。** 运行 `.\scripts\build_portable.ps1` 生成 `dist/Tingmu/`。构建复制运行时、程序、FFmpeg 以及缓存中已有的模型 snapshot、refs 和语音前处理权重。仅在明确迁移本机旧资料时追加 `-ImportUserData`，它复制 `%LOCALAPPDATA%/Tingmu` 中的资料，以 SQLite 在线备份复制数据库，并把导入记录写入目标 `data/import-manifest.json`。
 2. **制作用于分发的干净副本。** 已有基础便携目录后，用下面的命令指定一个尚不存在的目标目录。其父目录须已存在。干净构建只带程序、FFmpeg 和独立运行时，排除个人资料、模型权重和缓存。用该目录里的 `Tingmu.exe` 验证首次启动。

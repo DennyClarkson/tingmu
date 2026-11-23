@@ -1,6 +1,6 @@
 # 听幕 0.12.0 Windows 开发入门
 
-从源码启动、运行离线回归、定位改动，都可以从仓库根目录（含 `pyproject.toml`）完成。以下使用 Windows x64 与 PowerShell。项目声明支持 Python `>=3.12,<3.14`，安装脚本与 Windows CI 选择 3.12。
+从源码启动、运行离线回归、定位改动，都可以从仓库根目录（含 `pyproject.toml`）完成。以下使用 Windows x64 与 PowerShell。项目声明支持 Python `>=3.12,<3.14`，安装脚本与 Windows 回归使用 3.12。
 
 ## 安装 CPU 开发环境
 
@@ -51,7 +51,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup_qwen.ps1 -Do
 
 专用环境位于 `.cache/qwen-venv/`，上述可选权重位于 `.cache/qwen-models/`。脚本安装 CUDA 12.8 构建的 PyTorch 2.7.1，再按 `scripts/qwen-requirements.lock.txt` 安装 Qwen 依赖。即使随后用 CPU 运行，仍需为这份运行时与权重预留磁盘空间。[本地语音处理](local-speech.md)
 
-## 运行与 CI 对应的检查
+## 提交前在本机验证
 
 另开一个 PowerShell 窗口，在仓库根目录执行。如果按上文将 FFmpeg 放入项目目录，请在新窗口中重复添加 PATH 的步骤。以下设置让 Qt 使用离屏软件渲染，并将测试数据和运行缓存写到忽略目录。
 
@@ -70,7 +70,7 @@ uv lock --check --offline
 git diff --check
 ```
 
-Windows CI 按锁文件安装 CPU/dev 依赖，运行仓库级 Ruff，确认 FFmpeg 与 ffprobe 可用后再执行全套回归。`--require-ffmpeg` 让字幕集成测试在缺少工具时失败。本地暂时无法安装 FFmpeg 时，可去掉此选项运行其余用例，测试摘要会显示跳过项。测试运行器限制当前 Python 进程的外部 DNS/TCP，允许本机回环模拟服务。克隆源码就可以运行通用回归，无需开发机私人样片、便携包或服务密钥。离线锁检查和 `git diff --check` 是可在本机追加的检查。[Windows 工作流](../.github/workflows/ci.yml) · [离线测试入口](../.github/run_offline_tests.py)
+日常提交和 PR 在本地运行以上检查，将结果写进 PR。仓库已关闭 GitHub 托管验证，工作流文件仅保留手动触发入口。`--require-ffmpeg` 让字幕集成测试在缺少工具时失败。本地暂时无法安装 FFmpeg 时，可去掉此选项运行其余用例，测试摘要会显示跳过项。测试运行器限制当前 Python 进程的外部 DNS/TCP，允许本机回环模拟服务。克隆源码就可以运行通用回归，无需开发机私人样片、便携包或服务密钥。[手动 Windows 工作流](../.github/workflows/ci.yml) · [离线测试入口](../.github/run_offline_tests.py)
 
 集中开发 0.12 的字幕决策、队列或语言切换时，可在同一窗口运行以下四个测试文件。
 
