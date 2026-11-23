@@ -10,7 +10,7 @@ Button {
     property var info: workspaces.info
     implicitWidth: 196; implicitHeight: 46
     padding: 9
-    Accessible.name: "切换学习工作区：" + info.name + "，" + info.languages
+    Accessible.name: qsTranslate("Tingmu", "切换学习工作区：") + (info.id === "default" ? qsTranslate("Tingmu", info.name) : info.name) + " · " + qsTranslate("TingmuLanguage", info.languages || "")
     onClicked: {
         if (menu.opened) menu.close()
         else { workspaces.refresh(); menu.open() }
@@ -23,8 +23,8 @@ Button {
         spacing: 7
         ColumnLayout {
             Layout.fillWidth: true; spacing: 0
-            Text { Layout.fillWidth: true; text: picker.info.name; color: Theme.text; font.family: Theme.font; font.pixelSize: 12; font.weight: Font.DemiBold; elide: Text.ElideRight; textFormat: Text.PlainText }
-            Text { Layout.fillWidth: true; text: picker.info.languages; color: Theme.accent; font.family: Theme.font; font.pixelSize: 10; elide: Text.ElideRight; textFormat: Text.PlainText }
+            Text { Layout.fillWidth: true; text: (picker.info.id === "default" ? qsTranslate("Tingmu", picker.info.name) : picker.info.name); color: Theme.text; font.family: Theme.font; font.pixelSize: 12; font.weight: Font.DemiBold; elide: Text.ElideRight; textFormat: Text.PlainText }
+            Text { Layout.fillWidth: true; text: qsTranslate("TingmuLanguage", picker.info.languages || ""); color: Theme.accent; font.family: Theme.font; font.pixelSize: 10; elide: Text.ElideRight; textFormat: Text.PlainText }
         }
         Canvas {
             Layout.preferredWidth: 10; Layout.preferredHeight: 6
@@ -44,7 +44,7 @@ Button {
         background: Rectangle { color: Theme.panel; border.color: Theme.line; radius: 8 }
         contentItem: ColumnLayout {
             spacing: 6
-            Text { text: "切换学习工作区"; color: Theme.muted; font.family: Theme.font; font.pixelSize: 12 }
+            Text { text: qsTranslate("Tingmu", "切换学习工作区"); color: Theme.muted; font.family: Theme.font; font.pixelSize: 12 }
             ListView {
                 id: list; objectName: "workspacePickerList"
                 model: picker.info.items; Layout.fillWidth: true
@@ -60,10 +60,10 @@ Button {
             Rectangle { Layout.fillWidth: true; height: 1; color: Theme.line }
             RowLayout {
                 Layout.fillWidth: true
-                TButton { objectName: "workspacePickerCreate"; Layout.fillWidth: true; text: "＋ 新建工作区"; onClicked: {menu.close(); picker.createRequested()} }
-                TButton { objectName: "workspacePickerManage"; Layout.fillWidth: true; text: "工作区设置"; onClicked: {menu.close(); picker.manageRequested()} }
+                TButton { objectName: "workspacePickerCreate"; Layout.fillWidth: true; text: qsTranslate("Tingmu", "＋ 新建工作区"); onClicked: {menu.close(); picker.createRequested()} }
+                TButton { objectName: "workspacePickerManage"; Layout.fillWidth: true; text: qsTranslate("Tingmu", "工作区设置"); onClicked: {menu.close(); picker.manageRequested()} }
             }
-            Text { visible: !!text; Layout.fillWidth: true; text: picker.info.error; color: Theme.error; wrapMode: Text.Wrap; textFormat: Text.PlainText; font.family: Theme.font; font.pixelSize: 11 }
+            Text { visible: !!text; Layout.fillWidth: true; text: qsTranslate("TingmuStatus", picker.info.error || ""); color: Theme.error; wrapMode: Text.Wrap; textFormat: Text.PlainText; font.family: Theme.font; font.pixelSize: 11 }
         }
     }
 }

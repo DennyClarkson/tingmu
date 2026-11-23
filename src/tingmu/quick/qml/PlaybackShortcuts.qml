@@ -12,6 +12,6 @@ Item {
     Shortcut{sequence:"Up";context:Qt.WindowShortcut;enabled:root.acceptsKeys;onActivated:backend.command("previousCue",{})}
     Shortcut{sequence:"Down";context:Qt.WindowShortcut;enabled:root.acceptsKeys;onActivated:backend.command("nextCue",{})}
     Shortcut{sequence:"F";context:Qt.WindowShortcut;enabled:root.acceptsKeys;onActivated:root.player.toggleFullscreen()}
-    Shortcut{sequence:"M";context:Qt.WindowShortcut;enabled:root.acceptsKeys;onActivated:backend.command("setMuted",{value:!backend.playback.muted})}
+    Shortcut{sequence:"M";context:Qt.WindowShortcut;enabled:root.acceptsKeys;onActivated:backend.command("setMuted",{value:!backend.playbackDetails.muted})}
     Shortcut{sequence:"Escape";context:Qt.WindowShortcut;enabled:root.active && root.ownsKeyboard && !!root.player && root.player.fullscreen && !root.player.settingsOpen;onActivated:root.player.toggleFullscreen()}
 }

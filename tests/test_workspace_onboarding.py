@@ -207,14 +207,14 @@ def test_current_language_change_waits_for_reply_and_respects_user_selected_chat
     assert bridge._active_session_id == selected["id"]
 
 
-def test_safe_initial_settings_survive_local_connection_clone_failure(setup, monkeypatch):
-    _, controller, executor, _ = setup
-    def failed_clone(origin, destination, source, target, **kwargs):
-        # Even a partially mutated settings object must not publish extra permission.
-        target.cloud_text_enabled = True
-        raise OSError("write failed")
-    monkeypatch.setattr("tingmu.workspace_text.clone_active_text_roles", failed_clone)
-    result = executor("create_study_workspace", {"name": "日语", "source": "zh-CN", "target": "ja"})
-    assert result["created"] and result["text_setup_error"]
-    persisted = controller._settings_for(result["workspace"]["id"])
+def test_remote_model_is_visible_before_target_workspace_consent(setup):
+    bridge, controller, executor, _ = setup
+    bridge.command("saveModel", {"provider": "custom", "base_url": "https://text.example/v1", "model": "teacher"})
+    ident = bridge.modelProfiles[0]["id"]
+    bridge.command("selectModel", {"role": "annotation", "id": ident})
+    target = create(executor)
+    persisted = controller._settings_for(target["id"])
     assert persisted.auto_prepare_media and not persisted.cloud_text_enabled
+    assert persisted.annotation_profile_id == ident
+    assert bridge.model_registry.text_role(persisted, "annotation") == (False, None)
+    assert not (controller.catalog.directory(target["id"]) / "model-profiles.json").exists()

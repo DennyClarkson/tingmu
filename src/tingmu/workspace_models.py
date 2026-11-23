@@ -1,15 +1,20 @@
 """Inspect and populate the same local model caches that the ASR worker reads."""
 
 import json
+import os
+from pathlib import Path
 import re
 import subprocess
 import sys
-import time
+import tempfile
+import threading
 
 from filelock import FileLock, Timeout
 
+from . import qwen_support, whisper_support
 from .media import QWEN_MODELS, _qwen_python
-from .runtime import cache_root, confined_path
+from .runtime import cache_root, confined_path, is_clean_install
+from .task_progress import TransferMeter
 
 WHISPER_MODELS = {
     "small": "Systran/faster-whisper-small",
@@ -34,6 +39,16 @@ def _assets(model):
     if model in WHISPER_MODELS:
         return confined_path(cache_root(), "models"), [WHISPER_MODELS[model]]
     raise ValueError("请选择可下载的本地识别模型")
+
+
+def _support(model):
+    if not is_clean_install():
+        return None
+    if model in QWEN_MODELS:
+        return qwen_support
+    if model in WHISPER_MODELS:
+        return whisper_support
+    return None
 
 
 def _cached(cache, repo, model):
@@ -105,6 +120,9 @@ def model_inventory(model):
         rows.append({"repository": repo, "complete": complete, "installed_bytes": size,
                      "estimated_bytes": REPOSITORY_BYTES[repo],
                      "download_bytes": 0 if complete else REPOSITORY_BYTES[repo]})
+    support = _support(model)
+    if support:
+        rows.append(support.inventory())
     installed = all(row["complete"] for row in rows)
     return {"model": model, "installed": installed,
             "cache_state": "complete" if installed else "incomplete" if any(
@@ -127,6 +145,9 @@ def model_status(model):
         cache, repositories = _assets(model)
         if model in QWEN_MODELS:
             _qwen_python()
+        support = _support(model)
+        if support and not support.inventory()["complete"]:
+            return "尚未检测到完整的识别模型支持文件"
         if not all(_cached(cache, repo, model) for repo in repositories):
             return "尚未检测到完整模型"
         return "已检测到本地模型文件"
@@ -137,31 +158,58 @@ def model_status(model):
 
 
 def _download_repo(model, repo, progress, cancelled):
-    argv = [sys.executable, "-m", "tingmu.workspace_models", model, repo]
-    started = time.monotonic()
-    with subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                          stderr=subprocess.DEVNULL, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)) as child:
-        try:
-            while child.poll() is None:
-                if cancelled():
-                    raise InterruptedError("模型下载已暂停，可重新下载以继续")
-                progress(f"正在下载 {repo} · {int(time.monotonic() - started)} 秒")
-                try:
-                    child.wait(timeout=1)
-                except subprocess.TimeoutExpired:
-                    pass
-        finally:
-            if child.poll() is None:
-                child.kill()
-                child.wait()
-        if child.returncode:
-            raise RuntimeError(f"下载 {repo} 失败，请检查 Hugging Face 网络连接和缓存盘空间后重试")
+    meter = TransferMeter(repo, progress)
+    progress(f"正在核对 {repo} 的文件和本地缓存")
+    with tempfile.TemporaryDirectory(dir=cache_root()) as temp:
+        events = os.path.join(temp, "transfer.jsonl")
+        ledger = Path(temp) / "partial-files.txt"
+        argv = [sys.executable, "-m", "tingmu.workspace_models", model, repo, str(ledger)]
+        with open(events, "wb") as writer, open(events, "rb") as reader, subprocess.Popen(
+            argv, stdin=subprocess.DEVNULL, stdout=writer, stderr=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        ) as child:
+            partial = b""
+            sample = None
+            try:
+                while True:
+                    finished = child.poll() is not None
+                    lines = (partial + reader.read()).split(b"\n")
+                    partial = lines.pop()
+                    if lines:
+                        sample = json.loads(lines[-1])
+                    if sample:
+                        meter.update(*sample, force=finished)
+                    if cancelled():
+                        raise InterruptedError("模型下载已暂停，可重新下载以继续")
+                    if finished:
+                        break
+                    try:
+                        child.wait(timeout=.4)
+                    except subprocess.TimeoutExpired:
+                        pass
+            finally:
+                if child.poll() is None:
+                    child.kill()
+                    child.wait()
+                if child.returncode and ledger.exists():
+                    cache, _ = _assets(model)
+                    blobs = confined_path(cache, "models--" + repo.replace("/", "--") + "/blobs")
+                    for name in ledger.read_text("ascii").splitlines():
+                        if re.fullmatch(r"[a-f0-9]{40,64}\.[a-f0-9]{8}\.incomplete", name):
+                            path = blobs / name
+                            if not _linked(path):
+                                path.unlink(missing_ok=True)
+            if child.returncode:
+                raise RuntimeError(f"下载 {repo} 失败，请检查 Hugging Face 网络连接和缓存盘空间后重试")
 
 
 def download_model(model, progress, cancelled):
     cache, repositories = _assets(model)
     if model in QWEN_MODELS:
         _qwen_python()
+    support = _support(model)
+    if support:
+        support.install(progress, cancelled)
     locks = cache / ".download-locks"
     if _linked(locks):
         raise ValueError("模型缓存必须位于当前应用目录内")
@@ -200,15 +248,75 @@ def _linked(path):
     return path.is_symlink() or path.is_junction()
 
 
-if __name__ == "__main__":
+def _fetch_snapshot(selected, repository):
     from huggingface_hub import snapshot_download
-    selected, repository = sys.argv[1:]
+    from tqdm import tqdm
     cache, allowed = _assets(selected)
     if repository not in allowed:
         raise ValueError("模型仓库无效")
-    if selected in QWEN_MODELS:
-        from .media import _qwen_snapshot
-        _qwen_snapshot(repository, str(cache))
-    else:
-        snapshot_download(repository, cache_dir=cache, allow_patterns=[
-            "config.json", "preprocessor_config.json", "model.bin", "tokenizer.json", "vocabulary.*"])
+    patterns = (["*.json", "*.safetensors", "*.txt", "*.tiktoken"] if selected in QWEN_MODELS else
+                ["config.json", "preprocessor_config.json", "model.bin", "tokenizer.json", "vocabulary.*"])
+    plan = snapshot_download(repository, cache_dir=cache, allow_patterns=patterns, dry_run=True)
+    if not plan:
+        raise ValueError("模型仓库未返回文件清单")
+    total = sum(f.file_size for f in plan) if all(f.file_size is not None for f in plan) else 0
+    cached = sum(f.file_size or 0 for f in plan if not f.will_download)
+    completed, received = cached, 0
+    lock = threading.Lock()
+
+    class TransferBar(tqdm):
+        def __init__(self, *args, **kwargs):
+            desc = kwargs.get("desc", "")
+            self.network = desc == "Downloading bytes"
+            self.file_bytes = desc.startswith("Reconstructing")
+            super().__init__(*args, **kwargs)
+
+        def display(self, *args, **kwargs):
+            pass
+
+        def update(self, n=1):
+            nonlocal completed, received
+            with lock:
+                super().update(n)
+                if self.network:
+                    received = max(0, received + n)
+                if self.file_bytes:
+                    completed = max(cached, completed + n)
+    stop = threading.Event()
+
+    def publish():
+        while not stop.wait(.25):
+            with lock:
+                print(json.dumps([completed, total, received]), flush=True)
+
+    print(json.dumps([cached, total, 0]), flush=True)
+    publisher = threading.Thread(target=publish, daemon=True)
+    publisher.start()
+    try:
+        snapshot_download(repository, revision=plan[0].commit_hash, cache_dir=cache,
+                          allow_patterns=patterns, tqdm_class=TransferBar)
+    finally:
+        stop.set()
+        publisher.join()
+    print(json.dumps([total or completed, total, received]), flush=True)
+
+
+if __name__ == "__main__":
+    from huggingface_hub import constants
+    # The default HTTP callback fires only every 10 MiB. Smaller reads expose the
+    # first transfer on slower links; Xet continues to use its own native events.
+    constants.DOWNLOAD_CHUNK_SIZE = min(constants.DOWNLOAD_CHUNK_SIZE, 128 * 1024)
+    model, repo, ledger = sys.argv[1:]
+    cache, _ = _assets(model)
+    blob_dir = confined_path(cache, "models--" + repo.replace("/", "--") + "/blobs")
+    with confined_path(cache_root(), ledger).open("x", encoding="ascii") as journal:
+        def record_partial(event, args):
+            # Hub uses process-unique temporary names. Record only files opened
+            # by this worker so cancellation never removes another caller's file.
+            if event == "open" and isinstance(args[0], str) and args[0].endswith(".incomplete") and args[1] == "w":
+                path = Path(args[0])
+                if path.parent.resolve() == blob_dir:
+                    journal.write(path.name + "\n")
+                    journal.flush()
+        sys.addaudithook(record_partial)
+        _fetch_snapshot(model, repo)

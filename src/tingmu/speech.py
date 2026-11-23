@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
+from .task_progress import Progress
 import wave
 
 import numpy as np
@@ -65,7 +66,8 @@ def isolate_vocals(source: Path, dest: Path, models: Path, check: Callable, prog
             mono = separated[context:context + count]
             output.write(np.clip(np.rint(mono * 32768), -32768, 32767).astype("<i2").tobytes())
             if progress and (start == 0 or start // stride % 8 == 0 or start + count == total):
-                progress(f"本地人声分离 {(start + count)/44100:.0f}/{total/44100:.0f} 秒")
+                progress(Progress(f"本地人声分离 {(start + count)/44100:.0f}/{total/44100:.0f} 秒",
+                                  activity="人声分离", done=(start + count)/44100, total=total/44100, unit="秒"))
 
 
 def _solo_changes(scores):
@@ -109,12 +111,13 @@ def detect_speaker_changes(audio: Path, model: Path, check: Callable, progress=N
                 if left <= sec < right and (not changes or absolute - changes[-1] > 0.18):
                     changes.append(round(float(absolute), 3))
             if progress and (begin % (step * 12) == 0 or last):
-                progress(f"本地换人检测 {min(total, begin + size)/16000:.0f}/{total/16000:.0f} 秒")
+                progress(Progress(f"本地换人检测 {min(total, begin + size)/16000:.0f}/{total/16000:.0f} 秒",
+                                  activity="换人检测", done=min(total, begin + size)/16000, total=total/16000, unit="秒"))
             if last:
                 break
     return changes
 
-def suppress_repetitive_background(source: Path, dest: Path, check: Callable):
+def suppress_repetitive_background(source: Path, dest: Path, check: Callable, progress=None):
     """Attenuate persistent frequency components in overlapping 4-second local windows."""
     width, hop, stride, context = 512, 128, 32000, 16000
     window = np.hanning(width + 1)[:-1].astype(np.float32)
@@ -138,3 +141,6 @@ def suppress_repetitive_background(source: Path, dest: Path, check: Callable):
             offset = start - left + width
             output.writeframesraw(np.clip(np.rint(filtered[offset:offset + end - start]),
                                           -32768, 32767).astype("<i2").tobytes())
+            if progress and (start // stride % 5 == 0 or end == total):
+                progress(Progress(f"频谱降噪 {end/16000:.0f}/{total/16000:.0f} 秒",
+                                  activity="频谱降噪", done=end/16000, total=total/16000, unit="秒"))

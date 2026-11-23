@@ -81,12 +81,13 @@ ColumnLayout {
             fontScale: 0.76
         }
     }
-    LabelText { text: "样式预设" }
+    LabelText { text: qsTranslate("Tingmu", "样式预设") }
     Choice {
         id: presets
         objectName: "captionPresetChoice"
         Layout.fillWidth: true
         readonly property var names: Object.keys(editor.savedStyles)
+        optionLabel: (i, value) => i <= Styles.presets.length ? qsTranslate("Tingmu", value) : value
         model: ["当前样式"].concat(Styles.presets.map(s => s.name), names)
         currentIndex: 0
         onActivated: {
@@ -98,11 +99,11 @@ ColumnLayout {
         }
     }
     RowLayout {
-        Field { id: presetName; objectName:"captionPresetName"; Layout.fillWidth: true; placeholderText: "自定义样式名"; maximumLength: 40 }
-        TButton { objectName:"saveCaptionPreset"; text: "保存样式"; enabled: !!presetName.text.trim() && !Styles.presets.some(s => s.name === presetName.text.trim()); onClicked: editor.saveNamed(presetName.text.trim()) }
-        TButton { text: "移除"; enabled: Object.keys(editor.savedStyles).indexOf(presetName.text.trim()) >= 0; onClicked: editor.removeNamed(presetName.text.trim()) }
+        Field { id: presetName; objectName:"captionPresetName"; Layout.fillWidth: true; placeholderText: qsTranslate("Tingmu", "自定义样式名"); maximumLength: 40 }
+        TButton { objectName:"saveCaptionPreset"; text: qsTranslate("Tingmu", "保存样式"); enabled: !!presetName.text.trim() && !Styles.presets.some(s => s.name === presetName.text.trim() || qsTranslate("Tingmu", s.name) === presetName.text.trim()); onClicked: editor.saveNamed(presetName.text.trim()) }
+        TButton { text: qsTranslate("Tingmu", "移除"); enabled: Object.keys(editor.savedStyles).indexOf(presetName.text.trim()) >= 0; onClicked: editor.removeNamed(presetName.text.trim()) }
     }
-    LabelText { text: "字体" }
+    LabelText { text: qsTranslate("Tingmu", "字体") }
     Choice {
         id: family
         Layout.fillWidth: true
@@ -111,23 +112,23 @@ ColumnLayout {
         onActivated: editor.change("family", currentText)
     }
     RowLayout {
-        Toggle { text: "粗体"; checked: editor.appearance.bold; onToggled: editor.change("bold", checked) }
-        Toggle { text: "斜体"; checked: editor.appearance.italic; onToggled: editor.change("italic", checked) }
-        Toggle { text: "背景框"; checked: editor.appearance.box; onToggled: editor.change("box", checked) }
+        Toggle { text: qsTranslate("Tingmu", "粗体"); checked: editor.appearance.bold; onToggled: editor.change("bold", checked) }
+        Toggle { text: qsTranslate("Tingmu", "斜体"); checked: editor.appearance.italic; onToggled: editor.change("italic", checked) }
+        Toggle { text: qsTranslate("Tingmu", "背景框"); checked: editor.appearance.box; onToggled: editor.change("box", checked) }
     }
-    NumberSetting { title: "字号"; key: "size"; low: 12; high: 64; unit: " px" }
-    ColorSetting { title: "文字颜色"; key: "fill" }
-    ColorSetting { title: "描边颜色"; key: "edge" }
-    NumberSetting { title: "描边宽度"; key: "outline"; low: 0; high: 5; unit: " px" }
-    NumberSetting { title: "阴影距离"; key: "shadow"; low: 0; high: 6; unit: " px" }
-    ColorSetting { visible: editor.appearance.box; title: "背景颜色"; key: "boxColor" }
-    NumberSetting { visible: editor.appearance.box; title: "背景浓度"; key: "boxOpacity"; low: 0; high: 100; unit: "%" }
-    LabelText { text: "字幕位置" }
+    NumberSetting { title: qsTranslate("Tingmu", "字号"); key: "size"; low: 12; high: 64; unit: " px" }
+    ColorSetting { title: qsTranslate("Tingmu", "文字颜色"); key: "fill" }
+    ColorSetting { title: qsTranslate("Tingmu", "描边颜色"); key: "edge" }
+    NumberSetting { title: qsTranslate("Tingmu", "描边宽度"); key: "outline"; low: 0; high: 5; unit: " px" }
+    NumberSetting { title: qsTranslate("Tingmu", "阴影距离"); key: "shadow"; low: 0; high: 6; unit: " px" }
+    ColorSetting { visible: editor.appearance.box; title: qsTranslate("Tingmu", "背景颜色"); key: "boxColor" }
+    NumberSetting { visible: editor.appearance.box; title: qsTranslate("Tingmu", "背景浓度"); key: "boxOpacity"; low: 0; high: 100; unit: "%" }
+    LabelText { text: qsTranslate("Tingmu", "字幕位置") }
     GridLayout {
         columns: 3
         Layout.fillWidth: true
         Repeater {
-            model: ["左上", "上中", "右上", "左中", "居中", "右中", "左下", "下中", "右下"]
+            model: [qsTranslate("Tingmu", "左上"), qsTranslate("Tingmu", "上中"), qsTranslate("Tingmu", "右上"), qsTranslate("Tingmu", "左中"), qsTranslate("Tingmu", "居中"), qsTranslate("Tingmu", "右中"), qsTranslate("Tingmu", "左下"), qsTranslate("Tingmu", "下中"), qsTranslate("Tingmu", "右下")]
             delegate: TButton {
                 required property int index
                 required property string modelData
@@ -139,7 +140,7 @@ ColumnLayout {
             }
         }
     }
-    NumberSetting { title: "水平边距"; key: "horizontalMargin"; low: 0; high: 25; unit: "%" }
-    NumberSetting { title: "垂直边距"; key: "verticalMargin"; low: 0; high: 30; unit: "%" }
-    LabelText { Layout.fillWidth: true; wrapMode: Text.Wrap; text: "样式应用于学习字幕、导入字幕和文字内嵌字幕。图像内嵌字幕保留片源字形。" }
+    NumberSetting { title: qsTranslate("Tingmu", "水平边距"); key: "horizontalMargin"; low: 0; high: 25; unit: "%" }
+    NumberSetting { title: qsTranslate("Tingmu", "垂直边距"); key: "verticalMargin"; low: 0; high: 30; unit: "%" }
+    LabelText { Layout.fillWidth: true; wrapMode: Text.Wrap; text: qsTranslate("Tingmu", "样式应用于学习字幕、导入字幕和文字内嵌字幕。图像内嵌字幕保留片源字形。") }
 }

@@ -12,7 +12,15 @@ from test_qml_v4 import find, invoke, quick as quick
 
 
 @pytest.fixture
-def text_server():
+def release_text_response():
+    event = threading.Event()
+    event.set()
+    yield event
+    event.set()
+
+
+@pytest.fixture
+def text_server(release_text_response):
     calls = []
 
     class Handler(BaseHTTPRequestHandler):
@@ -39,6 +47,9 @@ def text_server():
             if "segments" in data["cues"][0] and "translation" in data["cues"][0]:
                 role = "translation_review"
             calls.append((self.path, role, self.headers.get("Authorization")))
+            if not release_text_response.wait(timeout=15):
+                self.send_error(503)
+                return
             rows = []
             for cue in data["cues"]:
                 text = cue["text"]
@@ -107,6 +118,50 @@ def test_loopback_roles_survive_restart_with_remote_text_off(bridge, text_server
     with pytest.raises(ValueError, match="停用"):
         bridge._v4_send_chat("hello")
     assert len(calls) == 5
+
+
+def test_preparation_queue_shows_simultaneous_model_requests(quick, qtbot, tmp_path, text_server, release_text_response):
+    from tingmu.media import save_srt
+    from tingmu.models import Cue
+
+    _, bridge, _, window = quick
+    url, calls = text_server
+    bridge.set_languages("zh-CN", "en")
+    bridge._feature_command("textModelPolicy", {"mode": "local"})
+    profile = bridge.model_registry.save_profile({"provider": "lmstudio", "label": "本机测试",
+                                                  "model": "local-test", "base_url": url, "key_source": "none"})
+    for role in ("annotation", "review"):
+        bridge._feature_command("selectModel", {"role": role, "id": profile["id"]})
+    bridge.setting("llm_max_concurrency", 2)
+    movie = tmp_path / "dialogue.mkv"
+    movie.touch()
+    save_srt([Cue(str(n), n, n + 1, "Hello.") for n in range(84)], movie.with_suffix(".srt"))
+    invoke(window, "changeView", "prepare")
+    release_text_response.clear()
+    try:
+        bridge._enqueue([str(movie)])
+        bridge.command("startQueue", {})
+        qtbot.waitUntil(lambda: len(calls) >= 2, timeout=10000)
+        # Repeater delegates are visual children of the queue layout.
+        def waiting_bars():
+            todo = [window.contentItem()]
+            bars = []
+            while todo:
+                item = todo.pop()
+                if item.objectName() == "queueBatchProgressBar" and item.isVisible():
+                    if item.property("indeterminate"):
+                        bars.append(item)
+                todo.extend(item.childItems())
+            return bars
+        qtbot.waitUntil(lambda: len(waiting_bars()) >= 2, timeout=5000)
+        assert len({bar.property("batch")["id"] for bar in waiting_bars()}) == 2
+    finally:
+        release_text_response.set()
+    qtbot.waitUntil(lambda: not bridge.state["queueRunning"], timeout=20000)
+    assert bridge.jobs[0]["status"] == "completed", bridge.jobs[0]
+    doc = bridge.store.load_document(str(movie), bridge._settings.language)
+    assert len(doc.cues) == 84
+    assert all(cue.translation == "经复核的译文" for cue in doc.cues)
 
 
 def test_loopback_authentication_and_remote_role_boundaries(tmp_path):

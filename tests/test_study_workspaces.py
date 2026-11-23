@@ -91,8 +91,8 @@ def test_qml_switch_reopens_isolated_sessions_and_legacy_data(qapp, qtbot, tmp_p
         first.store.save_position(str(movie), 800)
         first.store.save_note(str(movie), Cue("old", 1, 2, "原文"), "旧笔记", first._settings.language)
         first.command("saveModel", {"provider": "ollama", "model": "first-workspace-model"})
-        private_model = first.modelProfiles[0]
-        first.command("selectModel", {"role": "companion", "id": private_model["id"]})
+        shared_model = first.modelProfiles[0]
+        first.command("selectModel", {"role": "companion", "id": shared_model["id"]})
         first.saveLayout({"preferences": {"privateDraft": "旧草稿"}})
         click(first_window, first_window.findChild(QObject, "workspacePicker"))
         assert first_window.findChild(QObject, "workspacePickerPopup").property("opened")
@@ -108,7 +108,8 @@ def test_qml_switch_reopens_isolated_sessions_and_legacy_data(qapp, qtbot, tmp_p
         assert not second.store.entries() and second.store.load_position(str(movie)) == 0
         assert second.activeSessionId != old_session and second.layout == {}
         assert second.settings["teaching_preferences"] == ""
-        assert second.modelProfiles == [] and second.settings["companion_profile_id"] == ""
+        assert second.modelProfiles == [shared_model] and second.settings["companion_profile_id"] == shared_model["id"]
+        assert not second.settings["cloud_text_enabled"]
         assert second.settings["source_language"] == second.settings["target_language"] == "ja"
         assert not second.settings["allow_audio_upload"]
         second.setting("asr_backend", "external")
@@ -133,7 +134,7 @@ def test_qml_switch_reopens_isolated_sessions_and_legacy_data(qapp, qtbot, tmp_p
         assert restored.activeSessionId == old_session
         assert restored.settings["asr_backend"] == "local"
         assert restored.settings["teaching_preferences"] == "原工作区偏好"
-        assert restored.settings["companion_profile_id"] == private_model["id"]
+        assert restored.settings["companion_profile_id"] == shared_model["id"]
         assert restored.layout["preferences"]["privateDraft"] == "旧草稿"
         assert len(restored.jobs) == 1 and restored.store.entries()[0]["note"] == "旧笔记"
         assert restored.store.load_position(str(movie)) == 800

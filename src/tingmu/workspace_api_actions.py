@@ -69,16 +69,13 @@ def apply_workspace_action(controller, name, args):
     profile = existing or registry.save_profile({"provider": args["provider"], "base_url": base, "model": model,
                                                  "label": model, "key_source": "none"})
     roles = ("annotation", "review", "companion") if args["role"] == "all" else (args["role"],)
-    for role in roles:
-        setattr(settings, role + "_profile_id", profile["id"])
-        setattr(settings, "provider" if role == "annotation" else role + "_provider", profile["provider"])
-        setattr(settings, "model" if role == "annotation" else role + "_model", model)
+    registry.assign(roles, profile["id"])
+    registry.load_roles(settings)
     if not settings.text_models_enabled:
         settings.cloud_text_enabled = False
     settings.text_models_enabled = True
     if "review" in roles:
         settings.review_enabled = True
     controller._save_settings(ident, settings)
-    if current:
-        bridge._refresh_models()
+    bridge._refresh_models()
     return {"saved": True, "roles": list(roles), "model": model, "connection_tested": False}

@@ -13,6 +13,17 @@ Dialog {
     palette.buttonText:Theme.text
     palette.highlight:Theme.accent
     palette.highlightedText:Theme.bg
+    function translateButtons() {
+        const labels = [[Dialog.Ok, qsTranslate("Tingmu", "确定")], [Dialog.Cancel, qsTranslate("Tingmu", "取消")],
+                        [Dialog.Close, qsTranslate("Tingmu", "关闭")], [Dialog.Discard, qsTranslate("Tingmu", "放弃")]]
+        for (const [kind, label] of labels) {
+            if (!(standardButtons & kind)) continue
+            const button = standardButton(kind)
+            if (button) button.text = label
+        }
+    }
+    Component.onCompleted: Qt.callLater(translateButtons)
+    Connections { target: interfaceLanguage; function onChanged() { root.translateButtons() } }
     background:Rectangle{color:Theme.panel;radius:10;border.color:Theme.line}
     header:Text {
         text:root.title;textFormat:Text.PlainText

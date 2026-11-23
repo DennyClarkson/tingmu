@@ -1,5 +1,6 @@
 """Constrain generated application files and SDK caches to this installation."""
 
+import json
 import os
 from pathlib import Path
 import sys
@@ -22,6 +23,17 @@ def installation_root() -> Path:
             return parent
     # A standalone installed wheel owns its package directory, not the user's home.
     return source.parent
+
+
+def is_clean_install() -> bool:
+    root = portable_root()
+    if root is None:
+        return False
+    try:
+        manifest = json.loads((root / "tingmu-portable.json").read_text("utf-8"))
+    except (FileNotFoundError, ValueError):
+        return False
+    return isinstance(manifest, dict) and manifest.get("clean_install") is True
 
 
 def confined_path(root: Path, path: Path | str) -> Path:

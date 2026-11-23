@@ -278,7 +278,7 @@ def test_model_selection_wires_all_roles_and_cloud_off_blocks_chat(bridge, monke
     bridge._settings.cloud_text_enabled = False
     with pytest.raises(ValueError, match="云端文本"):
         bridge._v4_send_chat("must stay local")
-    with pytest.raises(ValueError, match="云端文本"):
+    with pytest.raises(ValueError, match="当前工作区的使用权限.*允许远程文本 API"):
         bridge._organize_notebook()
     assert not bridge._workers
 

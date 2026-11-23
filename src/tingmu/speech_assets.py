@@ -10,6 +10,7 @@ import urllib.request
 from filelock import FileLock, Timeout
 
 from .runtime import confined_path
+from .task_progress import TransferMeter
 
 RELEASE = "https://github.com/k2-fsa/sherpa-onnx/releases/download/"
 MODELS = [
@@ -20,6 +21,17 @@ MODELS = [
      "24615ee884c897d9d2ba09bb4d30da6bb1b15e685065962db5b02e76e4996488",
      {"model.onnx": 5992913, "LICENSE": 1061}),
 ]
+ARCHIVE_BYTES = {"spleeter": 35_271_738, "pyannote": 6_958_444}
+
+
+def planned_download_bytes(cache):
+    total = 0
+    for family, _, _, digest, files in MODELS:
+        archive = confined_path(cache, "speech-downloads/" + family + ".tar.bz2")
+        if not _complete(confined_path(cache, "speech-models/" + family), files):
+            if not archive.is_file() or _sha256(archive) != digest:
+                total += ARCHIVE_BYTES[family]
+    return total
 
 
 def _complete(target, files):
@@ -81,13 +93,16 @@ def _install_locked(cache, downloads, progress, check):
                 partial = Path(folder) / "download"
                 progress(f"正在连接并下载 {family}")
                 with urllib.request.urlopen(f"{RELEASE}{tag}/{name}.tar.bz2", timeout=30) as source:
+                    meter = TransferMeter(family, progress)
+                    total = ARCHIVE_BYTES[family]
+                    meter.update(0, total, 0)
                     with partial.open("wb") as output:
                         received = 0
                         while block := source.read(512 * 1024):
                             check()
                             output.write(block)
                             received += len(block)
-                            progress(f"下载 {family} · 已接收 {received/1048576:.1f} MiB")
+                            meter.update(received, total, received, force=received == total)
                 if _sha256(partial) != digest:
                     raise ValueError(f"{name} SHA256 校验失败")
                 partial.replace(archive)

@@ -10,6 +10,7 @@ from bisect import bisect_right
 from contextlib import contextmanager
 import hashlib
 import html
+from importlib.metadata import distribution
 import json
 import math
 import os
@@ -24,7 +25,8 @@ import threading
 from typing import Callable
 
 from .models import Cue
-from .runtime import cache_root as _cache_root, confined_path, inside_installation, portable_root
+from .task_progress import Progress
+from .runtime import cache_root as _cache_root, confined_path, inside_installation, is_clean_install, portable_root
 
 MEDIA_EXTENSIONS = frozenset({
     ".mp4", ".mkv", ".avi", ".mov", ".webm", ".m4v", ".wmv", ".flv",
@@ -316,13 +318,13 @@ def prepared_audio(media_path: Path, *, audio_track=0, start=0, duration=None, s
         def check():
             _check_cancelled(cancelled)
         check()
-        report(f"正在提取音轨 {audio_track + 1}")
+        report(Progress(f"正在提取音轨 {audio_track + 1}", activity="提取音轨"))
         method = "off"
         if suppress_bgm:
             from .speech import isolate_vocals, speech_model_status, suppress_repetitive_background
             method = speech_model_status(cache)["bgm"]
         if method == "spleeter-2stems-fp16":
-            report("Spleeter 正在本地分离人声与伴奏")
+            report(Progress("Spleeter 正在本地分离人声与伴奏", activity="提取立体声音轨"))
             source = _extract_pcm(media_path, folder / "stereo.pcm", audio_track, start, duration,
                                   cancelled, channels=2, rate=44100, fmt="s16le")
             vocal = folder / "vocal.pcm"
@@ -336,9 +338,9 @@ def prepared_audio(media_path: Path, *, audio_track=0, start=0, duration=None, s
             audio = extract_audio(media_path, folder / "audio.wav", audio_track, start, duration,
                                   cancelled=cancelled)
             if suppress_bgm:
-                report("本机未安装 Spleeter，使用频谱背景抑制")
+                report(Progress("本机未安装 Spleeter，使用频谱背景抑制", activity="频谱降噪"))
                 filtered = folder / "foreground.wav"
-                suppress_repetitive_background(audio, filtered, check)
+                suppress_repetitive_background(audio, filtered, check, progress)
                 audio = filtered
         check()
         if metadata_out is not None:
@@ -443,13 +445,26 @@ def _asr_worker(request_path: Path) -> int:
         if language is not None and language not in engine.supported_languages:
             raise ValueError(f"模型 {request['model']} 不支持语言 {language}。粤语请使用 large-v3 或 large-v3-turbo。")
         turns = request.get("speaker_changes", [])
+        assets = distribution("faster-whisper").locate_file("faster_whisper/assets")
+        vad_filter = any(path.is_file() for path in assets.glob("silero_vad*.onnx"))
+        if not vad_filter and is_clean_install():
+            from . import whisper_support
+            if whisper_support.inventory()["complete"]:
+                from faster_whisper import vad
+                # This worker handles one track. The upstream VAD loader takes
+                # no path argument and reads this directory on first use.
+                vad.get_assets_path = lambda: str(whisper_support.SUPPORT.path())
+                vad_filter = True
+        if not vad_filter:
+            _worker_emit({"progress": "未安装 Silero 语音活动检测模型，Whisper 将直接转写完整音轨。"})
         segments, info = engine.transcribe(_read_pcm_audio(request["audio"]), language=language, task="transcribe",
-                                          beam_size=5, vad_filter=True,
+                                          beam_size=5, vad_filter=vad_filter,
                                           word_timestamps=bool(turns),
                                           initial_prompt=request.get("initial_prompt"),
                                           condition_on_previous_text=False,
                                           vad_parameters={"min_silence_duration_ms": 500})
-        _worker_emit({"progress": f"开始识别 {info.duration:.1f} 秒音频（语言 {info.language}）"})
+        _worker_emit({"progress": f"开始识别 {info.duration:.1f} 秒音频（语言 {info.language}）",
+                      "metrics": {"activity": "语音识别", "done": 0, "total": float(info.duration), "unit": "秒"}})
         cues, raw_segments = [], []
         for index, segment in enumerate(segments):
             # Do not normalize/translate the model output; preserve raw text separately.
@@ -472,13 +487,16 @@ def _asr_worker(request_path: Path) -> int:
                                      "cue_ids": [part.id for part in parts],
                                      "words": [{"text": w.word, "start": float(request["start"] + w.start),
                                                 "end": float(request["start"] + w.end)} for w in (words or [])]})
-            _worker_emit({"progress": f"已识别 {segment.end:.1f}/{info.duration:.1f} 秒 · {len(cues)} 句"})
+            done = min(segment.end, info.duration)
+            _worker_emit({"progress": f"已识别 {done:.1f}/{info.duration:.1f} 秒 · {len(cues)} 句",
+                          "metrics": {"activity": "语音识别", "done": float(done), "total": float(info.duration), "unit": "秒"}})
         if request.get("raw_output"):
             Path(request["raw_output"]).write_text(json.dumps({"model": request["model"], "complete": True,
                                                                 "segments": raw_segments}, ensure_ascii=False),
                                                    encoding="utf-8")
         Path(request["result"]).write_text(json.dumps(cues, ensure_ascii=False), encoding="utf-8")
-        _worker_emit({"done": True, "device": device, "compute_type": compute, "cues": len(cues)})
+        _worker_emit({"done": True, "device": device, "compute_type": compute, "vad_filter": vad_filter,
+                      "cues": len(cues)})
         return 0
     except Exception as exc:
         _worker_emit({"error": str(exc), "error_type": type(exc).__name__})
@@ -591,7 +609,8 @@ def _qwen_worker(request: dict) -> int:
     for chunk_index, (begin, finish) in enumerate(_audio_windows(len(audio), chunk_samples)):
         chunk = audio[begin:finish]
         offset, duration = begin / sample_rate, len(chunk) / sample_rate
-        _worker_emit({"progress": f"Qwen 正在识别与对齐 {offset:.1f}–{offset + duration:.1f}/{len(audio)/sample_rate:.1f} 秒"})
+        _worker_emit({"progress": f"Qwen 正在识别与对齐 {offset:.1f}–{offset + duration:.1f}/{len(audio)/sample_rate:.1f} 秒",
+                      "metrics": {"activity": "识别与对齐", "done": offset, "total": len(audio)/sample_rate, "unit": "秒"}})
         with torch.inference_mode():
             result = engine.transcribe(audio=(chunk, sample_rate), language=language,
                                        context=context, return_time_stamps=True)[0]
@@ -615,7 +634,8 @@ def _qwen_worker(request: dict) -> int:
         if request.get("raw_output"):
             Path(request["raw_output"]).write_text(json.dumps({"model": repo, "complete": False,
                                                                 "chunks": raw_chunks}, ensure_ascii=False, indent=2), encoding="utf-8")
-        _worker_emit({"progress": f"Qwen 已完成 {offset + duration:.1f}/{len(audio)/sample_rate:.1f} 秒 · {len(cues)} 句"})
+        _worker_emit({"progress": f"Qwen 已完成 {offset + duration:.1f}/{len(audio)/sample_rate:.1f} 秒 · {len(cues)} 句",
+                      "metrics": {"activity": "识别与对齐", "done": offset + duration, "total": len(audio)/sample_rate, "unit": "秒"}})
     Path(request["result"]).write_text(json.dumps(cues, ensure_ascii=False), encoding="utf-8")
     # Probe callers can request full raw aligned units for auditable model comparison.
     if request.get("raw_output"):
@@ -684,9 +704,11 @@ def _run_worker(request: dict, temp_dir: Path, progress, cancelled) -> tuple[boo
                 except json.JSONDecodeError:
                     continue
                 if "progress" in event and progress:
-                    progress(event["progress"])
+                    progress(Progress(event["progress"], **event.get("metrics", {})))
                 if "error" in event:
                     error = event["error"]
+                if event.get("done") and type(event.get("vad_filter")) is bool:
+                    request["vad_filter"] = event["vad_filter"]
                 done = done or event.get("done", False)
             proc.wait()
             stderr.seek(0)
@@ -711,6 +733,8 @@ def _transcription_metadata(request: dict) -> dict:
     if not qwen_model:
         result["asr_runtime"] = {"device": request["device"],
                                  "compute_type": "float16" if request["device"] == "cuda" else "int8"}
+        if "vad_filter" in request:
+            result["asr_runtime"]["vad_filter"] = request["vad_filter"]
         if request.get("raw_output") and Path(request["raw_output"]).is_file():
             result["asr_audit_path"] = str(request["raw_output"])
         return result
@@ -790,6 +814,12 @@ def transcribe(media_path: Path, language: str = "yue", model: str = "large-v3-t
     _check_cancelled(cancelled)
     if _qwen_model_id(model):
         _qwen_python()  # Fail before extracting the media if optional environment is absent.
+    if allow_model_downloads and is_clean_install():
+        from .workspace_models import WHISPER_MODELS, download_model
+        selected = model.lower().removeprefix("qwen/") if _qwen_model_id(model) else model
+        if selected in QWEN_MODELS or selected in WHISPER_MODELS:
+            download_model(selected, progress or (lambda _: None), cancelled or (lambda: False))
+            allow_model_downloads = False
     cache = _cache_root()
     cache.mkdir(parents=True, exist_ok=True)
     if (_qwen_model_id(model) or speaker_turns or audit_dir is not None) and raw_output is None:
@@ -828,7 +858,7 @@ def transcribe(media_path: Path, language: str = "yue", model: str = "large-v3-t
         for attempt in (["cuda", "cpu"] if device == "auto" else [device]):
             _check_cancelled(cancelled)
             if progress:
-                progress("正在加载共享目录中的本地语音模型。")
+                progress(Progress("正在加载共享目录中的本地语音模型。", activity="加载模型"))
             request["device"] = attempt
             success, error = _run_worker(request, folder, progress, cancelled)
             if success:

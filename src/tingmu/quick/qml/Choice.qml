@@ -2,6 +2,17 @@ import QtQuick
 import QtQuick.Controls.Basic
 ComboBox {
     id:control
+    // Translating the model itself resets Qt's currentIndex when the language changes.
+    // Keep selection data stable and translate only the closed and open labels.
+    property bool translateOptions: false
+    property var optionLabel: null
+    function labelAt(index, value) {
+        if (index < 0 || value === undefined || value === null) return ""
+        if (optionLabel) return optionLabel(index, value)
+        return translateOptions ? qsTranslate("Tingmu", value) : value
+    }
+    displayText: labelAt(currentIndex, currentText)
+    Accessible.name: displayText
     implicitHeight:36;implicitWidth:180
     font.family:Theme.font;font.pixelSize:12
     leftPadding:12;rightPadding:30
@@ -20,7 +31,7 @@ ComboBox {
         required property var modelData
         required property int index
         width:control.popup.width-12;implicitHeight:38
-        text:control.textRole ? modelData[control.textRole] : modelData
+        text:control.labelAt(index, control.textRole ? modelData[control.textRole] : modelData)
         font:control.font;leftPadding:28;rightPadding:12
         contentItem:Text{textFormat:Text.PlainText;text:option.text;color:option.highlighted ? Theme.accent : Theme.text;font:control.font;elide:Text.ElideRight;verticalAlignment:Text.AlignVCenter}
         background:Rectangle{color:option.highlighted ? Theme.selection : "transparent";radius:4}

@@ -155,9 +155,10 @@ class CompanionTests(unittest.TestCase):
         surfaces = {
             "Main.qml": ("打开视频…", "添加多个视频…", "打开文件夹…", "独立聊天窗口", "观看布局", "准备布局"),
             "LibraryPanel.qml": ("＋ 文件", "文件夹", "加入处理队列", "全选"),
-            "QueuePanel.qml": ("开始队列", "清除已完成", "全文文本复核", "默认批量讲解", "管理模型与任务分配"),
-            "WorkspaceSetup.qml": ("语音识别", "文本模型与 API"),
-            "TextModelPolicy.qml": ("停用文本模型", "仅本机 API", "允许远程文本 API"),
+            "QueuePanel.qml": ("开始队列", "清除已完成", "全文文本复核", "全局默认批量讲解", "管理全局模型与任务分配"),
+            "WorkspaceSetup.qml": ("语音识别", "文本模型与 API", "管理全局连接与任务分配…"),
+            "ModelManager.qml": ("全局文本模型", "＋ 新建连接", "任务分配", "全局任务分配", "高级选项"),
+            "TextModelPolicy.qml": ("当前工作区的使用权限", "停用文本模型", "仅本机 API", "允许远程文本 API"),
             "ChatPanel.qml": ("对话设置", "管理模型连接", "发送", "新对话", "停止", "重试"),
             "SubtitlePanel.qml": ("字幕偏移 · 毫秒", "短句间隙衔接 · 毫秒", "导出字幕"),
             "PlayerPanel.qml": ("全屏伴侣浮层", "显示浮层", "透明度", "显示学习字幕", "准备当前视频"),

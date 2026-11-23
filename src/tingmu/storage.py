@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import sqlite3
 import tempfile
+import unicodedata
 import uuid
 
 from .models import AppSettings, Cue, LanguagePair, StudyDocument, Token
@@ -17,6 +18,17 @@ from .models import AppSettings, Cue, LanguagePair, StudyDocument, Token
 
 def canonical_path(path: str | Path) -> str:
     return str(Path(path).expanduser().resolve())
+
+
+def word_key(text: str, target_language: str) -> str:
+    """Match sentence-initial capitalization while keeping accents, acronyms and mixed case."""
+    word = unicodedata.normalize("NFC", text)
+    if not word or not word[0].isupper() or any(c.isupper() for c in word[1:]):
+        return word
+    first = word[0]
+    if target_language.lower().replace("_", "-").split("-")[0] in {"tr", "az"}:
+        first = {"I": "ı", "İ": "i"}.get(first, first)
+    return unicodedata.normalize("NFC", first.lower() + word[1:])
 
 
 def media_fingerprint(path: str | Path) -> dict:
@@ -70,6 +82,17 @@ class Store:
                     PRIMARY KEY(media_path, source_language, target_language)
                 );
             """)
+            db.execute("BEGIN IMMEDIATE")
+            if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='word_forms'").fetchone():
+                db.execute("""CREATE TABLE word_forms(target_language TEXT NOT NULL, text TEXT NOT NULL,
+                              word_key TEXT NOT NULL, PRIMARY KEY(target_language,text))""")
+                db.execute("CREATE INDEX word_forms_key ON word_forms(target_language,word_key,text)")
+                forms = db.execute("SELECT DISTINCT target_language,text FROM entries WHERE kind='word'").fetchall()
+                if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='notebook_sources'").fetchone():
+                    forms += db.execute("""SELECT DISTINCT target_language,json_extract(entry_json,'$.text')
+                                           FROM notebook_sources WHERE json_extract(entry_json,'$.kind')='word'""").fetchall()
+                db.executemany("INSERT OR IGNORE INTO word_forms VALUES (?,?,?)",
+                               ((lang, text, word_key(text, lang)) for lang, text in forms))
         from .portable_paths import migrate_portable_paths
         migrate_portable_paths(self)
 
@@ -84,20 +107,27 @@ class Store:
             db.close()
 
     def load_settings(self) -> AppSettings:
+        from .providers import ModelRegistry
+        from .runtime import is_clean_install
+
+        settings = AppSettings()
         path = self.data_dir / "settings.json"
-        if not path.exists():
-            return AppSettings()
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-            if not isinstance(data, dict):
-                return AppSettings()
-            allowed = {f.name for f in fields(AppSettings)}
-            return AppSettings(**{k: v for k, v in data.items() if k in allowed})
+            if isinstance(data, dict):
+                allowed = {f.name for f in fields(AppSettings)}
+                settings = AppSettings(**{k: v for k, v in data.items() if k in allowed})
         except (OSError, ValueError, TypeError):
-            return AppSettings()
+            if is_clean_install():
+                settings.text_models_enabled = settings.cloud_text_enabled = False
+        return ModelRegistry(self.data_dir).load_roles(settings)
 
     def save_settings(self, settings: AppSettings) -> None:
-        atomic_json(self.data_dir / "settings.json", asdict(settings))
+        from .global_models import workspace_preferences
+        from .providers import ModelRegistry
+
+        ModelRegistry(self.data_dir).save_role_changes(settings)
+        atomic_json(self.data_dir / "settings.json", workspace_preferences(settings))
 
     def _document_path(self, media_path: str, language: LanguagePair) -> Path:
         identity = json.dumps([canonical_path(media_path), asdict(language)], sort_keys=True)
@@ -170,14 +200,16 @@ class Store:
             self._recover_material(path)
             if path.exists():
                 try:
-                    previous = json.loads(path.read_bytes()).get("metadata", {}).get("cue_corrections", {})
+                    metadata = json.loads(path.read_bytes()).get("metadata", {})
+                    previous = metadata.get("cue_corrections", {})
                 except (ValueError, AttributeError):
                     # Replacement of an unreadable cache must retain its original bytes.
-                    self._backup_material(path)
-                    previous = {}
-                if previous and previous != document.metadata.get("cue_corrections", {}):
-                    if not replace_existing:
-                        raise ValueError("当前字幕已有新的逐句修订，请重新读取材料。")
+                    metadata, previous = None, {}
+                replaced_corrections = previous and previous != document.metadata.get("cue_corrections", {})
+                if replaced_corrections and not replace_existing:
+                    raise ValueError("当前字幕已有新的逐句修订，请重新读取材料。")
+                if (metadata is None or replaced_corrections or
+                        bool(metadata.get("subtitle_plan")) != bool(document.metadata.get("subtitle_plan"))):
                     self._backup_material(path)
             return self._save_document(document)
 
@@ -260,25 +292,30 @@ class Store:
             self._save_document(document)
         return True
 
-    def _save_entry(self, kind: str, media_path: str, cue: Cue, language: LanguagePair,
-                    text: str, reading: str = "", meaning: str = "", note: str = "") -> None:
-        with self._connection() as db:
-            db.execute("""
+    def _save_entry(self, db, kind: str, media_path: str, cue: Cue, language: LanguagePair,
+                    text: str, reading: str = "", meaning: str = "", note: str | None = "") -> int:
+        if kind == "word":
+            db.execute("INSERT OR IGNORE INTO word_forms VALUES (?,?,?)",
+                       (language.target, text, word_key(text, language.target)))
+        return db.execute("""
                 INSERT INTO entries(kind,media_path,cue_id,start,text,reading,meaning,note,sentence,
                                     source_language,target_language,created_at)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(kind,media_path,cue_id,text,source_language,target_language)
                 DO UPDATE SET reading=excluded.reading, meaning=excluded.meaning,
-                              note=excluded.note, sentence=excluded.sentence
-            """, (kind, canonical_path(media_path), cue.id, cue.start, text, reading, meaning, note,
-                  cue.text, language.source, language.target, datetime.now(timezone.utc).isoformat()))
+                              note=COALESCE(?, entries.note), sentence=excluded.sentence
+                RETURNING id
+            """, (kind, canonical_path(media_path), cue.id, cue.start, text, reading, meaning, note or "",
+                  cue.text, language.source, language.target, datetime.now(timezone.utc).isoformat(), note)).fetchone()[0]
 
     def save_word(self, media_path: str, cue: Cue, token: Token, language: LanguagePair) -> None:
-        self._save_entry("word", media_path, cue, language, token.text, token.reading, token.meaning)
+        with self._connection() as db:
+            self._save_entry(db, "word", media_path, cue, language, token.text, token.reading, token.meaning, note=None)
 
-    def save_note(self, media_path: str, cue: Cue, note: str, language: LanguagePair) -> None:
-        self._save_entry("note", media_path, cue, language, cue.text,
-                         meaning=cue.translation, note=note)
+    def save_note(self, media_path: str, cue: Cue, note: str | None, language: LanguagePair) -> None:
+        with self._connection() as db:
+            self._save_entry(db, "note", media_path, cue, language, cue.text,
+                             meaning=cue.translation, note=note)
 
     def entries(self, media_path: str | None = None) -> list[dict]:
         with self._connection() as db:

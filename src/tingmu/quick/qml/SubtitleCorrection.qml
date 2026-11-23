@@ -6,7 +6,7 @@ import "Style.js" as S
 AppDialog {
     id: editor
     objectName: "subtitleCorrectionDialog"
-    title: "纠正此句"
+    title: qsTranslate("Tingmu", "纠正此句")
     modal: true
     parent: Overlay.overlay
     anchors.centerIn: parent
@@ -41,15 +41,15 @@ AppDialog {
             ColumnLayout {
                 width: scroll.availableWidth
                 spacing: 10
-                Text { color: Theme.accent; font.family: Theme.font; text: S.time((editor.captured.start || 0)*1000) + "  /  已选字幕" }
+                Text { color: Theme.accent; font.family: Theme.font; text: S.time((editor.captured.start || 0)*1000) + qsTranslate("Tingmu", "  /  已选字幕") }
                 Text { Layout.fillWidth: true; text: editor.captured.text || ""; textFormat: Text.PlainText; wrapMode: Text.Wrap; color: Theme.text; font.family: Theme.font; font.pixelSize: 18 }
-                Label { text: "你确认的说法或意思"; font.family: Theme.font; color: Theme.text }
+                Label { text: qsTranslate("Tingmu", "你确认的说法或意思"); font.family: Theme.font; color: Theme.text }
                 TextArea {
                     id: guidance
                     objectName: "subtitleCorrectionGuidance"
                     Layout.fillWidth: true
                     Layout.preferredHeight: Math.max(88, implicitHeight)
-                    placeholderText: "例如：这里说的是「落車」，意思是下车，请一起改正字幕和讲解。"
+                    placeholderText: qsTranslate("Tingmu", "例如：这里说的是「落車」，意思是下车，请一起改正字幕和讲解。")
                     wrapMode: TextEdit.Wrap
                     readOnly: editor.waiting || editor.saved
                     selectByMouse: true
@@ -64,10 +64,10 @@ AppDialog {
                     color: editor.saved ? Theme.accent : Theme.text
                     textFormat: Text.PlainText
                     wrapMode: Text.Wrap
-                    text: editor.localError || (editor.saved ? "字幕和讲解已保存" :
-                        !editor.reply ? "请在本次对话中查看进度。" :
-                        editor.reply.error || (["pending","streaming"].includes(editor.reply.status) ? "伴侣正在复核…" :
-                        "本次未写入修改，请查看伴侣答复。"))
+                    text: qsTranslate("TingmuStatus", editor.localError || "") || (editor.saved ? qsTranslate("Tingmu", "字幕和讲解已保存") :
+                        !editor.reply ? qsTranslate("Tingmu", "请在本次对话中查看进度。") :
+                        qsTranslate("TingmuStatus", editor.reply.error || "") || (["pending","streaming"].includes(editor.reply.status) ? qsTranslate("Tingmu", "伴侣正在复核…") :
+                        qsTranslate("Tingmu", "本次未写入修改，请查看伴侣答复。")))
                 }
                 Text { Layout.fillWidth: true; visible: !!editor.reply && !!editor.reply.content; text: editor.reply ? editor.reply.content : ""; textFormat: Text.PlainText; wrapMode: Text.Wrap; color: Theme.text; font.family: Theme.font }
                 TextEdit {
@@ -76,7 +76,7 @@ AppDialog {
                     selectByMouse: true
                     textFormat: TextEdit.PlainText
                     wrapMode: TextEdit.WrapAnywhere
-                    text: "工作区字幕\n" + (editor.captured.srtPath || "") + "\n学习讲解\n" + (editor.captured.documentPath || "")
+                    text: qsTranslate("Tingmu", "工作区字幕\n") + (editor.captured.srtPath || "") + qsTranslate("Tingmu", "\n学习讲解\n") + (editor.captured.documentPath || "")
                     color: Theme.muted; font.family: Theme.font; font.pixelSize: 11
                 }
             }
@@ -84,10 +84,10 @@ AppDialog {
         RowLayout {
             Layout.fillWidth: true
             Item { Layout.fillWidth: true }
-            TButton { text: "关闭"; quiet: true; onClicked: editor.close() }
+            TButton { text: qsTranslate("Tingmu", "关闭"); quiet: true; onClicked: editor.close() }
             TButton {
                 objectName: "submitSubtitleCorrection"
-                text: editor.messageId && !editor.waiting && !editor.saved ? "重新复核并保存" : "复核并保存"
+                text: editor.messageId && !editor.waiting && !editor.saved ? qsTranslate("Tingmu", "重新复核并保存") : qsTranslate("Tingmu", "复核并保存")
                 primary: true
                 enabled: !editor.saved && !editor.waiting && !!guidance.text.trim() && !backend.state.chatBusy
                 onClicked: {

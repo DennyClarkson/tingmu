@@ -44,8 +44,37 @@ class InboxScanner:
         self.folder = Path(folder)
         self.quiet_seconds = quiet_seconds
         self.observed = {}
+        self._stages = {}
 
-    def scan(self, *, now=None, cancelled=lambda: False):
+    def document_stages(self, store, ready, language, cancelled):
+        """Check only changed study files on a stable inbox scan."""
+        stages, refreshed = {}, {}
+        for media, fingerprint in ready.items():
+            if cancelled():
+                return {}
+            document_path, _ = store.material_paths(media, language)
+            pending = document_path.with_suffix(".pending").exists()
+            try:
+                stat = document_path.stat()
+                version = (document_path, stat.st_mtime_ns, stat.st_size, stat.st_ino, fingerprint)
+            except FileNotFoundError:
+                version = None
+            previous = self._stages.get(media)
+            if version is not None and not pending and previous and previous[0] == version:
+                stage = previous[1]
+                refreshed[media] = previous
+            elif version is not None or pending:
+                document = store.load_document(media, language)
+                stage = document.metadata.get("stage", "") if document else ""
+                if document is not None and not pending:
+                    refreshed[media] = (version, stage)
+            else:
+                stage = ""
+            stages[media] = stage
+        self._stages = refreshed
+        return stages
+
+    def scan(self, *, now=None, cancelled=lambda: False, agent_workflow=False):
         now = time.monotonic() if now is None else now
         files = {}
         errors = []
@@ -85,6 +114,9 @@ class InboxScanner:
             present.append(path)
             companions = {p: fp for p, stem, fp in subtitles.get(media.parent, [])
                           if stem == media.stem or stem.startswith(media.stem + ".")}
+            if agent_workflow and subtitles.get(media.parent):
+                from .subtitle_sources import discover_sidecars
+                companions.update({str(p): files[str(p)] for p in discover_sidecars(media) if str(p) in files})
             signature = (fingerprint, companions)
             previous, since = self.observed.get(path, (None, now))
             since = since if signature == previous else now
@@ -102,6 +134,10 @@ class InboxScanner:
 def preparation_block_reason(settings, paths):
     """Return actionable reason without starting inference or downloading anything."""
     paths = [Path(path) for path in paths]
+    # Embedded and bilingual captions can eliminate ASR entirely. Inspect them once
+    # in the queue worker; automatic jobs still prohibit downloads and enforce consent.
+    if settings.preparation_workflow == "subtitle_agent":
+        return ""
     if not paths or all(find_subtitle(path, settings.target_language) for path in paths):
         return ""
     if settings.asr_backend == "external":

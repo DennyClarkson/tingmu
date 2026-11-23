@@ -9,7 +9,6 @@ import copy
 import ipaddress
 import http.client
 import json
-import os
 import re
 import socket
 import threading
@@ -17,11 +16,11 @@ import time
 import urllib.error
 import urllib.request
 import uuid
-from pathlib import Path
 from email.utils import parsedate_to_datetime
 from math import ceil
 from urllib.parse import urlsplit, quote
 
+from .global_models import GlobalModelStore
 from .credentials import CredentialError, protect, unprotect
 
 
@@ -50,8 +49,6 @@ PRESETS = [
     {"provider": "local_compatible", "label": "本机 OpenAI 兼容服务", "protocol": "openai", "base_url": "http://127.0.0.1:8000/v1", "env_var": "", "key_source": "none", "model": ""},
     {"provider": "custom", "label": "自定义 OpenAI 兼容", "protocol": "openai", "base_url": "", "env_var": "", "model": ""},
 ]
-_LOCKS = {}
-_LOCKS_LOCK = threading.Lock()
 LOCAL_PROVIDERS = frozenset({"ollama", "lmstudio", "local_compatible"})
 
 
@@ -542,7 +539,7 @@ def request(config, path, body=None, *, timeout=120, on_delta=None, cancelled=No
     if source == "none":
         key = ""
     elif not key:
-        raise ProviderError("未配置可用 API 密钥；请设置环境变量或重新输入密钥。")
+        raise ProviderError("未配置可用 API 密钥；请设置环境变量或重新输入密钥。", category="credentials")
     if key:
         from .diagnostics import register_secret
         register_secret(key)
@@ -625,43 +622,9 @@ def request(config, path, body=None, *, timeout=120, on_delta=None, cancelled=No
         emit_reasoning.finish()
 
 
-class ModelRegistry:
-    def __init__(self, data_dir):
-        self._path = Path(data_dir) / "model-profiles.json"
-        with _LOCKS_LOCK:
-            self._lock = _LOCKS.setdefault(str(self._path.resolve()).casefold(), threading.RLock())
-
+class ModelRegistry(GlobalModelStore):
     def presets(self):
         return copy.deepcopy(PRESETS)
-
-    def _read(self):
-        if not self._path.exists():
-            return {}
-        try:
-            data = json.loads(self._path.read_text(encoding="utf-8"))
-            if not isinstance(data, dict) or not isinstance(data.get("profiles"), dict):
-                raise ValueError()
-            return data["profiles"]
-        except (ValueError, OSError):
-            raise ProviderError("模型配置无法读取；原文件已保留。") from None
-
-    def _write(self, profiles):
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        temp = self._path.with_name(self._path.name + "." + uuid.uuid4().hex + ".tmp")
-        try:
-            temp.write_text(json.dumps({"version": 1, "profiles": profiles}, ensure_ascii=False, indent=2), encoding="utf-8")
-            # Windows antivirus/indexers can briefly hold a newly read file;
-            # keep the transaction lock and retry without deleting the old file.
-            for attempt in range(6):
-                try:
-                    os.replace(temp, self._path)
-                    break
-                except PermissionError:
-                    if attempt == 5:
-                        raise ProviderError("模型配置暂时被占用，未覆盖旧配置；请重试。") from None
-                    time.sleep(.02 * (attempt + 1))
-        finally:
-            temp.unlink(missing_ok=True)
 
     def _secret_for(self, profile):
         source = profile["key_source"]
@@ -669,7 +632,7 @@ class ModelRegistry:
             try:
                 return unprotect(profile.get("_protected_key", "")) if profile.get("_protected_key") else ""
             except CredentialError as exc:
-                raise ProviderError(str(exc)) from None
+                raise ProviderError(str(exc), category="credentials") from None
         if source == "environment":
             from .agent import _environment
             env = profile.get("env_var", "")
@@ -692,13 +655,12 @@ class ModelRegistry:
         return public
 
     def public_profiles(self):
-        with self._lock:
-            return [self._public(p) for p in self._read().values()]
+        return [self._public(p) for p in self._read().values()]
 
     def save_profile(self, payload, api_key=None):
         if not isinstance(payload, dict):
             raise ProviderError("模型配置格式无效。")
-        with self._lock:
+        with self._transaction():
             profiles = self._read()
             ident = payload.get("id") or uuid.uuid4().hex
             if not isinstance(ident, str) or not re.fullmatch(r"[\w-]{1,100}", ident):
@@ -760,29 +722,25 @@ class ModelRegistry:
             self._write(profiles)
             return self._public(p)
 
-    def delete_profile(self, ident):
-        with self._lock:
-            profiles = self._read()
-            profiles.pop(ident, None)
-            self._write(profiles)
-
     def resolve(self, ident):
-        with self._lock:
-            profile = self._read().get(ident)
-            if profile is None:
-                raise ProviderError("所选模型配置不存在，请重新选择。")
-            profile = copy.deepcopy(profile)
-            result = self._public(profile)
-            if not result["model"].strip():
-                raise ProviderError("请填写模型 ID 或先获取模型列表。")
-            def secret():
-                value = self._secret_for(profile)
-                if value:
-                    from .diagnostics import register_secret
-                    register_secret(value)
-                return value
-            result["_secret"] = secret
-            return result
+        return self._resolved(self._read().get(ident))
+
+    def _resolved(self, profile):
+        if profile is None:
+            raise ProviderError("所选模型配置不存在，请重新选择。", category="configuration")
+        result = self._public(profile)
+        if not result["model"].strip():
+            raise ProviderError("请填写模型 ID 或先获取模型列表。", category="configuration")
+
+        def secret():
+            value = self._secret_for(profile)
+            if value:
+                from .diagnostics import register_secret
+                register_secret(value)
+            return value
+
+        result["_secret"] = secret
+        return result
 
     def text_role(self, settings, role):
         if role not in {"annotation", "review", "companion"}:
@@ -793,21 +751,17 @@ class ModelRegistry:
         if not ident:
             provider = settings.provider if role == "annotation" else getattr(settings, role + "_provider")
             return bool(settings.cloud_text_enabled and provider != "local"), None
-        with self._lock:
-            profile = self._read().get(ident)
-            if profile is None and not settings.cloud_text_enabled:
-                return False, None
-            if profile is None:
-                raise ProviderError("所选模型配置不存在，请重新选择。")
-            if not text_allowed(settings, profile):
-                return False, None
-            return True, self.resolve(ident)
+        profile = self._read().get(ident)
+        if not text_allowed(settings, profile):
+            return False, None
+        return True, self._resolved(profile)
 
-    def discover_models(self, ident, *, cancelled=None):
-        with self._lock:
-            profile = copy.deepcopy(self._read().get(ident))
-            if profile is None:
-                raise ProviderError("模型配置不存在。")
+    def discover_models(self, ident, *, cancelled=None, allow_remote=True):
+        profile = self._read().get(ident)
+        if profile is None:
+            raise ProviderError("模型配置不存在。")
+        if not allow_remote and not loopback_url(profile["base_url"]):
+            raise ProviderError("当前工作区仅允许查询本机 API。")
         config = self._public(profile)
         config["_secret"] = lambda: self._secret_for(profile)
         models, cursor, received = set(), "", 0
@@ -854,7 +808,7 @@ class ModelRegistry:
         else:
             raise ProviderError("模型列表过大；请直接填写模型 ID。")
         _check_cancel(cancelled)
-        with self._lock:
+        with self._transaction():
             profiles = self._read()
             if ident in profiles and profiles[ident] == profile:
                 profiles[ident]["models"] = sorted(models)

@@ -64,7 +64,9 @@ class FeatureMixin:
                 for m in self._messages]
 
     def _refresh_models(self):
+        self.model_registry.load_roles(self._settings)
         self._model_profiles = self.model_registry.public_profiles()
+        self.settingsChanged.emit()
         self.modelsChanged.emit()
 
     def _profile(self, role):
@@ -88,6 +90,9 @@ class FeatureMixin:
         if previous is not None:
             profile_id = previous.get("id", "")
             if profile_id:
+                original_id = profile_id
+                if previous.get("scope") != "global":
+                    profile_id = self.model_registry.legacy_profile_ids().get(profile_id, "missing:" + profile_id)
                 from tingmu.providers import ProviderError
                 if profile_id not in {p["id"] for p in self.model_registry.public_profiles()}:
                     raise ValueError("原消息使用的模型连接已删除，无法原样重试；请发起新消息选择连接。")
@@ -95,7 +100,7 @@ class FeatureMixin:
                     profile = self.model_registry.resolve(profile_id)
                 except ProviderError:
                     raise ValueError("原消息使用的模型连接当前不可用，请检查连接后重试。") from None
-                fingerprint = self._profile_fingerprint(profile)
+                fingerprint = self._profile_fingerprint({**profile, "id": original_id})
                 if previous.get("fingerprint") != fingerprint:
                     raise ValueError("原消息的模型连接配置已改变，无法原样重试；请使用新消息。")
             else:
@@ -106,6 +111,7 @@ class FeatureMixin:
         if profile:
             public = {k: deepcopy(profile[k]) for k in ("id", "provider", "model", "protocol", "reasoning_effort", "max_tokens") if k in profile}
             public["fingerprint"] = self._profile_fingerprint(profile)
+            public["scope"] = "global"
         return profile, public
 
     @staticmethod
@@ -127,10 +133,10 @@ class FeatureMixin:
                 note["blocks"] = markdown_blocks(note.get("markdown", note.get("body", "")))
             self._notebooks["practice"] = self.notebook_manager.practice(self._notebook_language)
             self.notebooksChanged.emit()
-            self._entries = self.store.entries(self.media_path) if self.media_path else self.store.entries()
-            self.entriesChanged.emit()
         except (OSError, ValueError) as exc:
             self._error(exc)
+        finally:
+            self._refresh_entries()
 
     def _refresh_sessions(self):
         self._chat_sessions = self.conversations.list_sessions(self._settings.target_language)
@@ -216,20 +222,14 @@ class FeatureMixin:
                 self.messagesChanged.emit()
                 break
 
-    def _collect_selection(self, media, language, cue, text):
-        if not cue or not media or not text or text not in cue.text or len(text) > 200:
-            raise ValueError("请选择当前字幕中不超过 200 字的原文")
-        token = next((t for t in cue.tokens if t.text == text), Token(text))
-        self.store.save_word(media, cue, token, language)
-
     def _tool_executor(self, media, language, cue, tutor, cancelled=None, *, session_id="", selected_media=(),
-                       correction=None, guidance="", model=""):
+                       correction=None, guidance="", model="", word_prompts=()):
         from tingmu.app_actions import AppActionExecutor, ActionContext
         return AppActionExecutor(self.store, self.notebook_manager,
                                  ActionContext(session_id, media, deepcopy(language), deepcopy(cue), tuple(selected_media),
                                                correction, guidance, model, getattr(getattr(self, "workspaces", None), "workspace_id", "")),
                                  tutor, self._request_app_action, cancelled=cancelled,
-                                 updated=self._learningUpdated.emit)
+                                 updated=self._learningUpdated.emit, word_prompts=word_prompts)
 
     def _request_app_action(self, name, args, context, cancelled):
         from tingmu.app_actions import ActionError
@@ -299,8 +299,9 @@ class FeatureMixin:
             if not context.media_path or canonical_path(self.media_path) != canonical_path(context.media_path):
                 raise ActionError("当前视频已改变，操作未转移到新视频；请重新发起请求。", "media_changed")
         def jobs_public(rows):
-            keys = ("id", "name", "status", "completed_cues", "total_cues")
-            return [{k: j.get(k) for k in keys} for j in rows]
+            keys = ("id", "name", "status", "completed_cues", "total_cues", "stage_name", "decision")
+            return [{**{k: j.get(k) for k in keys}, "workflow": j["settings"].get("preparation_workflow", "classic")}
+                    for j in rows]
         def save_setting(key, value):
             check()
             self.setting(key, value)
@@ -342,7 +343,7 @@ class FeatureMixin:
                     "playing": bool(self.playback.get("playing")), "queue_running": "queue" in self._workers,
                     "jobs": jobs_public(self.queue.snapshot()), "model_profiles": profiles,
                     "study_workspace_id": controller.workspace_id if controller else "",
-                    "settings": {k: getattr(self._settings, k) for k in ("theme", "teaching_preferences", "companion_reasoning_effort", "annotation_profile_id", "review_profile_id", "companion_profile_id")}}
+                    "settings": {k: getattr(self._settings, k) for k in ("theme", "preparation_workflow", "teaching_preferences", "companion_reasoning_effort", "annotation_profile_id", "review_profile_id", "companion_profile_id")}}
         if name == "control_playback":
             media_bound()
             action = args["action"]
@@ -388,11 +389,15 @@ class FeatureMixin:
             if mode in ("teaching", "all") and ({"queue", "import"} & self._workers.keys()):
                 raise ActionError("请先暂停处理并等待当前步骤结束，再重做材料。", "queue_busy")
             settings = deepcopy(self._settings)
+            settings.preparation_workflow = args.get("workflow", settings.preparation_workflow)
             settings.source_language, settings.target_language, settings.level = context.language.source, context.language.target, context.language.level
             existing = self.queue.snapshot()
             selected = []
             for path in paths:
-                matching = [j for j in existing if j["media_path"] == path and j["settings"].get("source_language") == context.language.source and j["settings"].get("target_language") == context.language.target]
+                matching = [j for j in existing if j["media_path"] == path
+                            and j["settings"].get("source_language") == context.language.source
+                            and j["settings"].get("target_language") == context.language.target
+                            and j["settings"].get("preparation_workflow", "classic") == settings.preparation_workflow]
                 check()
                 if matching:
                     selected.append(matching[-1]["id"])
@@ -490,6 +495,7 @@ class FeatureMixin:
                 break
 
     def _v4_send_chat(self, text, *, history=None, reasoning_effort=None, request_context=None, request_model=None):
+        from tingmu.app_actions import previous_word_prompts
         from tingmu.companion import CompanionAgent
         from tingmu.setup_chat import setup_intent, SetupAssistant
         local_intent = (setup_intent(text, self._settings.source_language)
@@ -499,7 +505,7 @@ class FeatureMixin:
         if request_model and request_model.get("provider") == "local_setup" and not local_intent:
             raise ValueError("本地向导仅能重试明确的工作区准备请求；其他问题请发送新消息。")
         if not local_intent and not self._settings.text_models_enabled:
-            raise ValueError("此工作区已停用文本模型，可在模型管理中选择仅本机 API。")
+            raise ValueError("此工作区已停用文本模型，可在「当前工作区的使用权限」中选择「仅本机 API」。")
         if {"chat", "summary", "notebook"} & self._workers.keys():
             raise ValueError("请等待当前回复或笔记整理完成")
         text = text.strip()
@@ -642,7 +648,8 @@ class FeatureMixin:
                                     cancelled=cancelled, tools=tools,
                                     tool_executor=self._tool_executor(media, language, cue, tutor, cancelled,
                                         session_id=session["id"], selected_media=selected_media,
-                                        correction=request_context.get("correction"), guidance=text, model=model),
+                                        correction=request_context.get("correction"), guidance=text, model=model,
+                                        word_prompts=previous_word_prompts(prior)),
                                     on_tool_event=tool_event, on_reasoning=reasoning)
                 assistant.update(content=reply, status="stopped" if cancelled() else "complete")
             except Exception as exc:
@@ -681,7 +688,7 @@ class FeatureMixin:
     def _organize_notebook(self, *, entry_ids=None, instructions=""):
         enabled, profile = self.model_registry.text_role(self._settings, "companion")
         if not enabled:
-            raise ValueError("当前文本模式不允许此模型。请分配本机 API，或在模型管理中启用云端文本。")
+            raise ValueError("当前工作区未允许此模型。可在「任务分配」选择本机连接，或在「当前工作区的使用权限」选择「允许远程文本 API」。")
         if {"chat", "summary", "notebook"} & self._workers.keys():
             raise ValueError("请等待当前回复或笔记整理完成")
         target, source = self._notebook_language, self._settings.source_language
@@ -727,11 +734,6 @@ class FeatureMixin:
             if "queue" in self._workers:
                 raise ValueError("请先暂停队列再删除模型配置")
             self.model_registry.delete_profile(profile_id)
-            for role in ("annotation", "review", "companion"):
-                if getattr(self._settings, role + "_profile_id") == profile_id:
-                    self._feature_command("selectModel", {"role": role, "id": ""})
-            self.store.save_settings(self._settings)
-            self.settingsChanged.emit()
             self._refresh_models()
         elif name == "discoverModels":
             profile_id = p["id"]
@@ -746,38 +748,15 @@ class FeatureMixin:
                 self._model_status = f"已读取 {len(models)} 个模型；可选择或手动输入模型 ID"
                 self._refresh_models()
             self._start_job("models", lambda progress, cancelled: self.model_registry.discover_models(
-                profile_id, cancelled=cancelled), completed)
+                profile_id, cancelled=cancelled, allow_remote=self._settings.cloud_text_enabled), completed)
         elif name == "refreshModels":
             self._refresh_models()
         elif name == "selectModel":
             role, profile_id = p["role"], p.get("id", "")
             if role not in ("annotation", "review", "companion"):
                 raise ValueError("无效的模型用途")
-            if profile_id:
-                profile = next((x for x in self._model_profiles if x["id"] == profile_id), None)
-                if profile is None:
-                    raise ValueError("请先保存模型配置")
-                if not profile.get("model", "").strip():
-                    raise ValueError("请先为连接选择或填写模型 ID 并保存，再分配用途。")
-                if role == "annotation":
-                    self._settings.provider, self._settings.model = profile["provider"], profile["model"]
-                elif role == "companion":
-                    self._settings.companion_provider = profile["provider"]
-                    self._settings.companion_model = profile["model"]
-                else:
-                    self._settings.review_provider = profile["provider"]
-                    self._settings.review_model = profile["model"]
-            else:
-                from tingmu.models import AppSettings
-                defaults = AppSettings()
-                if role == "annotation":
-                    self._settings.provider, self._settings.model = defaults.provider, defaults.model
-                else:
-                    setattr(self._settings, role + "_provider", getattr(defaults, role + "_provider"))
-                    setattr(self._settings, role + "_model", getattr(defaults, role + "_model"))
-            setattr(self._settings, role + "_profile_id", profile_id)
-            self.store.save_settings(self._settings)
-            self.settingsChanged.emit()
+            self.model_registry.assign([role], profile_id)
+            self._refresh_models()
         elif name == "newChat":
             session = self.conversations.create(self._settings.language, self.media_path)
             self._select_chat(session["id"])
@@ -879,14 +858,6 @@ class FeatureMixin:
             if self._notebook_language != self._settings.target_language:
                 self.setting("target_language", self._notebook_language)
             self._v4_send_chat(str(p.get("text", "请根据我的学习笔记帮我练习今天需要复习的词语。")))
-        elif name == "saveSelection":
-            self._collect_selection(self.media_path, self._settings.language,
-                                    self._find_cue(p.get("cueId", "")), str(p.get("text", "")))
-            self._entries = self.store.entries(self.media_path)
-            self.entriesChanged.emit()
-            self.notebook_manager.sync(self._settings.target_language)
-            self._refresh_notebooks()
-            self._set_state(status="所选词句已加入收藏箱")
         elif name in ("resetJobs", "resetMedia"):
             if {"queue", "import"} & self._workers.keys():
                 raise ValueError("请先暂停处理队列，等待后台任务结束后清除材料")

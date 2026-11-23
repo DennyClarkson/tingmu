@@ -9,7 +9,7 @@ from tingmu.models import AppSettings
 from tingmu.providers import ModelRegistry
 from tingmu.quick.main import create_qml_app
 from tingmu.setup_chat import setup_intent
-from tingmu.workspace_text import clone_active_text_roles
+from tingmu.workspace_text import enable_global_text
 
 
 @pytest.mark.parametrize(("request_text", "expected"), [
@@ -43,27 +43,27 @@ def test_language_id_survives_windows_reserved_name_and_restart(tmp_path):
     assert NotebookManager(store).snapshot("con")["revision"] == state["revision"]
 
 
-def test_clone_selected_roles_and_protected_connection(tmp_path, monkeypatch):
+def test_enable_global_roles_does_not_copy_credentials(tmp_path, monkeypatch):
+    from tingmu.workspaces import WorkspaceCatalog
     monkeypatch.setattr("tingmu.workspace_text.provider_status", lambda: {})
-    a, b = tmp_path / "one", tmp_path / "two"
-    src, dst = ModelRegistry(a), ModelRegistry(b)
-    local = src.save_profile({"provider": "ollama", "model": "test"})
-    remote = src.save_profile({"provider": "custom", "base_url": "https://text.example/v1", "model": "tutor",
-                               "key_source": "none"})
-    src.save_profile({"provider": "ollama", "model": "unrelated"})
-    source = AppSettings(annotation_profile_id=local["id"], companion_profile_id=remote["id"])
-    target = AppSettings(cloud_text_enabled=False)
-    roles = clone_active_text_roles(a, b, source, target)
-    assert [r["model"] for r in roles] == ["test"]
-    assert not target.cloud_text_enabled and len(dst._read()) == 1
-    # Ciphertext from a specific saved connection stays protected during transfer.
-    saved = src._read()
-    saved[remote["id"]].update(key_source="manual", _protected_key="protected-test-marker")
-    src._write(saved)
-    roles = clone_active_text_roles(a, b, source, target, allow_remote=True)
-    assert "protected-test-marker" not in str(roles) and len(dst._read()) == 2
-    assert dst._read()[target.companion_profile_id]["_protected_key"] == "protected-test-marker"
-    assert target.cloud_text_enabled and target.review_provider == "local"
+    catalog = WorkspaceCatalog(tmp_path)
+    dest = catalog.directory(catalog.create("目标", "en", "ja"))
+    registry = ModelRegistry(tmp_path)
+    local = registry.save_profile({"provider": "ollama", "model": "test"})
+    with monkeypatch.context() as patch:
+        patch.setattr("tingmu.providers.protect", lambda _: "protected-test-marker")
+        patch.setattr("tingmu.providers.unprotect", lambda _: "synthetic-key")
+        remote = registry.save_profile({"provider": "custom", "base_url": "https://text.example/v1",
+                                       "model": "tutor"}, api_key="synthetic-key")
+    registry.assign(["annotation"], local["id"])
+    registry.assign(["companion"], remote["id"])
+    source, target = AppSettings(), AppSettings(cloud_text_enabled=False)
+    assert [r["model"] for r in enable_global_text(tmp_path, source, target)] == ["test"]
+    assert not target.cloud_text_enabled
+    roles = enable_global_text(tmp_path, source, target, allow_remote=True)
+    assert "protected-test-marker" not in str(roles) and "synthetic-key" not in str(roles)
+    assert target.cloud_text_enabled and not (dest / "model-profiles.json").exists()
+    assert ModelRegistry(dest).load_roles(target).companion_profile_id == remote["id"]
 
 
 def test_real_consent_buttons_and_workspace_api_actions(qapp, qtbot, tmp_path, monkeypatch):

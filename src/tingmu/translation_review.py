@@ -19,3 +19,15 @@ def translation_verified(cue, review):
             and isinstance(segments, list) and len(segments) == expected and all(isinstance(s, str) and s.strip() for s in segments)
             and review.get("version") == TRANSLATION_REVIEW_VERSION
             and review.get("verified", {}).get(cue.id) == lesson_digest(cue, segments))
+
+
+def translation_provided(cue, review):
+    """A supplied subtitle is publishable only for this exact, unsplit lesson."""
+    return (review.get("version") == TRANSLATION_REVIEW_VERSION
+            and bool(cue.translation.strip() and cue.explanation.strip())
+            and len(cue.segmented_texts) <= 1
+            and review.get("provided", {}).get(cue.id) == lesson_digest(cue, []))
+
+
+def translation_available(cue, review):
+    return translation_provided(cue, review) or translation_verified(cue, review)

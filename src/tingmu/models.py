@@ -1,6 +1,6 @@
 """Small serializable domain objects shared by UI, providers and storage."""
 
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import InitVar, asdict, dataclass, field, fields
 import math
 
 
@@ -11,7 +11,8 @@ DEFAULT_LLM_CONCURRENCY = 4
 def preparation_identity_settings(settings: dict) -> dict:
     """Scheduling changes can resume the same material and queue entry."""
     return {key: value for key, value in settings.items()
-            if key not in ("llm_high_concurrency", "llm_max_concurrency")}
+            if key not in ("llm_high_concurrency", "llm_max_concurrency")
+            and not (key == "preparation_workflow" and value == "classic")}
 
 
 @dataclass
@@ -124,8 +125,14 @@ class AppSettings:
     text_models_enabled: bool = True
     llm_high_concurrency: bool = True
     llm_max_concurrency: int = DEFAULT_LLM_CONCURRENCY
+    preparation_workflow: str = "classic"
 
-    def __post_init__(self):
+    _loaded_roles: InitVar[dict | None] = None
+
+    def __post_init__(self, _loaded_roles):
+        self._loaded_roles = dict(_loaded_roles or {})
+        if self.preparation_workflow not in ("classic", "subtitle_agent"):
+            self.preparation_workflow = "classic"
         if not isinstance(self.llm_high_concurrency, bool):
             self.llm_high_concurrency = str(self.llm_high_concurrency).lower() in ("true", "1")
         try:

@@ -1,6 +1,6 @@
 """An app-local catalog of independent study folders, including the original data store."""
 
-from dataclasses import asdict, replace
+from dataclasses import replace
 import json
 import os
 from pathlib import Path, PureWindowsPath
@@ -9,6 +9,7 @@ import tempfile
 import uuid
 
 from .models import AppSettings
+from .global_models import workspace_preferences
 from .learning_notes import language_name
 from .portable_paths import _migration_lock
 from .storage import atomic_json
@@ -174,7 +175,7 @@ class WorkspaceCatalog:
         if (not name or len(name) > 80 or name in (".", "..") or name.endswith(".")
                 or re.search(r'[<>:"/\\|?*\x00-\x1f]', name) or PureWindowsPath(name).is_reserved()):
             raise ValueError("请输入可用作文件夹名称的工作区名称（最多 80 字）")
-        settings = replace(initial_settings or AppSettings(),
+        settings = replace(initial_settings or AppSettings(cloud_text_enabled=False),
                            source_language=language_code(source), target_language=language_code(target))
         base = self.parent
         if parent and Path(parent).absolute() != base:
@@ -191,7 +192,7 @@ class WorkspaceCatalog:
                 ensure_folders(staging)
                 if configure:
                     configure(staging, settings)
-                atomic_json(staging / "settings.json", asdict(settings))
+                atomic_json(staging / "settings.json", workspace_preferences(settings))
                 atomic_json(staging / MARKER, {"id": workspace_id, "name": name})
                 staging.rename(path)
         return self.register(path)

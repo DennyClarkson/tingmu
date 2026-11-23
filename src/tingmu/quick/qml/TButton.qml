@@ -8,6 +8,7 @@ Button {
     property bool quiet: false
     property string tip: ""
     property string iconSource: ""
+    property color labelColor:primary ? Theme.bg : checked ? Theme.accent : Theme.text
     implicitHeight: 32
     implicitWidth: Math.max(32, contentItem.implicitWidth + 20)
     font.family: Theme.font
@@ -30,7 +31,7 @@ Button {
             anchors.centerIn:parent
             spacing:control.text && control.iconSource ? 7 : 0
             Image { visible:control.iconSource.length>0; source:control.iconSource ? Icons.source(control.iconSource,control.primary ? Theme.bg : control.checked ? Theme.accent : Theme.text) : ""; width:visible ? 16 : 0;height:16;anchors.verticalCenter:parent.verticalCenter;sourceSize.width:24;sourceSize.height:24 }
-            Text { id:label;objectName:"buttonText"; width:Math.min(Math.ceil(labelMetrics.advanceWidth)+2,Math.max(0,control.width-control.leftPadding-control.rightPadding-(control.iconSource ? 23 : 0)));elide:Text.ElideRight;textFormat:Text.PlainText; text:control.text;visible:text.length>0;color:control.primary ? Theme.bg : control.checked ? Theme.accent : Theme.text;font:control.font;anchors.verticalCenter:parent.verticalCenter }
+            Text { id:label;objectName:"buttonText"; width:Math.min(Math.ceil(labelMetrics.advanceWidth)+2,Math.max(0,control.width-control.leftPadding-control.rightPadding-(control.iconSource ? 23 : 0)));elide:Text.ElideRight;textFormat:Text.PlainText; text:control.text;visible:text.length>0;color:control.labelColor;font:control.font;anchors.verticalCenter:parent.verticalCenter }
         }
     }
     ToolTip.visible: hovered && tip.length > 0

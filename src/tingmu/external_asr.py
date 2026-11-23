@@ -18,6 +18,7 @@ from .media import _cue_id, _normalise_language
 from .models import Cue
 from .providers import NoRedirect, ProviderError, RequestCancelled, validate_base_url
 from .storage import atomic_json
+from .task_progress import Progress
 
 
 CHUNK_SECONDS = 600
@@ -226,16 +227,22 @@ def transcribe_external(media_path, settings, data_dir, *, start=0, duration=Non
     with prepared_audio(media_path, audio_track=settings.audio_track, start=start, duration=duration,
                         suppress_bgm=settings.suppress_bgm, progress=progress, cancelled=cancelled,
                         metadata_out=metadata_out) as audio:
+        with wave.open(str(audio), "rb") as source:
+            length = source.getnframes() / source.getframerate()
         for chunks, (offset, seconds, wav, multiple) in enumerate(_wav_chunks(audio), 1):
+            label = "本机 API" if local else "外部语音识别"
             if progress:
-                label = "本机 API" if local else "外部语音识别"
-                progress(f"{label} · 第 {chunks} 段（{seconds:.0f} 秒）")
+                progress(Progress(f"{label} · 第 {chunks} 段（{seconds:.0f} 秒）",
+                                  activity=label, done=offset, total=length, unit="秒"))
             check()
             data = _post(endpoint, key, fields, wav)
             check()
             source = f"{Path(media_path).resolve()}|{settings.audio_track}|{model}|{chunks}"
             cues.extend(_segments(data, source=source, offset=start + offset, duration=seconds,
                                   namespace=f"{chunks}·" if multiple else "", diarized=fmt == "diarized_json"))
+            if progress:
+                progress(Progress(f"{label}已完成第 {chunks} 段", activity=label, done=offset+seconds,
+                                  total=length, unit="秒"))
     if metadata_out is not None:
         metadata_out.update(asr_backend=settings.asr_backend, asr_model=model, asr_response_format=fmt,
                             audio_chunks=chunks, speaker_source="provider" if any(c.speaker for c in cues) else "")

@@ -51,5 +51,11 @@ def qml_asset_manifest(root: Path) -> dict[str, str]:
     files = sorted(path for path in asset_root.rglob("*") if path.is_file())
     if not (asset_root / "Main.qml").is_file():
         raise RuntimeError("No application QML entrypoint was packaged (quick/qml/Main.qml)")
+    if (asset_root.parent / "localization.py").is_file():
+        catalogs = [asset_root.parent / "i18n" / name for name in ("en.json", "zh-TW.json")]
+        for catalog in catalogs:
+            if not catalog.is_file():
+                raise RuntimeError(f"Missing interface language catalog: {catalog.name}")
+        files.extend(catalogs)
     return {path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
             for path in files}

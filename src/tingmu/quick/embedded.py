@@ -18,6 +18,7 @@ class EmbeddedCaptions(QObject):
         self.track = -1
         self.status = self.text = self.image = ""
         self.bounds = {}
+        self.cue = {}
         self._media = ""
         self._position = 0
         self._source = None
@@ -53,6 +54,7 @@ class EmbeddedCaptions(QObject):
         self._failed.clear()
         self.status = self.text = self.image = ""
         self.bounds = {}
+        self.cue = {}
         if track >= 0:
             self.status = "正在读取内嵌字幕…"
             self._schedule("track")
@@ -111,8 +113,15 @@ class EmbeddedCaptions(QObject):
         status = self._failed.get("track", "")
         text = image = ""
         bounds = {}
+        cue = {}
         if isinstance(self._source, Events):
             text = self._source.at(self._position)
+            if text:
+                index = bisect_right(self._source.times, self._position) - 1
+                start = self._source.times[index]
+                end = self._source.times[index + 1] if index + 1 < len(self._source.times) else start
+                cue = {"id": f"embedded:{self.track}:{start}", "text": text, "start": start / 1000,
+                       "end": end / 1000, "trackName": f"内嵌字幕 · 轨道 {self.track + 1}"}
         elif isinstance(self._source, BitmapTrack):
             page, offset = divmod(self._position, PAGE_MS)
             if page not in self._pages:
@@ -128,9 +137,10 @@ class EmbeddedCaptions(QObject):
                 if offset > PAGE_MS - 6000 and (image or more_packets):
                     if page + 1 not in self._pages and page + 1 not in self._failed:
                         self._schedule(page + 1)
-        if (self.status, self.text, self.image) != (status, text, image):
+        if (self.status, self.text, self.image, self.cue) != (status, text, image, cue):
             self.status, self.text, self.image = status, text, image
             self.bounds = bounds
+            self.cue = cue
             self.changed.emit()
 
     def close(self):

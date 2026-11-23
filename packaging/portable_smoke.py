@@ -68,6 +68,12 @@ def run_smoke(root: Path, media: Path | None = None) -> int:
     def finish():
         timer.stop()
         player.pause()
+        tray = app._tingmu_tray
+        if tray.available:
+            tray.hideToTray()
+            hidden = not windows[0].isVisible() and not bridge._closed
+            tray.restore()
+            report["checks"]["system_tray"] = tray._tray.isVisible() and hidden and windows[0].isVisible()
         if windows and app.platformName() != "offscreen" and os.environ.get("TINGMU_SMOKE_CAPTURE") == "1":
             screenshot = windows[0].grabWindow()
             if not screenshot.isNull():

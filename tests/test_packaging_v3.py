@@ -1,5 +1,7 @@
 """Portable QML checks must fail before delivering a broken application folder."""
 import importlib.util
+import hashlib
+import json
 import os
 from pathlib import Path
 
@@ -56,6 +58,36 @@ def test_packaging_requires_qml_and_records_content_integrity(tmp_path):
     assert qml_runtime.qml_asset_manifest(tmp_path) != before
     (qml.parent / "Style.js").write_text("var color = 'black'", encoding="utf-8")
     assert "app/tingmu/quick/qml/Style.js" in qml_runtime.qml_asset_manifest(tmp_path)
+
+
+@pytest.mark.parametrize("clean", [True, False])
+def test_refresh_only_updates_owned_application(tmp_path, monkeypatch, clean):
+    packaging = Path(__file__).resolve().parents[1] / "packaging"
+    monkeypatch.syspath_prepend(str(packaging))
+    import build_clean_install as builder
+
+    fixture = tmp_path / "repo"
+    (fixture / "packaging").mkdir(parents=True)
+    for helper in ("Launcher.cs", "bootstrap.py", "bootstrap_logging.py", "portable_smoke.py", "qml_runtime.py"):
+        (fixture / "packaging" / helper).write_text("new", encoding="utf-8")
+    (fixture / "pyproject.toml").write_text('[project]\nversion="1.0"', encoding="utf-8")
+    qml = fixture / "src/tingmu/quick/qml"
+    qml.mkdir(parents=True)
+    (qml / "Main.qml").write_text("import QtQuick\nItem {}", encoding="utf-8")
+    monkeypatch.setattr(builder, "ROOT", fixture)
+    monkeypatch.setattr(builder, "validate_qml_runtime", lambda root: {})
+    install = tmp_path / "installed"
+    for relative in ("Tingmu.exe", "app/bootstrap.py", "data/workspaces/example/study.db", ".cache/models/model.bin"):
+        file = install / relative
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_bytes(b"original")
+    marker = install / "tingmu-portable.json"
+    marker.write_text(json.dumps({"clean_install": clean, "launcher_source_sha256": hashlib.sha256(b"new").hexdigest()}))
+    builder.refresh(install)
+    assert (install / "app/bootstrap.py").read_text() == "new"
+    assert json.loads(marker.read_text())["clean_install"] is clean
+    for relative in ("Tingmu.exe", "data/workspaces/example/study.db", ".cache/models/model.bin"):
+        assert (install / relative).read_bytes() == b"original"
 
 
 def test_bootstrap_log_redacts_environment_and_split_secrets(tmp_path, monkeypatch):

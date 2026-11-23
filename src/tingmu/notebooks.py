@@ -1,6 +1,7 @@
 """Local Markdown language books with protected manual writing and source provenance."""
 
 from collections import Counter
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
@@ -15,10 +16,13 @@ from .learning_notes import (
     ORGANIZE_PROMPT, ORGANIZE_SCHEMA, decode_topics,
     language_name, literal as _literal, render_topic_body,
 )
+from .storage import canonical_path, word_key
 
 BEGIN = "<!-- tingmu:collected:start -->"
 END = "<!-- tingmu:collected:end -->"
 _LOCK = threading.RLock()
+_SOURCE_FIELDS = ("id", "kind", "media_path", "cue_id", "start", "text", "reading", "meaning", "note", "sentence",
+                  "source_language", "target_language", "created_at")
 
 
 class NotebookConflict(ValueError):
@@ -90,6 +94,11 @@ class NotebookManager:
                     id INTEGER PRIMARY KEY AUTOINCREMENT, entry_id INTEGER NOT NULL,
                     entry_note TEXT NOT NULL, revision TEXT NOT NULL, saved_at TEXT NOT NULL
                 );
+                CREATE INDEX IF NOT EXISTS entries_word_lookup ON entries(source_language,target_language,text)
+                    WHERE kind='word';
+                CREATE INDEX IF NOT EXISTS notebook_archived_word_lookup ON notebook_sources(
+                    target_language, json_extract(entry_json,'$.source_language'), json_extract(entry_json,'$.text'))
+                    WHERE json_extract(entry_json,'$.kind')='word';
             """)
         self._migrate_legacy()
 
@@ -102,16 +111,143 @@ class NotebookManager:
     def _entries(self, language):
         with self.store._connection() as db:
             states = {r["entry_id"]: dict(r) for r in db.execute("SELECT * FROM notebook_collections")}
+            entries = [dict(r) for r in db.execute("SELECT * FROM entries WHERE target_language=? ORDER BY id",
+                                                  (language,))]
+            archived = [json.loads(r[0]) for r in db.execute("""
+                SELECT s.entry_json FROM notebook_sources s WHERE s.target_language=?
+                AND NOT EXISTS(SELECT 1 FROM entries e WHERE e.id=s.entry_id)
+                AND s.entry_id IN (SELECT ids.value FROM notebook_notes n, json_each(n.entry_ids) ids
+                                   WHERE n.language=?)
+            """, (language, language))]
+        word_sources = {}
+        for e in entries + archived:
+            if e["kind"] == "word":
+                group = word_sources.setdefault((e["source_language"], word_key(e["text"], language)), {})
+                group.setdefault((e["media_path"], e["cue_id"]),
+                                 {k: e[k] for k in ("id", "media_path", "cue_id", "start", "sentence", "text")})
+        word_sources = {key: sorted(group.values(), key=lambda s: s["id"]) for key, group in word_sources.items()}
         result = []
-        for entry in sorted(self.store.entries(), key=lambda e: e["id"]):
-            if entry["target_language"] != language:
-                continue
+        for entry in entries:
             state = states.get(entry["id"], {})
             note = state.get("entry_note", "")
             result.append({**entry, "organized": bool(state.get("organized_at")),
                            "organized_at": state.get("organized_at", ""), "entry_note": note,
+                           "word_sources": word_sources.get((entry["source_language"], word_key(entry["text"], language)), [])
+                           if entry["kind"] == "word" else [],
                            "note_revision": _revision(note), "note_updated_at": state.get("updated_at", "")})
         return result
+
+    @staticmethod
+    def _word_rows(db, language, keys=None):
+        """Include deleted collections only while a saved note still cites them."""
+        forms = live_filter = archived_filter = ""
+        params = []
+        if keys is not None:
+            forms = """WITH forms AS (SELECT text FROM word_forms WHERE target_language=?
+                                      AND word_key IN (SELECT value FROM json_each(?)))"""
+            params = [language.target, json.dumps(list(keys), ensure_ascii=False)]
+            live_filter = "AND e.text IN forms"
+            archived_filter = "AND json_extract(entry_json,'$.text') IN forms"
+        return db.execute(f"""
+            {forms}
+            SELECT e.id, e.text, e.media_path, e.cue_id, COALESCE(c.organized_at,'') AS organized_at,
+                   0 AS archived, EXISTS(SELECT 1 FROM notebook_sources s WHERE s.entry_id=e.id) AS cited
+            FROM entries e LEFT JOIN notebook_collections c ON c.entry_id=e.id
+            WHERE e.kind='word' AND e.target_language=? AND e.source_language=?
+                  {live_filter}
+            UNION ALL
+            SELECT s.entry_id, json_extract(entry_json,'$.text'), json_extract(entry_json,'$.media_path'),
+                   json_extract(entry_json,'$.cue_id'), '', 1, 1
+            FROM notebook_sources s
+            WHERE json_extract(entry_json,'$.kind')='word'
+                  AND s.target_language=? AND json_extract(entry_json,'$.source_language')=?
+                  {archived_filter}
+                  AND NOT EXISTS(SELECT 1 FROM entries e WHERE e.id=s.entry_id)
+                  AND s.entry_id IN (SELECT ids.value FROM notebook_notes n, json_each(n.entry_ids) ids
+                                     WHERE n.language=?)
+            ORDER BY id
+        """, [*params, language.target, language.source, language.target, language.source, language.target])
+
+    @classmethod
+    def _word_occurrences(cls, db, texts, language):
+        requested = {text: word_key(text, language.target) for text in texts}
+        result = {key: [] for key in requested.values()}
+        for row in cls._word_rows(db, language, result):
+            result[word_key(row["text"], language.target)].append(row)
+        return {text: result[key] for text, key in requested.items()}
+
+    def playback_word_states(self, media_path, language):
+        """Index saved words of this pair and pending occurrences in this video."""
+        states = {}
+        if not media_path:
+            return states
+        media = canonical_path(media_path)
+        with self.store._connection() as db:
+            for row in self._word_rows(db, language):
+                key = word_key(row["text"], language.target)
+                if row["organized_at"] or row["cited"]:
+                    states[None, key] = "organized"
+                else:
+                    states.setdefault((None, key), "pending")
+                if row["media_path"] == media and not row["archived"] and not row["organized_at"]:
+                    states[row["cue_id"], key] = "pending"
+        return states
+
+    @staticmethod
+    def _word_state(occurrences, media, cue_id):
+        current = min((r for r in occurrences if r["media_path"] == media and r["cue_id"] == cue_id),
+                      key=lambda r: (r["archived"], bool(r["organized_at"]), r["id"]), default=None)
+        if current is not None and not current["organized_at"] and not current["archived"]:
+            return "pending", current
+        if any(r["organized_at"] or r["cited"] for r in occurrences):
+            return "organized", current
+        return ("pending" if occurrences else "unsaved"), current
+
+    def word_collection_states(self, media_path, cue_id, texts, language):
+        media = canonical_path(media_path)
+        texts = tuple(dict.fromkeys(texts))
+        if not texts:
+            return {}
+        with self.store._connection() as db:
+            occurrences = self._word_occurrences(db, texts, language)
+        return {text: self._word_state(rows, media, cue_id)[0] for text, rows in occurrences.items()}
+
+    def collect_word(self, media_path, cue, token, language, *, confirm=False):
+        """Collect one real occurrence or explicitly requeue a previously organized word."""
+        if not media_path or not token.text.strip() or token.text not in cue.text:
+            raise ValueError("收藏的词必须来自当前字幕。")
+        media = canonical_path(media_path)
+        with _LOCK, self._book_transaction(language.target) as (db, write):
+            occurrences = self._word_occurrences(db, [token.text], language)[token.text]
+            state, current = self._word_state(occurrences, media, cue.id)
+            if state == "pending" and current is not None:
+                return "pending"
+            if state == "organized" and not confirm:
+                return "confirm"
+            if current is None:
+                entry_id = self.store._save_entry(db, "word", media, cue, language, token.text,
+                                                  token.reading, token.meaning, note=None)
+            else:
+                entry_id = current["id"]
+                if current["archived"]:
+                    # Restore the same ID and original wording so existing links and annotations survive.
+                    archived = self._source_row(db, entry_id)
+                    db.execute("""INSERT INTO entries(id,kind,media_path,cue_id,start,text,reading,meaning,
+                                  note,sentence,source_language,target_language,created_at)
+                                  VALUES (:id,:kind,:media_path,:cue_id,:start,:text,:reading,:meaning,
+                                  :note,:sentence,:source_language,:target_language,:created_at)""", archived)
+            if state != "organized":
+                return "pending_source" if occurrences else "collected"
+            db.execute("UPDATE notebook_collections SET organized_at='' WHERE entry_id=?", (entry_id,))
+            self._add_word_reference(db, language, occurrences, entry_id, write)
+            return "referenced"
+
+    @staticmethod
+    def _source_row(db, entry_id):
+        row = db.execute("SELECT * FROM entries WHERE id=?", (entry_id,)).fetchone()
+        if row:
+            return dict(row)
+        return json.loads(db.execute("SELECT entry_json FROM notebook_sources WHERE entry_id=?", (entry_id,)).fetchone()[0])
 
     def _migrate_legacy(self):
         # Migration indexes existing content without rewriting a single Markdown byte.
@@ -160,9 +296,7 @@ class NotebookManager:
 
     @staticmethod
     def _archive_source(db, entry):
-        fields = ("id", "kind", "media_path", "cue_id", "start", "text", "reading", "meaning", "note", "sentence",
-                  "source_language", "target_language", "created_at")
-        value = {field: entry[field] for field in fields}
+        value = {field: entry[field] for field in _SOURCE_FIELDS}
         db.execute("INSERT INTO notebook_sources VALUES (?,?,?) ON CONFLICT(entry_id) DO UPDATE SET "
                    "target_language=excluded.target_language,entry_json=excluded.entry_json",
                    (entry["id"], entry["target_language"], json.dumps(value, ensure_ascii=False)))
@@ -253,6 +387,15 @@ class NotebookManager:
                 notes = [self._view_note(row, markdown) for row in db.execute(
                     "SELECT * FROM notebook_notes WHERE language=? ORDER BY created_at,id", (language,))]
                 languages = {r[0] for r in db.execute("SELECT language FROM notebook_v5_migrations")}
+                linked = {i for n in notes for i in n["entry_ids"]}
+                sources = {e["id"]: {**{k: e[k] for k in _SOURCE_FIELDS}, "archived": False}
+                           for e in entries if e["id"] in linked}
+                missing = linked.difference(sources)
+                if missing:
+                    for row in db.execute("""SELECT entry_id,entry_json FROM notebook_sources
+                                          WHERE target_language=? AND entry_id IN (SELECT value FROM json_each(?))""",
+                                          (language, json.dumps(sorted(missing)))):
+                        sources[row[0]] = {**json.loads(row[1]), "archived": True}
             all_entries = self.store.entries()
             languages.update(e["target_language"] for e in all_entries)
             languages.add(language)
@@ -263,6 +406,7 @@ class NotebookManager:
             return {"language": language, "title": _title(language), "markdown": markdown,
                     "revision": _revision(markdown), "path": str(path), "topics": topics,
                     "collections": entries, "entries": entries, "notes": notes,
+                    "note_sources": [sources[i] for i in sorted(sources)],
                     "books": [{"language": lang, "title": _title(lang), "count": counts[lang]}
                               for lang in sorted(languages)],
                     "stats": {"total": len(entries), "words": sum(e["kind"] == "word" for e in entries),
@@ -335,10 +479,10 @@ class NotebookManager:
                        (entry_id, note, datetime.now(timezone.utc).isoformat()))
         return next(e for e in self._entries(entry[0]) if e["id"] == entry_id)
 
-    def _source_markdown(self, entries):
+    def _source_markdown(self, entries, *, heading=True):
         if not entries:
             return ""
-        lines = ["### 原始收藏来源", ""]
+        lines = ["### 原始收藏来源", ""] if heading else []
         for entry in entries:
             entry_id = entry["id"]
             lines.extend([f"[来源 #{entry_id}](tingmu://entry/{entry_id}) · {_literal(entry['text'])}", "",
@@ -368,43 +512,106 @@ class NotebookManager:
         separator = "" if base.endswith("\n\n") else "\n" if base.endswith("\n") else "\n\n"
         return base + separator + blocks + "\n"
 
-    def _commit(self, original, markdown, notes=(), delete_id=None, check_entries=True, cancelled=None):
-        language = original["language"]
-        # SQLite prevents a concurrent collection update during the final recheck/write.
-        # A failed DB commit restores the previous file only if nobody edited it meanwhile.
-        written = False
+    def _add_word_reference(self, db, language, occurrences, entry_id, write):
+        path = self._path(language.target)
+        markdown = path.read_text(encoding="utf-8") if path.exists() else ""
+        prior_ids = {row["id"] for row in occurrences}
+        source = self._source_row(db, entry_id)
+        same_source = {row["id"] for row in occurrences if row["media_path"] == source["media_path"]
+                       and row["cue_id"] == source["cue_id"]}
+        self._archive_source(db, source)
+        # A topic may have been reorganized several times. Extend its most recent intact note.
+        for row in db.execute("SELECT * FROM notebook_notes WHERE language=? ORDER BY updated_at DESC,id",
+                              (language.target,)):
+            note = self._view_note(row, markdown)
+            if not prior_ids.intersection(note["entry_ids"]) or note["detached"]:
+                continue
+            if entry_id in note["entry_ids"] or same_source.intersection(note["entry_ids"]):
+                return
+            if note["origin"].startswith("legacy"):
+                continue  # Keep unstructured original writing intact, using the supplement below.
+            span = self._note_span(markdown, note)
+            source_marker = self._markers(note["id"])[2]
+            if span[2].count(source_marker) != 1:
+                continue
+            citation = self._source_markdown([source], heading=not note["sources_markdown"])
+            end_marker = self._markers(note["id"])[1]
+            insert = span[1] - len(end_marker)
+            revised = self._append_blocks(markdown[:insert], citation) + markdown[insert:]
+            sources = self._append_blocks(note["sources_markdown"], citation).strip()
+            db.execute("UPDATE notebook_notes SET entry_ids=?,sources_markdown=?,updated_at=? WHERE id=?",
+                       (json.dumps([*note["entry_ids"], entry_id]), sources,
+                        datetime.now(timezone.utc).isoformat(), note["id"]))
+            write(revised, _revision(markdown))
+            return
+        # Notes may have been deleted, detached by the Markdown editor, or migrated without markers.
+        # Keep those bytes untouched and give the learner a linked supplement containing every real source.
+        entries = [self._source_row(db, i) for i in sorted(prior_ids | {entry_id})]
+        note = self._make_note(language.target, source["text"], "再次收藏的原句出处。", entries, language.source)
+        base = markdown or f"# {_title(language.target)}\n"
+        self._store_note(db, note)
+        for entry in entries:
+            self._archive_source(db, entry)
+        db.execute("INSERT OR IGNORE INTO notebook_v5_migrations VALUES (?)", (language.target,))
+        write(self._append_blocks(base, self._render_note(note)), _revision(markdown))
+
+    @staticmethod
+    def _store_note(db, note):
+        db.execute("INSERT INTO notebook_notes VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
+                   "title=excluded.title,body=excluded.body,entry_ids=excluded.entry_ids,"
+                   "sources_markdown=excluded.sources_markdown,origin=excluded.origin,updated_at=excluded.updated_at",
+                   (note["id"], note["language"], note["title"], note["body"], json.dumps(note["entry_ids"]),
+                    note["sources_markdown"], note["source_language"], note["origin"],
+                    note["created_at"], note["updated_at"]))
+
+    @contextmanager
+    def _book_transaction(self, language):
+        """Serialize collection checks with writes and restore Markdown if the SQLite commit fails."""
+        written = None
+
+        def write(text, expected_revision):
+            nonlocal written
+            path = self._path(language)
+            old = path.read_text(encoding="utf-8") if path.exists() else None
+            self._write(language, text, expected_revision)
+            written = (path, old, _revision(text))
+
         try:
             with self.store._connection() as db:
                 db.execute("BEGIN IMMEDIATE")
-                if cancelled and cancelled():
-                    raise ValueError("笔记操作已取消，原笔记未修改。")
-                if check_entries and self._entries(language) != original["collections"]:
-                    raise NotebookConflict("操作期间收藏或条目备注已变更，请重试。")
-                if delete_id is not None:
-                    db.execute("DELETE FROM notebook_notes WHERE id=? AND language=?", (delete_id, language))
-                for note in notes:
-                    db.execute("INSERT INTO notebook_notes VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
-                               "title=excluded.title,body=excluded.body,sources_markdown=excluded.sources_markdown,"
-                               "origin=excluded.origin,updated_at=excluded.updated_at",
-                               (note["id"], language, note["title"], note["body"], json.dumps(note["entry_ids"]),
-                                note["sources_markdown"], note["source_language"], note["origin"],
-                                note["created_at"], note["updated_at"]))
-                    for entry_id in note["entry_ids"]:
-                        source = next((e for e in original["collections"] if e["id"] == entry_id), None)
-                        if source:
-                            self._archive_source(db, source)
+                yield db, write
+        except Exception:
+            if written:
+                path, old, revision = written
+                if path.exists() and _revision(path.read_text(encoding="utf-8")) == revision:
+                    if old is None:
+                        path.unlink()
+                    else:
+                        _atomic_text(path, old)
+            raise
+
+    def _commit(self, original, markdown, notes=(), delete_id=None, check_entries=True, cancelled=None,
+                organize_ids=None):
+        language = original["language"]
+        with self._book_transaction(language) as (db, write):
+            if cancelled and cancelled():
+                raise ValueError("笔记操作已取消，原笔记未修改。")
+            if check_entries and self._entries(language) != original["collections"]:
+                raise NotebookConflict("操作期间收藏或条目备注已变更，请重试。")
+            if delete_id is not None:
+                db.execute("DELETE FROM notebook_notes WHERE id=? AND language=?", (delete_id, language))
+            for note in notes:
+                self._store_note(db, note)
+                for entry_id in note["entry_ids"]:
+                    source = next((e for e in original["collections"] if e["id"] == entry_id), None)
+                    if source:
+                        self._archive_source(db, source)
+                    if organize_ids is None or entry_id in organize_ids:
                         db.execute("INSERT INTO notebook_collections(entry_id,organized_at) VALUES (?,?) "
                                    "ON CONFLICT(entry_id) DO UPDATE SET organized_at=CASE WHEN organized_at='' "
                                    "THEN excluded.organized_at ELSE organized_at END", (entry_id, note["updated_at"]))
-                db.execute("INSERT OR IGNORE INTO notebook_v5_migrations VALUES (?)", (language,))
-                self._write(language, markdown, original["revision"])
-                written = True
-        except Exception:
-            if written:
-                path = self._path(language)
-                if path.exists() and _revision(path.read_text(encoding="utf-8")) == _revision(markdown):
-                    _atomic_text(path, original["markdown"])
-            raise
+            db.execute("INSERT OR IGNORE INTO notebook_v5_migrations VALUES (?)", (language,))
+            write(markdown, original["revision"])
         return self.snapshot(language)
 
     def append_note(self, target_language, title, body, entry_ids=None, expected_revision=None):
@@ -436,7 +643,7 @@ class NotebookManager:
             updated.update(id=note_id, entry_ids=note["entry_ids"], sources_markdown=note["sources_markdown"],
                            created_at=note["created_at"])
             text = original["markdown"][:span[0]] + self._render_note(updated) + original["markdown"][span[1]:]
-            return self._commit(original, text, [updated])
+            return self._commit(original, text, [updated], organize_ids=set())
 
     @staticmethod
     def _check_linked_ids(body, allowed):
@@ -506,15 +713,22 @@ class NotebookManager:
         if cancelled and cancelled():
             raise ValueError("笔记整理已取消，原笔记未修改。")
         notes = []
+        by_id = {e["id"]: e for e in original["collections"]}
         for topic in topics:
             selected = self._selected(entries, topic["entry_ids"])
             body = render_topic_body(topic, selected, source_language, language)
-            notes.append(self._make_note(language, topic["title"], body, selected, source_language,
+            sources = {e["id"]: e for e in selected}
+            for entry in selected:
+                for ref in entry["word_sources"]:
+                    source_id = ref["id"]
+                    if source_id not in sources:
+                        sources[source_id] = by_id.get(source_id) or self.source_entry(source_id, target_language=language)
+            notes.append(self._make_note(language, topic["title"], body, list(sources.values()), source_language,
                                          "local" if getattr(agent, "provider", None) == "local" else "agent"))
         with _LOCK:
             base = original["markdown"] or f"# {_title(language)}\n"
             text = self._append_blocks(base, "\n\n".join(self._render_note(n) for n in notes))
-            return self._commit(original, text, notes, cancelled=cancelled)
+            return self._commit(original, text, notes, cancelled=cancelled, organize_ids={e["id"] for e in entries})
 
     def review(self, entry_id, rating):
         if type(entry_id) is not int or rating not in ("again", "hard", "good", "easy"):

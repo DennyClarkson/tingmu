@@ -109,6 +109,9 @@ def revise_target(store, context, args, script, cancelled):
         review = document.metadata.get("translation_review", {})
         if review and source != lesson:
             review.get("verified", {}).pop(source.id, None)
+            review.get("provided", {}).pop(source.id, None)
+            if source.translation != lesson.translation or source.text != lesson.text:
+                document.metadata.get("provided_translations", {}).pop(source.id, None)
             review.get("segments", {}).pop(source.id, None)
             review["status"] = "partial"
             document.metadata["lesson_status"] = "draft"

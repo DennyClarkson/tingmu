@@ -18,9 +18,9 @@ MANIFEST = "portable-location.json"
 
 
 @contextmanager
-def _migration_lock(data):
+def _migration_lock(data, filename=".portable-migration.lock"):
     """An OS-owned lock survives neither crashes nor process exit."""
-    with _THREAD_LOCK, (data / ".portable-migration.lock").open("a+b") as lock:
+    with _THREAD_LOCK, (data / filename).open("a+b") as lock:
         if lock.tell() == 0:
             lock.write(b"\0")
             lock.flush()
@@ -161,6 +161,8 @@ def migrate_portable_paths(store):
                              if job.get("reuse_existing_transcript") else
                              [job["media_path"], job["fingerprint"], spec, subtitle,
                               media_fingerprint(subtitle) if subtitle else None])
+                    if not job.get("reuse_existing_transcript") and "subtitle_inputs" in job:
+                        parts.append(job["subtitle_inputs"])
                     identity = json.dumps(parts, sort_keys=True)
                     job["id"] = hashlib.sha256(identity.encode()).hexdigest()[:24]
             target = source

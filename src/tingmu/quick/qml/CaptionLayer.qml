@@ -8,6 +8,10 @@ Item {
     property real clearance: 0
     property real topClearance: 0
     property real fontScale: 1
+    property bool movable: false
+    property var placement: null
+    signal reposition(real centerX, real centerY)
+    signal committed()
     readonly property int columnIndex: (appearance.align - 1) % 3
     readonly property int rowIndex: Math.floor((appearance.align - 1) / 3)
     readonly property real insetX: width * appearance.horizontalMargin / 100
@@ -15,11 +19,15 @@ Item {
     clip: true
 
     Column {
+        id: block
         width: Math.max(1, captionRoot.width - 2 * captionRoot.insetX)
         x: captionRoot.insetX
         y: {
             const top = Math.max(captionRoot.insetY, captionRoot.topClearance)
             const bottom = Math.max(top, captionRoot.height - Math.max(captionRoot.insetY, captionRoot.clearance) - height)
+            if (captionRoot.placement)
+                return Math.max(0, Math.min(captionRoot.height - captionRoot.clearance - height,
+                                            captionRoot.placement.y * captionRoot.height - height / 2))
             return captionRoot.rowIndex === 2 ? top : captionRoot.rowIndex === 1 ? (top + bottom) / 2 : bottom
         }
         spacing: 3
@@ -28,7 +36,10 @@ Item {
             delegate: Item {
                 id: line
                 required property string modelData
-                width: parent.width
+                width: Math.min(block.width, Math.ceil(mainText.implicitWidth) + 16)
+                x: captionRoot.placement
+                   ? Math.max(0, Math.min(captionRoot.width - width, captionRoot.placement.x * captionRoot.width - width / 2)) - block.x
+                   : (block.width - width) * captionRoot.columnIndex / 2
                 height: mainText.contentHeight + (captionRoot.appearance.box ? 7 : 4)
                 readonly property int hAlign: [Text.AlignLeft, Text.AlignHCenter, Text.AlignRight][captionRoot.columnIndex]
                 component Glyph: Text {
@@ -71,6 +82,15 @@ Item {
                     x: 8
                     y: (line.height - contentHeight) / 2
                     color: captionRoot.appearance.fill
+                }
+                CaptionDrag {
+                    objectName: "textCaptionDrag"
+                    anchors.fill: parent
+                    enabled: captionRoot.movable
+                    viewport: captionRoot
+                    center: Qt.point(block.x + line.x + line.width / 2, block.y + block.height / 2)
+                    onReposition: (cx, cy) => captionRoot.reposition(cx, cy)
+                    onCommitted: captionRoot.committed()
                 }
             }
         }

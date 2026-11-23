@@ -2,7 +2,7 @@ import QtQuick
 import QtQuick.Controls.Basic
 Menu {
     id:root
-    implicitWidth:248
+    implicitWidth: interfaceLanguage.code === "en" ? 290 : 248
     padding:6
     font.family:Theme.font
     font.pixelSize:12
