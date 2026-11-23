@@ -48,7 +48,20 @@ jobs:
         run: uv sync --locked --extra dev
       - name: Lint
         run: uv run --no-sync --offline ruff check .
+      - name: Set up FFmpeg for subtitle tests
+        run: |
+          if ((Get-Command ffmpeg.exe -ErrorAction SilentlyContinue) -and
+              (Get-Command ffprobe.exe -ErrorAction SilentlyContinue)) { return }
+          $dir = New-Item -ItemType Directory -Force .cache/ci-ffmpeg
+          $build = 'ffmpeg-9.0-essentials_build'
+          $archive = Join-Path $dir.FullName "$build.7z"
+          Invoke-WebRequest "https://github.com/GyanD/codexffmpeg/releases/download/9.0/$build.7z" -OutFile $archive
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash -ne 'ffb866303866995734849995027533b9756971215e8c55ef408073628cdc27a2') {
+            throw 'FFmpeg archive checksum mismatch'
+          }
+          & "$env:ProgramFiles/7-Zip/7z.exe" e $archive "-o$($dir.FullName)" -y "$build/bin/ffmpeg.exe" "$build/bin/ffprobe.exe"
+          if ($LASTEXITCODE -ne 0) { throw 'Could not extract FFmpeg' }
+          $dir.FullName >> $env:GITHUB_PATH
       - name: Offline regression tests
         # Tests mock model/provider calls and create their own temporary fixtures.
-        # The suite does not require FFmpeg CLI or the private portable build.
-        run: uv run --no-sync --offline python .github/run_offline_tests.py -q
+        run: uv run --no-sync --offline python .github/run_offline_tests.py -q --require-ffmpeg

@@ -5,8 +5,6 @@ from pathlib import Path
 import subprocess
 import threading
 
-import pytest
-
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from tingmu import embedded_subtitles as subtitles
@@ -22,12 +20,7 @@ def test_text_overlaps_and_exclusive_end():
         "", "One", "One\nTwo", "One", "Three", ""]
 
 
-def test_reads_real_muxed_text(tmp_path):
-    try:
-        ffmpeg = subtitles._binary("ffmpeg")
-        subtitles._binary("ffprobe")
-    except subtitles.SubtitleError:
-        pytest.skip("FFmpeg CLI unavailable")
+def test_reads_real_muxed_text(tmp_path, ffmpeg):
     srt = tmp_path / "fixture.srt"
     srt.write_text("1\n00:00:01,000 --> 00:00:03,000\nTwo lines,\nexact time.\n", encoding="utf-8")
     media = tmp_path / "clip.mkv"

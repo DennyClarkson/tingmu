@@ -171,12 +171,7 @@ def test_limits_cancellation_and_failed_probe(media, monkeypatch):
     assert sources.plan_subtitle_sources(video, PAIR).metadata["decision"] == "asr"
 
 
-def test_actual_embedded_subtitle_decode(tmp_path):
-    try:
-        ffmpeg = sources.decoder._binary("ffmpeg")
-        sources.decoder._binary("ffprobe")
-    except ValueError:
-        pytest.skip("FFmpeg unavailable")
+def test_actual_embedded_subtitle_decode(tmp_path, ffmpeg):
     tracks = []
     for name, lines in (("a", EN), ("b", ZH)):
         path = tmp_path / f"{name}.srt"

@@ -8,6 +8,7 @@
 
 - [ ] `uv run --no-sync --offline ruff check .`
 - [ ] `uv run --no-sync --offline python .github/run_offline_tests.py -q`
+- [ ] 涉及内嵌字幕时，已在有 FFmpeg 与 ffprobe 的环境加 `--require-ffmpeg` 执行上述回归
 - [ ] 涉及字幕、笔记、收藏或会话时，已验证原内容与时间戳的保留/迁移
 - [ ] 未提交密钥、个人媒体、学习数据库、日志、缓存或模型权重
 

@@ -1,4 +1,6 @@
-# Integration contracts (2026-11-23)
+# Integration contracts
+
+Start with the 0.12 workflow and the cross-version contracts below. Newer product versions take precedence over earlier revisions when behavior changes. The [module map](architecture.md) and [development guide](development.md) describe the current source tree and verification commands.
 
 ## Optional subtitle Agent and interface language in 0.12
 
@@ -54,7 +56,7 @@ Every new ASR job takes a local preprocessing pass unless disabled. Local turn d
 
 The companion can revise the subtitle selected at the start of the request and the lesson of its underlying source cue. Read and compare the source revision before publishing workspace-owned SRT and JSON. A user correction persists in `metadata.cue_corrections`; teaching-only regeneration reuses the corrected text and boundaries. Preserve source IDs, original text, acoustic times, unrelated cues and external subtitle files. Current source code and this revision supersede the historical contracts below.
 
-## Revision 7 — v0.5 current behavior
+## Revision 7 — v0.5
 
 The explicit v0.5 request authorizes application operations through `app_actions.py`: video preparation and regeneration, queue control, playback, existing model selection, reasoning strength, teaching preferences, workspace/theme controls, collections and Markdown notes. This supersedes the six-tool limitation below. No arbitrary OS commands, filesystem paths, credentials, or network browsing are exposed. UI mutations dispatch to the Qt main thread; queue acceptance is distinguished from completed processing.
 
@@ -68,7 +70,7 @@ The user's later v0.5 request permits displaying and saving provider-public thin
 
 See [ui-v5.md](ui-v5.md) for interface behavior and QML verification. Historical contracts below remain only where not superseded.
 
-## Revision 6 — current development
+## Revision 6 — v0.4
 
 The explicit v0.4 user request supersedes earlier model restrictions and environment-only credential rules. See [v4-development.md](v4-development.md) for current profile, notebook, session, QML and tool contracts. Default models remain compatible; user-selected profiles support different providers. Manual credentials are DPAPI-protected, never plain text. Bundled open-source fonts replace proprietary font dependencies. `review_provider` is independent from the companion provider. Current implementation introduces `quick/features.py`, `quick/typography.py`, `providers.py`, `credentials.py`, `notebooks.py`, `conversations.py`, and `richtext.py`.
 
@@ -76,7 +78,7 @@ The explicit v0.4 user request supersedes earlier model restrictions and environ
 
 `saveNotebook` accepts explicit `language` and `revision`; editors bind these to the originating draft. Streaming messages checkpoint to SQLite and remain bound to their original session. Scoped learning tools capture media/language/cue and cancellation at the start of the request. Model schemas and Markdown never authorize arbitrary OS actions.
 
-Python 3.12, src package `tingmu`. Parent owns `models.py`, `storage.py`, `pipeline.py`, `cli.py`, project config/docs. Children own only their assigned files; no further delegation.
+The following early implementation notes record the original interfaces for historical reference. See the newer versioned sections for model selection, audio permissions, data ownership, and the Qt entry point.
 
 ## Shared models (dataclasses in tingmu.models)
 
@@ -120,16 +122,16 @@ Python 3.12, src package `tingmu`. Parent owns `models.py`, `storage.py`, `pipel
 - Main window Qt widgets, QtMultimedia player, library/settings, background preparation, playback controls/audio/subtitle track/speed/volume/seek/fullscreen/keyboard/A-B repeat, subtitle file import/export, progress/cancel/error.
 - Separate synchronized companion window with clickable token+reading buttons, translation/explanation, save sentence/notes, word notebook review/export/summarize. Import public APIs above. All slow ASR/LLM work in worker threads, never touch UI from worker threads.
 
-Default media is ../22.mkv, never alter sample. Dark utilitarian UI: #151719 #ECEAE4 #92988F #86B99A, Microsoft YaHei UI. Chinese short labels; no filler. External video stays outside git. Secrets only environment/Windows registry, never print or save. Environment names include Machine scope OpenAI and DEEPSEEK; process only currently has DEEPSEEK. Use standard aliases too. User authorizes text-only model tests on real sample; never upload audio/video.
+The original UI prototype used a local test video and Windows fonts. For today’s data and consent boundaries, see the [contribution guide](../CONTRIBUTING.md).
 
-## Revision 2 — latest user requirements
+## Revision 2 — early companion requirements
 
 - AppSettings batch defaults now `provider='openai', model='gpt-5.4-mini'` based on real-sample conservative behavior. New `companion_provider='openai', companion_model='gpt-6-astra'` (verified by real account calls; also supports `gpt-6.1-sol`), `target_script='traditional'`.
 - `Store.load_conversation(media_path: str, language: LanguagePair) -> list[dict]`, `.save_conversation(media_path, language, messages)`; each message is `{role:'user'|'assistant',content:str}`. Empty media path supports general software help before opening video.
 - `tingmu.companion.CompanionAgent(provider='openai',model=None).reply(message,history,language,current_cue=None,context=None) -> str`; text only, bounded history, strong model, no execution tools. UI needs worker dispatch and explicit cloud-text toggle.
 - `tingmu.language.normalize_cues(cues,language,target_script='traditional')` normalizes Cantonese display/tokens to Hong Kong Traditional, preserving original_text and timings. Does not reconstruct missed spoken words.
 - Optional Qwen3-ASR in isolated `.cache/qwen-venv`, models `.cache/qwen-models`; media agent owns installer and new ASR aliases. Keep current faster-whisper fallback available.
-- UI revision: video dominant, technical settings collapsed, separate companion with 讲解/对话/笔记 tabs. No further Computer Use this turn after user Escape; offscreen GUI code tests permitted.
+- UI revision: video dominant, technical settings collapsed, separate companion with 讲解/对话/笔记 tabs.
 
 ## Revision 3 — local disk policy and completed integration
 

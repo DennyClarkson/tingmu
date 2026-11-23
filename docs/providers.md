@@ -1,74 +1,72 @@
 # 模型连接与文本服务
 
-## 全局连接与工作区权限
+听幕将全文复核、批量讲解和学习对话分给三个文本模型角色。可以共用同一连接，也可分别选用本机或远程服务。同一份安装里的所有工作区共享连接、凭据来源和角色分配。每个工作区单独决定允许发送哪些学习文本。远程语音转写另有音轨授权。[语音转写设置](external-asr.md)
 
-模型管理、对话设置和处理设置共用「文本模型」选择。「停用文本模型」保留本地字幕和词典。「仅本机 API」允许分配给相应角色的回环连接。「允许远程文本 API」也允许已配置的远程服务。语音识别和外部音频授权在处理设置中单独管理。收紧文本模型范围会停止当前模型任务。
+## 建立连接并使用
 
-1. 启动本机推理服务并加载模型。在模型管理中新建连接，选择 Ollama、LM Studio 或「本机 OpenAI 兼容服务」。后者可以填写任意本机端口与 API 路径。
-2. 填写服务显示的基础地址。Ollama 的常用地址为 `http://127.0.0.1:11434/v1`，LM Studio 的常用地址为 `http://127.0.0.1:1234/v1`。默认无需密钥，也可选 Windows 本机加密保存密钥或输入环境变量名。回环连接绕过系统代理并拒绝重定向。[Ollama 兼容 API](https://docs.ollama.com/api/openai-compatibility) · [LM Studio 兼容 API](https://lmstudio.ai/docs/developer/openai-compat)
-3. 保存连接后点「加载列表」，选中实际模型并再次保存。服务未实现模型发现时可直接填入完整模型 ID。打开模型管理左侧「任务分配」，为批量讲解、全文复核、学习对话分别选择连接。所有工作区共享连接、凭据和任务分配，每个工作区独立保存是否允许远程文本处理。新工作区可立即使用已分配的本机模型。模型能力、工具支持和生成质量取决于所加载的模型。
-4. 要求全本机推理时，同时在本机服务中选取本地运行的模型，检查服务的转发和云模型设置。「仅本机 API」约束听幕连接的地址。听幕不会安装 Ollama、LM Studio 或下载其中的模型。
+1. 打开「文件 → 全局文本模型…」，选择「新建连接」及服务预设。给连接起一个能辨认服务和模型的名称，填写 API 基础地址。使用 Ollama、LM Studio 或本机兼容服务时，先在该服务内启动推理并加载模型。
+2. 选密钥来源。免密本机服务可选「无需密钥」。需要认证时，填写环境变量**名称**，或用 Windows 本机加密保存手工密钥。模型 ID 可手填，也可先留空，点「保存连接」。
+3. 在「工作区设置 → 文本模型与 API」选择适合此工作区的文本权限。要查询远程服务的模型列表，需先允许远程文本 API。返回连接页点「加载列表」，选择实际模型并再次「保存连接」。若服务没有实现列表接口，可按服务给出的完整模型 ID 手填。
+4. 打开全局模型窗口左侧的「任务分配」，为所需角色选择已保存的连接。未指定自定义连接的角色显示「沿用默认设置」，沿用应用的提供商、模型及其凭据配置。删除连接会让所有使用它的角色恢复默认设置。
 
-「纠正此句」会把选中的字幕段、所属源句、用户说明交给学习对话模型。成功写入前备份工作区材料，结果保存为工作区的 SRT 和学习 JSON。用户确认的意思、模型及修改时间随修订保存，源句 ID、原始识别、说话人和声学时间保留。字幕列表、伴侣面板、全屏伴侣均可启动，普通聊天也可明确要求修改。
+| 任务分配 | 使用场景 |
+| --- | --- |
+| 全文复核 | 开启工作区的「全文文本复核」时，对需要复核的原文作文本检查。字幕 Agent 已直接采用的学习语言原文跳过此步，原始转写与时间保留。 |
+| 批量讲解 | 按源句生成词句讲解，对需要补译的句子生成并另行核验译稿。字幕 Agent 接受配对已有译文时，仅为这些句子请求讲解。 |
+| 学习对话 | 回答当前句问题，处理授权的学习操作和「纠正此句」。可在对话栏选择模型，角色分配仍对整份安装生效。 |
 
-## v0.5 当前约定
+干净发行包的默认工作区首次启动时停用文本模型。新建工作区可以使用已分配的本机模型，也可在创建时确认允许全局分配的远程模型。升级旧版时，工作区连接会合并到全局模型库。各工作区原有分配不一致时，优先沿用上次打开的工作区中明确设置的角色。切换模型后，已有学习材料可继续使用。要重做时在队列明确选择范围。[便携版与队列操作](portable.md)
 
-对话可直接选择默认、关闭、最低、低、中、高、更高思考强度；默认继承模型连接，其他选择在本次请求中冻结，编辑/重试沿用原值。各模型支持范围不同，服务拒绝时给出明确提示，不会静默丢掉参数或偷偷换模型。
+## 工作区权限
 
-OpenAI、自定义兼容服务、Gemini 和 Ollama 发送 `reasoning_effort`；DeepSeek 同时对应 `thinking` 开关；千问使用 `enable_thinking` 和 `thinking_budget`（最低1024、低4096、中8192、高16384、更高32768）。Anthropic 显式思考使用 adaptive thinking 和 `output_config.effort`，最低映射 low；不支持 adaptive 的旧模型应使用默认或返回明确的不支持提示。实际支持能力由所选模型决定。原生签名 thinking 块仅留在当前工具往返内，不展示、不写入聊天和诊断。
+| 选项 | 工作区内的行为 |
+| --- | --- |
+| 停用文本模型 | 保留本地字幕与词典，暂停模型复核、讲解和对话。 |
+| 仅本机 API | 只允许分配给角色的回环地址，例如 `127.0.0.1`、`localhost`、`[::1]`。若希望推理也完全在本机进行，请核对该服务加载的模型和请求转发设置。 |
+| 允许远程文本 API | 可向已配置的服务发送相应任务所需的文本，例如复核与讲解使用的字幕，或问答涉及的当前句、对话、收藏与笔记摘录。 |
 
-协议依据：[DeepSeek 思考模式](https://api-docs.deepseek.com/guides/thinking_mode/)、[Anthropic 思考与成本](https://platform.claude.com/docs/en/build-with-claude/thinking-steering-and-cost)、[Gemini 兼容接口](https://aistudio.google.com/docs/openai)、[千问深度思考](https://www.alibabacloud.com/help/en/model-studio/deep-thinking)。这些映射有协议回归；真实账号验收范围另见交接报告。
+收紧权限时，听幕会停止相关模型任务。语音识别设置独立生效，只有显式选择远程转写服务并勾选「允许此工作区发送音轨」，该服务才可接收所选音轨。
 
-用户追加要求后，公开思考文本和签名／私有状态明确分开：Chat Completions 的 `reasoning_content`、Anthropic 公开 `thinking` 文本、Responses 的 `summary_text` 通过独立增量通道显示。签名、redacted thinking 和 encrypted content 仅供当前工具轮往返，既不显示也不持久化。公开文字默认折叠，可复制、停止后保留和重新打开历史；每条消息最多显示／保存60,000字符，保存时脱敏，不写入运行日志，也不作为下一轮用户正文。计时累计实际收到公开思考期间的时间，不代表服务端内部计算的精确耗时。
+## 服务预设与协议
 
-OpenAI 和自定义连接可显式选择 `protocol='responses'`，请求 `/responses` 与 `reasoning.summary='auto'`，映射结构化输出和原生工具调用，使用 `store=false`。统计状态与可见摘要分开：模型不一定每次返回摘要，不能把没有摘要当作无响应。原有连接继续 Chat Completions，不自动迁移。依据：[思考摘要及无服务端存储的推理](https://developers.openai.com/api/docs/guides/reasoning)、[Responses 流式事件](https://developers.openai.com/api/docs/guides/streaming-responses)、[工具结果回传](https://developers.openai.com/api/docs/guides/function-calling)。
+下表列出当前应用内的基础地址和模型发现方式。使用自有服务或不同地域的账号时，填写服务提供的实际地址。模型是否能生成、能否使用工具和推理参数，取决于账号和具体模型。[连接与协议实现](../src/tingmu/providers.py)
 
-公开思考小样本真实验证见 `reports/v5-reasoning-live.json`：既有 DeepSeek 环境连接返回 deepseek-flash 的连续思考片段；既有 OpenAI 环境连接返回 gpt-6-astra 的摘要片段，并完成两轮原生工具往返。报告保留请求模型和实际返回模型的区别，不保存地址、密钥、请求或思考正文；不据此声称所有模型或其他提供商均已验收。
-
-v0.5 Agent 有23项应用操作，覆盖视频准备/明确重做、队列、播放、已有模型选择、显示设置、讲解偏好、工作区、收藏、整理、笔记编辑保存和复习。详见 `app_actions.py`，替代下文历史的六工具限制。当前媒体/语种/选中范围和模型指纹在发送时冻结，单次最多100视频；UI操作在主线程执行。处理任务返回排队/运行状态，不把“已接受”宣称为“已完成”。失败操作允许重试，成功保存防止同轮重复。读取笔记按实际返回页记录范围，完整读取并核对修订后才可覆盖或修改。字幕、笔记和工具返回始终是资料，不能授予操作权限。无任意系统命令、文件路径或密钥操作。
-
-三个任务角色分别选择连接：批量讲解、全文复核、学习对话。未选连接时沿用旧的 provider/model 与环境变量配置；不会改动默认模型，也不会因切换模型自动重做已有学习材料。新建连接允许先留空模型名保存，再加载列表，最后选择或手填服务方给出的模型 ID。模型列表可用不等于生成权限或教学质量已经验证。
-
-## 官方接口核对
-
-2026-11-14 查阅以下官方文档；预设不塞入推测的新模型名称。所有调用仅传文字。
-
-| 预设 | Base URL | 协议与发现 |
+| 预设 | 初始基础地址 | 文本请求及模型发现 |
 | --- | --- | --- |
-| OpenAI | `https://api.openai.com/v1` | Chat Completions；`GET /models` |
-| DeepSeek | `https://api.deepseek.com` | Chat Completions；`GET /models` |
-| 通义千问 | `https://dashscope.aliyuncs.com/compatible-mode/v1` | Chat Completions；同主机原生 `/api/v1/models` 分页 |
-| Gemini | `https://generativelanguage.googleapis.com/v1beta/openai` | OpenAI 兼容 Chat Completions；`GET /models` |
-| Anthropic | `https://api.anthropic.com/v1` | 原生 Messages；`GET /models`，`after_id` 分页 |
-| Ollama | `http://127.0.0.1:11434/v1` | OpenAI 兼容，无密钥；`GET /models` |
-| 自定义 | 用户填写 | OpenAI 兼容端点与模型 ID |
+| OpenAI | `https://api.openai.com/v1` | 默认 Chat Completions，可显式选择 Responses。模型列表使用 `GET /models`。 |
+| DeepSeek | `https://api.deepseek.com` | Chat Completions，`GET /models`。 |
+| 通义千问（北京） | `https://dashscope.aliyuncs.com/compatible-mode/v1` | 兼容 Chat Completions。列表从同一主机的原生 `/api/v1/models` 分页读取。 |
+| Gemini | `https://generativelanguage.googleapis.com/v1beta/openai` | 兼容 Chat Completions，`GET /models`。 |
+| Anthropic | `https://api.anthropic.com/v1` | 原生 Messages，模型列表支持 `after_id` 分页。 |
+| Ollama | `http://127.0.0.1:11434/v1` | 本机兼容端点，`GET /models`。 |
+| LM Studio | `http://127.0.0.1:1234/v1` | 可选择 Chat Completions 或服务支持的 Responses，`GET /models`。 |
+| 本机 OpenAI 兼容服务 | `http://127.0.0.1:8000/v1` | 可指定回环端口与路径，支持免密或认证，可选择服务支持的 Chat Completions 或 Responses。 |
+| 自定义 OpenAI 兼容 | 自行填写 | 指定服务实际支持的 Chat Completions 或 Responses 协议，支持手填模型 ID。 |
 
-OpenAI 的请求参数、工具格式和模型发现分别按 [Chat API](https://developers.openai.com/api/reference/resources/chat) 与 [Models API](https://developers.openai.com/api/reference/resources/models/methods/list) 实现。DeepSeek 使用 [Chat Completions](https://api-docs.deepseek.com/api/create-chat-completion/) 和 [模型列表](https://api-docs.deepseek.com/api/list-models/)。兼容协议的流式响应读取 SSE `data` 与 `choices[].delta`，以 `[DONE]` 结束；忽略推理过程字段，不作为给用户的回答。
+Chat Completions 用 SSE 接收增量。Anthropic 使用 `x-api-key`、独立的系统消息和原生工具内容块。选择 Responses 时，听幕向 `/responses` 发送 `store=false`，请求可见的 `reasoning.summary=auto`。服务实际返回摘要时才会显示。[OpenAI Responses](https://developers.openai.com/api/docs/guides/reasoning) · [Anthropic 流式事件](https://platform.claude.com/docs/en/build-with-claude/streaming) · [DeepSeek API](https://api-docs.deepseek.com/api/create-chat-completion/) · [千问兼容接口](https://help.aliyun.com/zh/model-studio/compatibility-of-openai-with-dashscope) · [Gemini 兼容接口](https://ai.google.dev/gemini-api/docs/openai)
 
-千问按 [OpenAI 兼容说明](https://help.aliyun.com/zh/model-studio/compatibility-of-openai-with-dashscope) 与 [模型列表](https://help.aliyun.com/zh/model-studio/list-models) 实现。旧 dashscope 域名仍可使用；官方推荐业务空间专属域名，例如 `https://实际WorkspaceId.cn-beijing.maas.aliyuncs.com/compatible-mode/v1`。用户应按自己的地域/空间修改地址；程序不猜 Workspace ID。列表使用同一 origin 的 `/api/v1/models?page_no=...&page_size=100&capabilities=TG`，读取 `output.models[].model` 和 `output.total`。如账号/旧域名不提供列表，可直接手填模型 ID。
+本机连接绕过系统代理。基础地址禁止携带用户名、密码、查询参数或片段。远程连接要求 HTTPS。使用密钥的回环 HTTP 服务应选择 Ollama、LM Studio 或本机 OpenAI 兼容预设。听幕拒绝 HTTP 重定向，凭据只传往配置的地址。[Ollama 接口](https://docs.ollama.com/api/openai-compatibility) · [LM Studio 接口](https://lmstudio.ai/docs/developer/openai-compat)
 
-Gemini 的兼容端点、流式与模型列表按 [Google 官方兼容文档](https://ai.google.dev/gemini-api/docs/openai) 实现。Ollama 的本机端点和模型列表按 [Ollama OpenAI 兼容文档](https://docs.ollama.com/api/openai-compatibility) 实现；程序不下载或启动模型服务。
+## 凭据、推理设置与对话
 
-Anthropic 使用 [认证说明](https://platform.claude.com/docs/en/api/overview)、[模型列表](https://platform.claude.com/docs/en/api/models/list) 和 [流式文档](https://platform.claude.com/docs/en/build-with-claude/streaming)：`x-api-key` 与 `anthropic-version: 2023-06-01`，system 独立字段，文字/tool_use/tool_result 块互转；SSE 读取 message_start/content_block_delta/message_delta/message_stop，包含工具 JSON 分片；不把 thinking 块展示或存入对话。
+**凭据。** 全局公开配置和加密凭据位于安装数据目录的 `model-profiles.json`。手工密钥使用当前 Windows 用户的 DPAPI 保护，换电脑或 Windows 用户后需重输。编辑同一连接时，留空密钥框会保留已有密钥。修改使用手工密钥的服务地址或协议时需要重输。改用其他凭据来源会移除该连接的旧密文。选择环境变量时只保存名称，可读取进程、Windows 用户或系统环境中的值。非 Windows 开发环境用环境变量提供密钥。
 
-## 凭据与本地保存
+**思考强度。** 可在连接的「高级选项」配置最大输出 token 数及推理强度。在聊天输入栏选择「默认 · 沿用模型设置」或覆盖本次请求的强度。编辑、重试会保留发起时的模型、语种及强度。服务拒绝参数时，在该连接上改为模型支持的档位或默认设置。模型供应商自定义的映射如下。
 
-`ModelRegistry(data_dir)` 在应用自己的 `model-profiles.json` 保存公开配置和 DPAPI 密文。手工密钥由 Windows 当前用户 DPAPI 加密，不明文持久化；复制到其他电脑或用户后须重输。非 Windows 不提供不安全的手工保存替代，使用环境变量。空密钥编辑保留原密钥，切换凭据来源或删除连接移除原密文；更换手工密钥连接地址/协议须重输，避免把原凭据无意送往新端点。
+| 协议或服务 | 应用发送的参数 |
+| --- | --- |
+| 兼容 Chat Completions | `reasoning_effort`。DeepSeek 还使用 `thinking` 开关，关闭时省略 `reasoning_effort`。 |
+| 通义千问 | `enable_thinking`，开启时按最低、低、中、高、更高分别设置 `thinking_budget` 为 1024、4096、8192、16384、32768。 |
+| Anthropic | 显式开启时使用 adaptive thinking 和 `output_config.effort`，最低对应 `low`。关闭时设置 `thinking.type=disabled`。 |
+| Responses | `reasoning.effort`，同时请求可见摘要。 |
 
-环境变量保留进程、Windows 用户/系统范围读取及 `OpenAI`、`OPENAI`、`DEEPSEEK` 旧别名兼容。自定义环境变量仅保存变量名。解析后的凭据通过私有惰性函数提供给传输层，公开 profile、AppSettings、队列快照不含密钥。动态密钥注册到日志脱敏器；错误不带 HTTP 正文、请求头、凭据、完整路径。返回元数据只保留模型、数字 token 用量、结束原因、延迟与计数。
+**公开思考与摘要。** 服务公开返回的 Chat Completions `reasoning_content`、Anthropic `thinking` 文本及 Responses 思考摘要，在聊天中单独折叠显示，可展开、复制和随会话保存。每条消息最多保留 60,000 字符。签名、遮盖或加密的内容仅供当前工具轮往返，排除在界面、持久化记录和日志之外。显示的计时按收到公开片段的时间累积。[会话保存实现](../src/tingmu/conversations.py)
 
-Base URL 禁止用户信息、查询、fragment、控制字符或反斜杠；远端须 HTTPS。HTTP 仅允许回环地址。使用密钥的 HTTP 连接须选择 Ollama、LM Studio 或本机 OpenAI 兼容服务预设。所有 HTTP 重定向均拒绝，不携带 Authorization/x-api-key 跟随任何重定向。JSON、SSE 帧与总响应均有限长检查。配置采用共享线程锁、同目录临时文件与原子替换，Windows 文件短时被占用会有限重试；旧文件不先删除。该锁覆盖同一进程的多个 Registry 实例，未提供多进程同时编辑合并。
+**学习操作。** 对话伴侣可在当前工作区处理视频和队列、控制播放、调整已有模型或学习偏好，也可按要求整理和编辑笔记。请求绑定发起时的媒体、语种、选中范围及模型。工具调用由应用验证名称、参数和范围，返回实际处理状态。服务明确拒绝原生工具时，听幕使用同一组受限操作校验 JSON 计划，再将执行结果交给模型生成最终回答。可执行操作与界面状态以应用返回为准。[应用操作](../src/tingmu/app_actions.py) · [对话实现](../src/tingmu/companion.py)
 
-## 协议与学习工具
+## 常见问题
 
-`LearningAgent`、`TranscriptReviewer`、`CompanionAgent` 支持可选 `profile=`，旧 provider/model 调用保持可用。字幕任务优先 strict JSON schema（OpenAI）或 JSON object，兼容性错误只降级输出约束，不切换模型；最终始终经过原有严格 ID/字段/分词/原始时间验证。Anthropic 使用提示中的 JSON schema 约束和本地严格校验。
-
-`reply(..., on_delta=None, cancelled=None, tools=None, tool_executor=None)` 保持字符串返回；回调接收文字增量。用户停止后抛出 `RequestCancelled`，已收到内容由调用方保存。SSE 开始后后台检查取消并关闭 socket；连接或等待响应头阶段仍受请求 timeout 限制，不能承诺瞬时中断。
-
-仅允许应用在 `app_actions.py` 注册的23个类型化工具。每轮先验证完整调用集和参数，再执行；最多四轮，每轮八次，重复调用 ID 拒绝再次执行。真实执行结果进入下一轮；异常只回传安全失败描述。工具能力由根应用绑定当前学习语种、当前字幕快照、选中视频及收藏范围。只允许明确列出的应用设置和笔记操作，无通用文件、进程或网络访问。HTTP 400/422 会在内存中按安全固定分类区分工具协议不支持、工具 schema 错误、推理参数和其他请求错误，不输出服务错误正文。仅明确原生工具不支持时，启用 JSON-action 兼容循环，绝不把一般 400 当作“不支持工具”。兼容规划只允许严格的 actions/finished 对象，通过相同白名单、参数、原句 substring 与重复操作检查后执行；工具实际结果传给下一轮。规划完成后另发普通无 tools 请求，转发真实最终 SSE 文字；内部 JSON 不显示给用户。metadata 区分 native/json_actions、planning_requests、final_streaming 与真实 tool_calls。字幕、笔记和工具结果均是不可信资料，不能授予操作权限。
-
-提示词版本为 `teaching-v4-layered-context` 和 `text-review-v4-natural-clauses`：整体意思→一个重点→必要例子；长句按自然语义边界断行，保留粤语繁体、口语语气词、原 ID 与时间。已存在材料不自动更新，用户明确重做才走新版本。
-
-## 验证范围
-
-使用伪 HTTP/SSE 响应和隔离临时数据验证各协议、JSON 降级、工具循环、取消、错误、模型发现/分页、URL/重定向、并发保存和密钥不泄露。Windows DPAPI 加密/解密用临时测试值实际执行。新提供商未做真实推理。后续使用既有 OpenAI 环境配置和合成文本实际核对：当前上游拒绝 native tools，JSON-action 兼容循环真实收藏「唔該」，本地 Store 可查，最终回答有比较表格并收到 247 个真实 SSE delta，内部规划 JSON 未显示。该次工具+最终流式耗时 12.83 秒；接口和操作验证不等于完整语言质量保证。
+- **列表查到了模型，生成时仍报错。** 先看任务卡提示，再核对角色分配、工作区权限、连接地址、模型 ID、凭据或余额。模型发现与生成由服务分别授权。
+- **导入双语字幕后提示需要模型。** 字幕 Agent 会保留能配对的译文，但依然需要逐句讲解。检查「批量讲解」分配的连接能否在该工作区使用，配置后点原任务的「重试」。
+- **批量处理被限流。** 在工作区的「文本模型与 API」或队列齿轮中降低并发，按提示等待后重试。已通过的字幕批次会从检查点恢复。
+- **关心哪些服务做过实测。** 仓库保存了 DeepSeek Flash 公开思考、GPT 摘要与工具往返的小样本记录。其他预设能否在自己的服务上工作，应以实际调用为准。[历史接口验收](../reports/v5-reasoning-live.json) · [版本交接与验证范围](../handoff.md)
