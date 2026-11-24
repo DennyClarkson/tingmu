@@ -6,7 +6,7 @@ import threading
 
 from PySide6.QtCore import QObject, QTimer, Qt, Signal
 
-from tingmu.embedded_subtitles import BitmapTrack, Events, PAGE_MS, SubtitleError, load_page, load_track
+from tingmu.embedded_subtitles import BitmapPage, BitmapTrack, Events, PAGE_MS, SubtitleError, load_page, load_track
 
 
 class EmbeddedCaptions(QObject):
@@ -50,7 +50,7 @@ class EmbeddedCaptions(QObject):
         self._media = media
         self._position = position
         self._source = None
-        self._pages.clear()
+        self._clear_pages()
         self._failed.clear()
         self.status = self.text = self.image = ""
         self.bounds = {}
@@ -96,6 +96,8 @@ class EmbeddedCaptions(QObject):
 
     def _receive(self, serial, key, result, error):
         if serial != self._serial:
+            if isinstance(result, BitmapPage):
+                result.close()
             return
         self._pending = self._future = None
         if error:
@@ -106,7 +108,7 @@ class EmbeddedCaptions(QObject):
             self._pages[key] = result
             while len(self._pages) > 2:
                 oldest = next(page for page in self._pages if page != self._position // PAGE_MS and page != key)
-                del self._pages[oldest]
+                self._drop_page(oldest)
         self._sync()
 
     def _sync(self):
@@ -130,7 +132,12 @@ class EmbeddedCaptions(QObject):
                     status = "正在读取图形字幕…"
                     self._schedule(page)
             else:
-                frame = self._pages[page].at(self._position)
+                try:
+                    frame = self._pages[page].at(self._position)
+                except OSError:
+                    self._drop_page(page)
+                    self._failed[page] = status = "无法读取内嵌字幕画面。"
+                    frame = None
                 if frame:
                     image, bounds = frame.url, frame.bounds
                 more_packets = bisect_right(self._source.packets, self._position) < len(self._source.packets)
@@ -143,9 +150,18 @@ class EmbeddedCaptions(QObject):
             self.cue = cue
             self.changed.emit()
 
+    def _drop_page(self, key):
+        result = self._pages.pop(key)
+        if isinstance(result, BitmapPage):
+            result.close()
+
+    def _clear_pages(self):
+        for key in tuple(self._pages):
+            self._drop_page(key)
+
     def close(self):
         self.track = -1
         self._source = None
-        self._pages.clear()
+        self._clear_pages()
         self._cancel()
         self._executor.shutdown(wait=True, cancel_futures=True)

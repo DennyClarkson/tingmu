@@ -8,3 +8,4 @@ StatusBadge 1.0 StatusBadge.qml
 AppScrollView 1.0 AppScrollView.qml
 SegmentBar 1.0 SegmentBar.qml
 NavButton 1.0 NavButton.qml
+FirstUseLoader 1.0 FirstUseLoader.qml

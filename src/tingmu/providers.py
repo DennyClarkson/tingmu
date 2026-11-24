@@ -10,8 +10,6 @@ import ipaddress
 import http.client
 import json
 import re
-import socket
-import threading
 import time
 import urllib.error
 import urllib.request
@@ -22,6 +20,7 @@ from urllib.parse import urlsplit, quote
 
 from .global_models import GlobalModelStore
 from .credentials import CredentialError, protect, unprotect
+from .provider_transport import CancelWatch, ConnectionPool, WatchedOpenerHandler
 
 
 class ProviderError(RuntimeError):
@@ -91,11 +90,30 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         raise ProviderError("API 重定向已拒绝；请直接填写服务的最终地址。", status=code)
 
 
+_pool = ConnectionPool()
+_build_opener = urllib.request.build_opener
+_urlopen = urllib.request.urlopen
+
+
 def _open(request, timeout):
-    handlers = [NoRedirect()]
-    if loopback_url(request.full_url):
-        handlers.append(urllib.request.ProxyHandler({}))
-    return urllib.request.build_opener(*handlers).open(request, timeout=timeout)
+    proxies = urllib.request.getproxies()
+    watch = getattr(request, "_cancel_watch", None)
+    if (any(proxies.get(scheme) for scheme in ("http", "https", "all"))
+            or urllib.request.build_opener is not _build_opener or urllib.request.urlopen is not _urlopen):
+        handlers = [NoRedirect()]
+        if loopback_url(request.full_url):
+            handlers.append(urllib.request.ProxyHandler({}))
+        if watch is not None:
+            handlers.append(WatchedOpenerHandler(watch))
+        return urllib.request.build_opener(*handlers).open(request, timeout=timeout)
+    lease = _pool.open(request, timeout, watch)
+    response = lease.response
+    if 300 <= response.status < 400:
+        lease.close()
+        raise ProviderError("API 重定向已拒绝；请直接填写服务的最终地址。", status=response.status)
+    if response.status >= 400:
+        raise urllib.error.HTTPError(request.full_url, response.status, response.reason, response.headers, lease)
+    return lease
 
 
 def _check_cancel(cancelled):
@@ -559,24 +577,14 @@ def request(config, path, body=None, *, timeout=120, on_delta=None, cancelled=No
     wire = _wire_body(config, body) if body is not None else None
     req = urllib.request.Request(base + path, data=json.dumps(wire, ensure_ascii=False).encode("utf-8") if wire is not None else None, headers=headers)
     emit_reasoning = reasoning_callback(on_reasoning, cancelled)
-    stop_watch = threading.Event()
-    response = None
+    watch = CancelWatch(cancelled) if cancelled else None
+    req._cancel_watch = watch
     try:
         response = _open(req, timeout)
-        if cancelled:
-            # Interrupt a stalled streaming read when possible. Connect/headers are
-            # bounded by timeout; there is no claim of instantaneous connect abort.
-            def watch():
-                while not stop_watch.wait(.1):
-                    if cancelled():
-                        try:
-                            sock = response.fp.raw._sock
-                            sock.shutdown(socket.SHUT_RDWR)
-                        except (AttributeError, OSError):
-                            pass
-                        return
-            threading.Thread(target=watch, daemon=True).start()
         with response:
+            if watch and hasattr(response, "fp"):
+                # The fallback opener exposes the socket after receiving headers.
+                watch.bind(getattr(getattr(response.fp, "raw", None), "_sock", None))
             _check_cancel(cancelled)
             if body and body.get("stream"):
                 return _stream_response(config, response, on_delta, cancelled, emit_reasoning)
@@ -593,9 +601,12 @@ def request(config, path, body=None, *, timeout=120, on_delta=None, cancelled=No
             _check_cancel(cancelled)
             return normalized
     except urllib.error.HTTPError as exc:
-        category = _http_error_category(exc)
-        retry_after = _retry_after_seconds((exc.headers or {}).get("Retry-After"))
-        exc.close()
+        try:
+            category = _http_error_category(exc)
+            retry_after = _retry_after_seconds((exc.headers or {}).get("Retry-After"))
+        finally:
+            exc.close()
+        _check_cancel(cancelled)
         hints = {401: "密钥未被接受，请检查此连接的 API 密钥。",
                  402: "此连接的余额或计费额度不足，请检查服务账户。",
                  403: "此连接没有调用权限，请检查密钥的权限和模型授权。",
@@ -618,7 +629,8 @@ def request(config, path, body=None, *, timeout=120, on_delta=None, cancelled=No
         _check_cancel(cancelled)
         raise ProviderError("模型服务返回格式无效。") from None
     finally:
-        stop_watch.set()
+        if watch:
+            watch.stop()
         emit_reasoning.finish()
 
 

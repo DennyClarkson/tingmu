@@ -5,8 +5,10 @@ from typing import Any, Callable
 from dataclasses import asdict
 from pathlib import Path
 from datetime import datetime
+from math import ceil
+import time
 from tingmu.export_paths import export_path
-from PySide6.QtCore import QTimer, QUrl
+from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtMultimedia import QMediaMetaData, QMediaPlayer, QVideoFrame
 from tingmu.diagnostics import media_id
 from tingmu.media import MEDIA_EXTENSIONS
@@ -90,6 +92,11 @@ class PlaybackController:
     def __init__(self, state: PlaybackState, ports: PlaybackPorts):
         self.state = state
         self.ports = ports
+        self.notify_timer = QTimer(state.player)
+        self.notify_timer.setSingleShot(True)
+        self.notify_timer.setTimerType(Qt.TimerType.PreciseTimer)
+        self.notify_timer.timeout.connect(self._emit_playback)
+        self._last_tick = None
 
     def attachVideo(self, sink):
         if sink is not None:
@@ -116,6 +123,8 @@ class PlaybackController:
             raise ValueError("请选择支持的音视频文件")
         self.ports.save_position()
         self.state.player.stop()
+        self.notify_timer.stop()
+        self._last_tick = None
         self.state.media_path = str(path)
         self.state.embedded.select(self.state.media_path, -1, 0)
         self.state.sources.open(self.state.media_path)
@@ -125,10 +134,11 @@ class PlaybackController:
         )
         self.state.loop_a = self.state.loop_b = -1
         self.ports.catalog.add([path])
-        self.state.resume_position = self.ports.store.load_position(self.state.media_path)
-        self.ports.set_state(mediaPath=self.state.media_path, mediaName=path.name, error="", status="")
-        self.ports.load_document()
-        self.ports.load_personal()
+        with self.ports.store.database.session():
+            self.state.resume_position = self.ports.store.load_position(self.state.media_path)
+            self.ports.set_state(mediaPath=self.state.media_path, mediaName=path.name, error="", status="")
+            self.ports.load_document()
+            self.ports.load_personal()
         self.state.player.setSource(QUrl.fromLocalFile(self.state.media_path))
         self.ports.restore_embedded_choice()
         self.state.player.play()
@@ -211,13 +221,31 @@ class PlaybackController:
 
     def _position_changed(self, position):
         if self.state.loop_b > self.state.loop_a >= 0 and position >= self.state.loop_b:
-            self.state.player.setPosition(self.state.loop_a)
+            self._set_player_position(self.state.loop_a)
             return
         self.ports.sync_cue(position)
         self.state.embedded.position(position)
         if position != self.state.playback_position:
             self.state.playback_position = position
-            self.ports.playbackChanged.emit()
+            deadline = self._last_tick + 0.07 if self._last_tick is not None else 0
+            remaining = deadline - time.monotonic()
+            details = self.state.playback_details
+            duration = details.get("duration", 0)
+            if remaining <= 0 or not details.get("playing") or position == 0 or (duration > 0 and position >= duration):
+                self._emit_playback()
+            elif not self.notify_timer.isActive():
+                self.notify_timer.start(ceil(remaining * 1000))
+
+    def _emit_playback(self):
+        self.notify_timer.stop()
+        self._last_tick = time.monotonic()
+        self.ports.playbackChanged.emit()
+
+    def _set_player_position(self, position):
+        self._last_tick = None
+        self.state.player.setPosition(position)
+        if self.notify_timer.isActive():
+            self._emit_playback()
 
     def _duration_changed(self, duration):
         self.ports.schedule_resume_seek()
@@ -253,7 +281,7 @@ class PlaybackController:
                 return
             position = max(0, min(self.state.resume_position, self.state.player.duration() - 100))
             self.state.resume_position = None
-            self.state.player.setPosition(position)
+            self._set_player_position(position)
             self.ports.sync_cue(position)
 
         QTimer.singleShot(0, apply_after_load)
@@ -263,11 +291,13 @@ class PlaybackController:
         self.ports.schedule_resume_seek()
         if status == QMediaPlayer.MediaStatus.EndOfMedia:
             if self.state.loop_b > self.state.loop_a >= 0:
-                self.state.player.setPosition(self.state.loop_a)
+                self._set_player_position(self.state.loop_a)
                 self.state.player.play()
             elif self.ports.layout().get("autoNext", False):
                 self.ports.adjacent_media(1)
         self.ports.update_playback()
+        if status == QMediaPlayer.MediaStatus.EndOfMedia and self.notify_timer.isActive():
+            self._emit_playback()
 
     def _restore_embedded_choice(self):
         if not self.state.restore_embedded_pending or self.state.player.source() != QUrl.fromLocalFile(
@@ -336,11 +366,14 @@ class PlaybackController:
         details_changed = value != self.state.playback_details
         position_changed = position != self.state.playback_position
         self.state.playback_position = position
+        was_playing = self.state.playback_details.get("playing", False)
         if details_changed:
             self.state.playback_details = value
             self.ports.playbackDetailsChanged.emit()
-        if details_changed or position_changed:
-            self.ports.playbackChanged.emit()
+        if details_changed or position_changed or (self.notify_timer.isActive() and not value["playing"]):
+            self._emit_playback()
+        if details_changed and value["playing"] and not was_playing:
+            self._last_tick = None
 
     def _finish_position_checkpoint(self):
         if self.state.position_future is not None:
@@ -386,7 +419,7 @@ class PlaybackController:
             return
         self.state.resume_position = None
         position = max(0, min(int(position), self.state.player.duration() or int(position)))
-        self.state.player.setPosition(position)
+        self._set_player_position(position)
         self.ports.sync_cue(position)
 
     def _adjacent_media(self, delta):

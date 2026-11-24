@@ -1,6 +1,7 @@
 """Thread-safe SQLite study journal and atomic, human-readable document cache."""
 
 from contextlib import contextmanager
+from copy import deepcopy
 from dataclasses import asdict, fields
 from datetime import datetime, timezone
 import csv
@@ -28,12 +29,36 @@ def media_fingerprint(path: str | Path) -> dict:
         return {}
 
 
+def _compact_json(value):
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+
+
+class _DocumentPayload(dict):
+    """Keep the two-argument atomic writer hook and serialize a checkpoint once."""
+
+    def __init__(self, payload):
+        super().__init__(payload)
+        self.encoded = _compact_json(payload)
+        self.digest = hashlib.sha256(self.encoded.encode("utf-8")).hexdigest()
+
+
+def _machine_document(path):
+    return (path.parent.name == "documents" and path.suffix in {".json", ".pending"}
+            and len(path.stem) == 32 and all(c in "0123456789abcdef" for c in path.stem))
+
+
 def atomic_json(path: Path, value: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as stream:
-            json.dump(value, stream, ensure_ascii=False, indent=2, allow_nan=False)
+            if isinstance(value, _DocumentPayload):
+                stream.write(value.encoded)
+            elif _machine_document(path) or path.name == "preparation-queue.json":
+                # Machine checkpoints can contain a whole film's cues and tokens.
+                stream.write(_compact_json(value))
+            else:
+                json.dump(value, stream, ensure_ascii=False, indent=2, allow_nan=False)
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, path)
@@ -48,6 +73,7 @@ class Store:
         self.data_dir = Path(data_dir or data_root()).resolve()
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.db_path = self.data_dir / "study.db"
+        self._last_material = None
         self.database = Database(self.db_path)
         from .portable_paths import migrate_portable_paths
         migrate_portable_paths(self)
@@ -102,7 +128,8 @@ class Store:
     def ensure_subtitle_files(self, document):
         """Restore missing published subtitles from the current authoritative document."""
         path, srt = self.material_paths(document.media_path, document.language)
-        if srt.exists() and path.with_suffix(".translation.srt").exists():
+        if srt.exists() and (document.metadata.get("lesson_status") == "local_only"
+                             or path.with_suffix(".translation.srt").exists()):
             return
         with self._material_write():
             self._recover_material(path)
@@ -140,7 +167,22 @@ class Store:
         marker = path.with_suffix(".pending")
         if not marker.exists():
             return
-        if path.exists():
+        data = marker.read_bytes()
+        journal = json.loads(data) if data else {}
+        if journal.get("version") == 2:
+            # Derive staging names locally. Never interpret paths from a marker.
+            nonce = uuid.UUID(hex=journal["transaction"]).hex
+            staged = path.with_name(f".{path.stem}.{nonce}.srt")
+            if path.exists():
+                raw = path.read_bytes()
+                if hashlib.sha256(raw).hexdigest() == journal["document_sha256"]:
+                    # The JSON committed. Complete both sidecars even if the
+                    # previous process had installed just the first one.
+                    self._render_srt(StudyDocument.from_dict(json.loads(raw)), path.with_suffix(".srt"))
+            staged.unlink(missing_ok=True)
+            staged.with_suffix(".translation.srt").unlink(missing_ok=True)
+        elif path.exists():
+            # Legacy empty markers predate independent intermediate checkpoints.
             current = StudyDocument.from_dict(json.loads(path.read_bytes()))
             self._render_srt(current, path.with_suffix(".srt"))
         else:
@@ -148,26 +190,69 @@ class Store:
             path.with_suffix(".translation.srt").unlink(missing_ok=True)
         marker.unlink()
 
-    def save_document(self, document: StudyDocument, *, replace_existing=False) -> Path:
+    def _publish_material(self, path, document, payload):
+        marker = path.with_suffix(".pending")
+        nonce = uuid.uuid4().hex
+        staged = path.with_name(f".{path.stem}.{nonce}.srt")
+        translated = staged.with_suffix(".translation.srt")
+        atomic_json(marker, {"version": 2, "transaction": nonce, "document_sha256": payload.digest})
+        try:
+            self._render_srt(document, staged)
+            atomic_json(path, payload)
+        except Exception:
+            # The committed captions may represent an older revision than the
+            # intermediate JSON. Neither published file has been touched yet.
+            staged.unlink(missing_ok=True)
+            translated.unlink(missing_ok=True)
+            marker.unlink()
+            raise
+        # JSON is now authoritative. Leave the journal in place on an error so
+        # a fresh Store can finish an interrupted replacement.
+        staged.replace(path.with_suffix(".srt"))
+        target = path.with_suffix(".translation.srt")
+        if translated.exists():
+            translated.replace(target)
+        else:
+            target.unlink(missing_ok=True)
+        marker.unlink()
+
+    @staticmethod
+    def _material_signature(path):
+        stat = path.stat()
+        return path, stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size
+
+    def _previous_material(self, path):
+        signature = self._material_signature(path)
+        if self._last_material and self._last_material[0] == signature:
+            # Windows ctime can be creation time. Check an in-place editor which
+            # preserves size and mtime without allocating or parsing the prior JSON.
+            with path.open("rb") as stream:
+                if hashlib.file_digest(stream, "sha256").hexdigest() == self._last_material[1]:
+                    return self._last_material[2:]
+        try:
+            metadata = json.loads(path.read_bytes()).get("metadata", {})
+            return metadata.get("cue_corrections", {}), bool(metadata.get("subtitle_plan"))
+        except (ValueError, AttributeError):
+            # An unreadable cache still requires a byte-for-byte recovery copy.
+            return {}, None
+
+    def save_document(self, document: StudyDocument, *, replace_existing=False, publish_subtitles=False) -> Path:
         with self._material_write():
             path = self._document_path(document.media_path, document.language)
             self._recover_material(path)
             if path.exists():
-                try:
-                    metadata = json.loads(path.read_bytes()).get("metadata", {})
-                    previous = metadata.get("cue_corrections", {})
-                except (ValueError, AttributeError):
-                    # Replacement of an unreadable cache must retain its original bytes.
-                    metadata, previous = None, {}
+                previous, had_plan = self._previous_material(path)
                 replaced_corrections = previous and previous != document.metadata.get("cue_corrections", {})
                 if replaced_corrections and not replace_existing:
                     raise ValueError("当前字幕已有新的逐句修订，请重新读取材料。")
-                if (metadata is None or replaced_corrections or
-                        bool(metadata.get("subtitle_plan")) != bool(document.metadata.get("subtitle_plan"))):
+                if had_plan is None or replaced_corrections or had_plan != bool(document.metadata.get("subtitle_plan")):
                     self._backup_material(path)
-            return self._save_document(document)
+            # Import explicitly replaces the published track even though the
+            # imported document is still awaiting teaching.
+            publish_subtitles = publish_subtitles or (replace_existing and bool(document.metadata.get("subtitle_path")))
+            return self._save_document(document, publish_subtitles=publish_subtitles)
 
-    def _save_document(self, document: StudyDocument, *, payload=None) -> Path:
+    def _save_document(self, document: StudyDocument, *, payload=None, publish_subtitles=False) -> Path:
         document.media_path = canonical_path(document.media_path)
         document.metadata.setdefault("media_fingerprint", media_fingerprint(document.media_path))
         document.metadata["schema_version"] = 1
@@ -175,24 +260,24 @@ class Store:
         if payload is None:
             payload = document.to_dict()
         else:
+            # A hand revision supplies the original payload, including unknown fields.
+            publish_subtitles = True
             payload["metadata"] = document.metadata
+        payload = _DocumentPayload(payload)
         srt = path.with_suffix(".srt")
-        managed = (srt.exists() or document.metadata.get("stage") == "ready"
-                   or document.metadata.get("subtitle_path") or document.metadata.get("cue_corrections"))
+        stage = document.metadata.get("stage")
+        managed = (publish_subtitles or stage == "ready" or
+                   (not stage and (srt.exists() or document.metadata.get("subtitle_path")
+                                   or document.metadata.get("cue_corrections"))))
         if managed:
-            # JSON is authoritative. The journal repairs an interrupted two-file
-            # publication on the next read, including after a process crash.
-            marker = path.with_suffix(".pending")
-            atomic_json(marker, {})
-            try:
-                self._render_srt(document, srt)
-                atomic_json(path, payload)
-            except Exception:
-                self._recover_material(path)
-                raise
-            marker.unlink()
+            self._publish_material(path, document, payload)
         else:
             atomic_json(path, payload)
+        # One document per Store is sufficient for sequential checkpoints. A
+        # different writer/atomic replacement invalidates its filesystem identity.
+        self._last_material = (self._material_signature(path), payload.digest,
+                               deepcopy(document.metadata.get("cue_corrections", {})),
+                               bool(document.metadata.get("subtitle_plan")))
         return path
 
     def load_document(self, media_path: str, language: LanguagePair) -> StudyDocument | None:
@@ -238,7 +323,8 @@ class Store:
         else:
             from .material_reset import reset_teaching_document
             document = reset_teaching_document(document)
-            self._save_document(document)
+            self._save_document(document, publish_subtitles=path.with_suffix(".srt").exists()
+                                or bool(document.metadata.get("cue_corrections") or document.metadata.get("subtitle_path")))
         return True
 
     def _save_entry(self, db, kind: str, media_path: str, cue: Cue, language: LanguagePair,

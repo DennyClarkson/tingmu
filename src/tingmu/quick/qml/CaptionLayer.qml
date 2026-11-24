@@ -69,7 +69,7 @@ Item {
                     color: Theme.captionShadow
                 }
                 Repeater {
-                    model: captionRoot.appearance.outline > 0 ? 8 : 0
+                    model: captionRoot.appearance.outline > 1.5 ? 8 : 0
                     delegate: Glyph {
                         required property int index
                         x: mainText.x + Math.cos(index * Math.PI / 4) * captionRoot.appearance.outline
@@ -79,6 +79,8 @@ Item {
                 }
                 Glyph {
                     id: mainText
+                    style: captionRoot.appearance.outline > 0 && captionRoot.appearance.outline <= 1.5 ? Text.Outline : Text.Normal
+                    styleColor: captionRoot.appearance.edge
                     x: 8
                     y: (line.height - contentHeight) / 2
                     color: captionRoot.appearance.fill

@@ -79,33 +79,45 @@ class ChatController:
 
     def _activate_context_session(self):
         language = self.ports.settings().language
-        session = self.ports.conversations().migrate_legacy(self.ports.media_path(), language)
-        sessions = self.ports.conversations().list_sessions(language.target)
-        existing = next(
-            (
-                s
-                for s in sessions
-                if s.get("media_path", "") == self.ports.media_path()
-                and s.get("source_language") == language.source
-            ),
-            None,
-        )
-        session = existing or session or self.ports.conversations().create(language, self.ports.media_path())
-        self._select_chat(session["id"])
+        chats = self.ports.conversations()
+        media = self.ports.media_path()
+        with chats.database.session():
+            session = chats.migrate_legacy(media, language)
+            sessions = chats.list_sessions(language.target)
+            existing = next((row for row in sessions if row["media_path"] == media
+                             and row["source_language"] == language.source), None)
+            if existing and (not session or existing["id"] != session["id"]):
+                session = chats.load(existing["id"])
+            if not session:
+                session = chats.create(language, media)
+                sessions = None
+            session, sessions = self._prepare_selection(chats, session, sessions)
+        self._show_selection(session, sessions)
 
     def _select_chat(self, session_id):
-        session = self.ports.conversations().load(session_id)
+        chats = self.ports.conversations()
+        with chats.database.session():
+            session, sessions = self._prepare_selection(chats, chats.load(session_id))
+        self._show_selection(session, sessions)
+
+    def _prepare_selection(self, chats, session, sessions=None):
         if not session:
             raise ValueError("对话已不存在")
-        self.state.active_session_id = session["id"]
-        self.state.messages = deepcopy(session.get("messages", []))
         if "chat" not in self.ports.task_workers() and any(
-            m.get("status") in ("pending", "streaming") for m in self.state.messages
+            m.get("status") in ("pending", "streaming") for m in session["messages"]
         ):
-            for item in self.state.messages:
+            for item in session["messages"]:
                 if item.get("status") in ("pending", "streaming"):
                     item["status"] = "stopped"
-            self.ports.conversations().save(session["id"], self.state.messages)
+            chats.save(session["id"], session["messages"])
+            sessions = None
+        if sessions is None:
+            sessions = chats.list_sessions(self.ports.settings().target_language)
+        return session, sessions
+
+    def _show_selection(self, session, sessions):
+        self.state.active_session_id = session["id"]
+        self.state.messages = session["messages"]
         status, phase = "", "idle"
         pending = next(
             (
@@ -128,7 +140,8 @@ class ChatController:
         self.ports.set_state(domain="chat", chatToolStatus=status, chatToolPhase=phase)
         self._sync_chat_stopping()
         self.ports.messagesChanged.emit()
-        self._refresh_sessions()
+        self.state.sessions = sessions
+        self.ports.chatSessionsChanged.emit()
 
     def _sync_chat_stopping(self):
         worker = self.ports.task_workers().get("chat")
@@ -139,7 +152,6 @@ class ChatController:
 
     def _persist_chat(self, session, messages):
         # Persistence must never retain a worker's live streaming dictionaries.
-        messages = deepcopy(messages)
         self.ports.conversations().save_with_legacy(session["id"], deepcopy(messages))
 
     def _chat_delta(self, session_id, message_id, delta):

@@ -14,7 +14,16 @@ import unicodedata
 
 from filelock import FileLock
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+
+_V2_INDEXES = (
+    "CREATE INDEX IF NOT EXISTS entries_target_id ON entries(target_language,id)",
+    "CREATE INDEX IF NOT EXISTS entries_media_pair ON entries(media_path,source_language,target_language)",
+    "CREATE INDEX IF NOT EXISTS notebook_notes_created ON notebook_notes(language,created_at,id)",
+    "CREATE INDEX IF NOT EXISTS notebook_notes_updated ON notebook_notes(language,updated_at,id)",
+    "CREATE INDEX IF NOT EXISTS chat_sessions_updated ON chat_sessions(target_language,updated_at DESC,id)",
+    "CREATE INDEX IF NOT EXISTS notebook_sources_target ON notebook_sources(target_language,entry_id)",
+)
 
 
 def word_key(text: str, target_language: str) -> str:
@@ -155,6 +164,9 @@ class Database:
                     raise RuntimeError("Workspace database was created by a newer application")
                 if version == 0:
                     _migrate_v1(db)
+                if version < 2:
+                    for statement in _V2_INDEXES:
+                        db.execute(statement)
                     db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
                 db.commit()
             except BaseException:
@@ -180,10 +192,16 @@ class Database:
             if self._closed:
                 raise RuntimeError("Workspace database is closed")
             self._active += 1
+        db = None
         try:
             db = sqlite3.connect(self.path, timeout=25)
             db.row_factory = sqlite3.Row
+            db.execute("PRAGMA synchronous=NORMAL")
+            db.execute("PRAGMA temp_store=MEMORY")
+            db.execute("PRAGMA cache_size=-16000")
         except BaseException:
+            if db is not None:
+                db.close()
             with self._condition:
                 self._active -= 1
                 self._condition.notify_all()

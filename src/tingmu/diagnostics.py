@@ -124,6 +124,7 @@ class AppLog:
         self.path = self.directory / "events.jsonl"
         self.session = uuid.uuid4().hex[:12]
         self._closed = False
+        self._read_cache = (None, ())
         self.logger = logging.getLogger(f"tingmu.session.{self.session}")
         self.logger.propagate = False
         self.handler = RotatingFileHandler(self.path, maxBytes=max_bytes, backupCount=3, encoding="utf-8")
@@ -137,10 +138,13 @@ class AppLog:
     def event(self, name, message, level="INFO", **details):
         if self._closed:
             return
+        priority = getattr(logging, level)
+        if not self.logger.isEnabledFor(priority):
+            return
         record = {"time": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
                   "level": level, "session": self.session, "event": name,
                   "message": redact_text(message), "fields": safe_fields(details)}
-        self.logger.log(getattr(logging, level), json.dumps(record, ensure_ascii=False, allow_nan=False))
+        self.logger.log(priority, json.dumps(record, ensure_ascii=False, allow_nan=False))
 
     def exception(self, error, event="unhandled_exception"):
         frames = [{"file": Path(frame.filename).name, "line": frame.lineno, "function": frame.name}
@@ -152,8 +156,15 @@ class AppLog:
         if not self._closed:
             self.handler.flush()
         try:
+            stat = self.path.stat()
+            signature = (stat.st_size, stat.st_mtime_ns, stat.st_ino)
+            cached_signature, cached = self._read_cache
+            if cached_signature == signature:
+                return [row.copy() for row in cached[-limit:]]
             with self.path.open("rb") as stream:
-                stream.seek(max(0, self.path.stat().st_size - 256000))
+                stat = os.fstat(stream.fileno())
+                signature = (stat.st_size, stat.st_mtime_ns, stat.st_ino)
+                stream.seek(max(0, stat.st_size - 256000))
                 lines = stream.read().decode("utf-8", errors="replace").splitlines()
             result = []
             for line in lines:
@@ -165,6 +176,11 @@ class AppLog:
                     result.append(row)
                 except (ValueError, TypeError):
                     continue
+            # Standard rows are flat after encoding details. Foreign structured
+            # rows can still be read without sharing nested state with callers.
+            if all(not isinstance(v, (dict, list)) for row in result for v in row.values()):
+                self._read_cache = (signature, result)
+                return [row.copy() for row in result[-limit:]]
             return result[-limit:]
         except OSError:
             return []

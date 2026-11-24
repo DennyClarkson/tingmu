@@ -5,7 +5,25 @@ import "Style.js" as S
 Item {
     id:root
     property bool follow:true
-    readonly property string query: search.text.trim().toLowerCase()
+    property string query: ""
+    property var cueIndex: ({rows: [], fields: null})
+    function refreshCues() {
+        cueIndex = {rows: backend.cueSnapshot(), fields: null}
+    }
+    function filteredRows(index, term) {
+        if (!term) return index.rows
+        if (!index.fields) {
+            index.fields = index.rows.map(cue =>
+                [cue.text, cue.translation, cue.reading].map(field => (field || "").toLowerCase()))
+        }
+        return index.rows.filter((cue, i) => index.fields[i].some(field => field.includes(term)))
+    }
+    Component.onCompleted: refreshCues()
+    Timer {
+        id: applySearch
+        interval: 110
+        onTriggered: root.query = search.text.trim().toLowerCase()
+    }
     readonly property string activeId: backend.activeCue.id || ""
     function openSettings(){settingsPopup.open()}
     function followActiveCue() {
@@ -14,13 +32,21 @@ Item {
     }
     onQueryChanged: if (!query) Qt.callLater(followActiveCue)
     onFollowChanged: if (follow) followActiveCue()
-    Connections { target: backend; function onActiveCueChanged() { root.followActiveCue() } }
+    Connections {
+        target: backend
+        function onActiveCueChanged() { root.followActiveCue() }
+        function onCuesChanged() { root.refreshCues() }
+    }
     ColumnLayout {
         anchors.fill:parent; anchors.margins:12; spacing:10
         GridLayout {
             Layout.fillWidth:true; columns:root.width<270 ? 2 : 3
             Field {
                 id:search; objectName:"subtitleSearch"; clearable:true
+                onTextChanged: {
+                    if (text.trim()) applySearch.restart()
+                    else { applySearch.stop(); root.query = "" }
+                }
                 Layout.fillWidth:true; Layout.columnSpan:root.width<270 ? 2 : 1
                 placeholderText:root.width<400 ? qsTranslate("Tingmu", "搜索字幕")
                     : qsTranslate("Tingmu", "搜索字幕 · ") + backend.cueCount + qsTranslate("Tingmu", " 句")
@@ -41,8 +67,7 @@ Item {
         ListView {
             id:list; objectName:"subtitleList"
             Layout.fillWidth:true; Layout.fillHeight:true; clip:true; spacing:3
-            model: !root.query ? backend.cues : backend.cues.filter(cue =>
-                [cue.text, cue.translation, cue.reading].some(value => value && value.toLowerCase().includes(root.query)))
+            model: root.filteredRows(root.cueIndex, root.query)
             cacheBuffer:500
             ScrollBar.vertical:AppScrollBar { id:scrollBar }
             delegate:Rectangle {

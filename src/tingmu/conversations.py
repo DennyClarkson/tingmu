@@ -6,7 +6,6 @@ import math
 import uuid
 
 from .storage import canonical_path
-from .models import LanguagePair
 
 _PRIVATE_FIELDS = {
     "signature", "thinking_signature", "encrypted_content", "encrypted", "redacted_thinking",
@@ -151,30 +150,40 @@ class ConversationStore:
         clean = _messages(messages)
         if title is not None:
             _text(title, "标题", 200)
-        with self.database.session():
-            with self.store._connection(immediate=True) as db:
-                cursor = db.execute("UPDATE chat_sessions SET messages=?,title=COALESCE(?,title),updated_at=? "
-                                    "WHERE id=?", (json.dumps(clean, ensure_ascii=False), title, _now(), session_id))
-                if not cursor.rowcount:
-                    raise ValueError("对话不存在。")
-                if record_legacy_migration:
-                    self._record_legacy(db, session_id)
-            return self.load(session_id)
+        with self.store._connection(immediate=True) as db:
+            row = db.execute("UPDATE chat_sessions SET messages=?,title=COALESCE(?,title),updated_at=? "
+                             "WHERE id=? RETURNING id,title,media_path,source_language,target_language,"
+                             "created_at,updated_at",
+                             (json.dumps(clean, ensure_ascii=False), title, _now(), session_id)).fetchone()
+            if row is None:
+                raise ValueError("对话不存在。")
+            session = {**dict(row), "messages": clean}
+            if record_legacy_migration:
+                self._record_legacy(db, session)
+        return session
 
-    def _record_legacy(self, db, session_id):
-        session = db.execute("SELECT media_path,source_language,target_language,messages FROM chat_sessions "
-                             "WHERE id=?", (session_id,)).fetchone()
-        if session is None:
-            raise ValueError("对话不存在。")
-        self.store.save_conversation(session[0], LanguagePair(session[1], session[2]), json.loads(session[3]))
+    @staticmethod
+    def _record_legacy(db, session):
+        path, source, target = (session[key] for key in ("media_path", "source_language", "target_language"))
+        # Project the validated canonical JSON in place. json_each traverses the
+        # message array in order, including an empty array when clearing chat.
+        db.execute("""
+            INSERT INTO conversations(media_path,source_language,target_language,messages,updated_at)
+            SELECT media_path,source_language,target_language,
+                (SELECT json_group_array(json_object('role',m.value->>'$.role','content',m.value->>'$.content'))
+                 FROM json_each(chat_sessions.messages) m), updated_at
+            FROM chat_sessions WHERE id=?
+            ON CONFLICT(media_path,source_language,target_language) DO UPDATE SET
+                messages=excluded.messages,updated_at=excluded.updated_at
+        """, (session["id"],))
         db.execute("INSERT OR IGNORE INTO chat_legacy_migrations VALUES (?,?,?,?)",
-                   (*session[:3], session_id))
+                   (path, source, target, session["id"]))
 
     def save_with_legacy(self, session_id, messages):
         """Atomically save both views while retaining the positional save hook."""
         with self.store._connection(immediate=True) as db:
             result = self.save(session_id, messages)
-            self._record_legacy(db, session_id)
+            self._record_legacy(db, result)
             return result
 
     def rename(self, session_id, title):

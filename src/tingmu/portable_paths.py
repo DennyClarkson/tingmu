@@ -1,6 +1,7 @@
 """Move internal media identities with a portable folder, keeping external paths intact."""
 from contextlib import closing, contextmanager
 from datetime import datetime, timezone
+import filecmp
 import hashlib
 import json
 import os
@@ -8,6 +9,7 @@ from pathlib import Path
 import shutil
 import sqlite3
 import threading
+from tempfile import mkstemp
 import time
 import uuid
 
@@ -90,6 +92,19 @@ def _read(path):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _copy_published(source, target):
+    # The new hash can live on a removable volume without hard-link support.
+    descriptor, temporary = mkstemp(dir=target.parent)
+    try:
+        with os.fdopen(descriptor, "wb") as new, source.open("rb") as old:
+            shutil.copyfileobj(old, new)
+            new.flush()
+            os.fsync(new.fileno())
+        os.replace(temporary, target)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
 def _backup(store, sources, old, new):
     from .storage import atomic_json
     folder = store.data_dir / "migration-backups" / (
@@ -145,6 +160,7 @@ def migrate_portable_paths(store):
         backup = _backup(store, sources + subtitles, old, root)
         writes = {}
         renders = {}
+        published = {}
         retired = set()
         for source in sources:
             if source == manifest:
@@ -176,7 +192,18 @@ def migrate_portable_paths(store):
                     for suffix in (".srt", ".translation.srt"):
                         if source.with_suffix(suffix).exists():
                             retired.add(source.with_suffix(suffix))
-                if source.with_suffix(".srt").exists() or changed.get("metadata", {}).get("cue_corrections"):
+                metadata = changed.get("metadata", {})
+                if metadata.get("stage") not in (None, "", "ready"):
+                    # A checkpoint can be newer than either published track.
+                    # Retain the exact last release, including absent translations.
+                    for suffix in (".srt", ".translation.srt"):
+                        old_track, new_track = source.with_suffix(suffix), target.with_suffix(suffix)
+                        if old_track == new_track or not old_track.exists():
+                            continue
+                        if new_track.exists() and not filecmp.cmp(old_track, new_track, shallow=False):
+                            raise ValueError(f"便携迁移发现已发布字幕冲突，原文件与备份均保留：{backup}")
+                        published[new_track] = old_track
+                elif source.with_suffix(".srt").exists() or metadata.get("cue_corrections"):
                     renders[target.with_suffix(".srt")] = StudyDocument.from_dict(changed)
             if target in writes and writes[target] != changed:
                 raise ValueError(f"便携迁移发现重复学习材料，原文件与备份均保留：{backup}")
@@ -223,6 +250,9 @@ def migrate_portable_paths(store):
                                        (json.dumps(messages, ensure_ascii=False), session_id))
                 for target, value in writes.items():
                     atomic_json(target, value)
+                for target, source in published.items():
+                    if not target.exists():
+                        _copy_published(source, target)
                 for target, document in renders.items():
                     store._render_srt(document, target)
             except sqlite3.IntegrityError as error:
@@ -236,5 +266,5 @@ def migrate_portable_paths(store):
                               "last_backup": str(backup.relative_to(store.data_dir))})
         atomic_json(backup / "migration.json", {"from": str(old), "to": str(root), "state": "complete",
                                                 "rewritten_json": len(writes)})
-        for source in retired - writes.keys() - renders.keys():
+        for source in retired - writes.keys() - renders.keys() - published.keys():
             source.unlink()  # A byte-for-byte copy remains in migration-backups.

@@ -31,7 +31,8 @@ class StableListModel(QAbstractListModel):
 
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
         if role == self.ModelDataRole and index.isValid() and 0 <= index.row() < len(self._rows):
-            return deepcopy(self._rows[index.row()])
+            # Qt converts the owned row to QVariant; Python snapshot callers use get().
+            return self._rows[index.row()]
         return None
 
     @Property(int, notify=countChanged)
@@ -108,7 +109,7 @@ class MessageMarkdownCache:
         Only changed messages acquire new snapshots. StableListModel owns its own
         copies, so handing this view to sync does not expose cache internals.
         """
-        from tingmu.richtext import markdown_blocks
+        from tingmu.richtext import MarkdownBoundary, markdown_blocks
 
         current, snapshots, display_rows, rows = {}, {}, {}, []
         for index, message in enumerate(messages):
@@ -116,7 +117,11 @@ class MessageMarkdownCache:
             content = message.get("content", "")
             cached = self._entries.get(key)
             if cached is None or cached[0] != content:
-                cached = (content, markdown_blocks(content))
+                if cached is not None and content.startswith(cached[0]):
+                    previous, boundary = cached[1], cached[2]
+                else:
+                    previous, boundary = [], MarkdownBoundary()
+                cached = (content, markdown_blocks(content, previous_blocks=previous, boundary=boundary), boundary)
             current[key] = cached
             if self._messages.get(key) == message:
                 snapshot = self._messages[key]

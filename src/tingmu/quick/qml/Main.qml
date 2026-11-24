@@ -327,7 +327,7 @@ ApplicationWindow {
             handle:Rectangle{implicitHeight:8;implicitWidth:8;color:"transparent";Rectangle{anchors.centerIn:parent;width:30;height:2;color:SplitHandle.hovered || SplitHandle.pressed ? Theme.accent : Theme.line}}
             onResizingChanged:if(!resizing)persist.restart()
             DockPanel { id:libraryDock;objectName:"libraryModule";moduleId:"library";title:qsTranslate("Tingmu", "媒体库");subtitle:String(backend.library.length);workspace:app;visible:app.slotEnabled(moduleId);SplitView.preferredHeight:430;SplitView.fillHeight:!queueDock.visible;SplitView.minimumHeight:app.slotMinimumHeight("library",250);panelContent:Component{LibraryPanel{}} }
-            DockPanel { id:queueDock;objectName:"queueModule";moduleId:"queue";title:qsTranslate("Tingmu", "处理队列");subtitle:backend.queueState.queueRunning ? qsTranslate("Tingmu", "进行中") : String(backend.queueState.totalCount || 0);workspace:app;visible:app.slotEnabled(moduleId);SplitView.fillHeight:true;SplitView.minimumHeight:app.slotMinimumHeight("queue",210);panelContent:Component{QueuePanel{}} }
+            DockPanel { id:queueDock;objectName:"queueModule";moduleId:"queue";title:qsTranslate("Tingmu", "处理队列");subtitle:backend.queueState.queueRunning ? qsTranslate("Tingmu", "进行中") : String(backend.queueState.totalCount || 0);workspace:app;visible:app.slotEnabled(moduleId);SplitView.fillHeight:true;SplitView.minimumHeight:app.slotMinimumHeight("queue",210);panelContent:Component{QueuePanel{panelShown:queueDock.detached || (app.viewMode!=="learn" && app.moduleEnabled("queue"))}} }
         }
         SplitView {
             id:centerColumn;orientation:Qt.Vertical
@@ -345,7 +345,7 @@ ApplicationWindow {
             handle:Rectangle{implicitHeight:8;implicitWidth:8;color:"transparent";Rectangle{anchors.centerIn:parent;width:30;height:2;color:SplitHandle.hovered || SplitHandle.pressed ? Theme.accent : Theme.line}}
             onResizingChanged:if(!resizing)persist.restart()
             DockPanel { id:companionDock;objectName:"companionModule";moduleId:"companion";title:qsTranslate("Tingmu", "学习伴侣");subtitle:"";workspace:app;visible:app.slotEnabled(moduleId);SplitView.preferredHeight:460;SplitView.minimumHeight:app.slotMinimumHeight("companion",220);panelContent:Component{CompanionPanel{workspace:app}} }
-            DockPanel { id:chatDock;objectName:"chatModule";moduleId:"chat";title:qsTranslate("Tingmu", "对话");subtitle:app.chatSubtitle();workspace:app;visible:app.slotEnabled(moduleId);SplitView.fillHeight:true;SplitView.minimumHeight:app.slotMinimumHeight("chat",190);panelContent:Component{ChatPanel{}} }
+            DockPanel { id:chatDock;objectName:"chatModule";moduleId:"chat";title:qsTranslate("Tingmu", "对话");subtitle:app.chatSubtitle();workspace:app;visible:app.slotEnabled(moduleId);SplitView.fillHeight:true;SplitView.minimumHeight:app.slotMinimumHeight("chat",190);panelContent:Component{ChatPanel{panelShown:chatDock.detached || (app.viewMode!=="learn" && app.moduleEnabled("chat"))}} }
         }
     }
     LearningPanel{id:learningPanel;anchors.fill:parent;visible:app.viewMode==="learn";workspace:app}

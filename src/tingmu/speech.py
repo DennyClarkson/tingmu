@@ -19,33 +19,69 @@ def _session(path: Path):
     return ort.InferenceSession(str(path), options, providers=["CPUExecutionProvider"])
 
 
+def _windowed_spectrum(frames, window):
+    # Keep FFT scratch bounded even on NumPy releases that promote float32.
+    spectrum = np.empty((*frames.shape[:-1], len(window) // 2 + 1), np.complex64)
+    for start in range(0, frames.shape[-2], 32):
+        block = slice(start, start + 32)
+        spectrum[..., block, :] = np.fft.rfft(frames[..., block, :] * window)
+    return spectrum
+
+
+def _windowed_inverse(spectrum, window):
+    frames = np.empty((*spectrum.shape[:-1], len(window)), np.float32)
+    for start in range(0, len(spectrum), 32):
+        block = slice(start, start + 32)
+        frames[block] = np.fft.irfft(spectrum[block], n=len(window))
+    frames *= window
+    return frames
+
+
 def _vocal_block(samples, window, hop, engines):
     frames = np.lib.stride_tricks.sliding_window_view(samples.T, len(window), axis=1)[:, ::hop]
-    spectrum = np.fft.rfft(frames * window)
+    spectrum = _windowed_spectrum(frames, window)
     inputs = np.ascontiguousarray(np.abs(spectrum[:, None, :, :1024]), dtype=np.float32)
-    powers = [np.square(session.run(None, {session.get_inputs()[0].name: inputs})[0][:, 0])
-              for session in engines]
-    mask = (powers[0] + 5e-11) / (powers[0] + powers[1] + 1e-10)
+    powers = []
+    for session, input_name in engines:
+        power = session.run(None, {input_name: inputs})[0][:, 0].astype(np.float32, copy=False)
+        np.square(power, out=power)
+        powers.append(power)
+    vocals, total = powers
+    total += vocals
+    total += 1e-10
+    vocals += 5e-11
+    mask = np.divide(vocals, total, out=vocals)
     spectrum[:, :, :1024] *= mask
     spectrum[:, :, 1024:] = 0
-    mono = np.fft.irfft(spectrum.mean(axis=0)) * window
+    mono = _windowed_inverse(spectrum.mean(axis=0), window)
     return _overlap_add(mono, hop, window)
 
 
 def _overlap_add(frames, hop, window):
     length = (len(frames) - 1) * hop + len(window)
-    signal = np.zeros(length, dtype=np.float32)
-    weight = np.zeros(length, dtype=np.float32)
-    for i, frame in enumerate(frames):
-        idx = slice(i * hop, i * hop + len(window))
-        signal[idx] += frame
-        weight[idx] += window * window
-    return signal / np.maximum(weight, 1e-8)
+    blocks = (len(window) + hop - 1) // hop
+    signal = np.zeros((len(frames) - 1 + blocks, hop), dtype=np.float32)
+    weight = np.zeros_like(signal)
+    window_sq = np.square(window)
+    # Each slice adds disjoint hop-length runs across *all* frames. Descending
+    # offsets preserve the original per-sample, oldest-frame-first summation.
+    for offset in reversed(range(blocks)):
+        start = offset * hop
+        part = frames[:, start:start + hop]
+        rows = slice(offset, offset + len(frames))
+        signal[rows, :part.shape[1]] += part
+        weight[rows, :part.shape[1]] += window_sq[start:start + hop]
+    np.maximum(weight, 1e-8, out=weight)
+    np.divide(signal, weight, out=signal)
+    return signal.ravel()[:length]
 
 
 def isolate_vocals(source: Path, dest: Path, models: Path, check: Callable, progress=None):
     """44.1 kHz stereo raw PCM16 to mono PCM16, one fixed network window at a time."""
-    engines = [_session(models / f"{name}.fp16.onnx") for name in ("vocals", "accompaniment")]
+    engines = []
+    for name in ("vocals", "accompaniment"):
+        session = _session(models / f"{name}.fp16.onnx")
+        engines.append((session, session.get_inputs()[0].name))
     hop, n_fft = 1024, 4096
     window = np.hanning(n_fft + 1)[:-1].astype(np.float32)
     # Read context for both sides, discard model edges. Every sample has one owner.
@@ -132,12 +168,22 @@ def suppress_repetitive_background(source: Path, dest: Path, check: Callable, pr
             pcm = np.frombuffer(audio.readframes(right - left), dtype="<i2").astype(np.float32)
             pcm = np.pad(pcm, (width, width))
             frames = np.lib.stride_tricks.sliding_window_view(pcm, width)[::hop]
-            spectrum = np.fft.rfft(frames * window)
+            spectrum = _windowed_spectrum(frames, window)
             magnitude = np.abs(spectrum)
-            floor = np.percentile(magnitude, 25, axis=0)
+            # Match the linear 25th percentile on contiguous frequency rows.
+            low, quarter = divmod(len(frames) - 1, 4)
+            high = low + bool(quarter)
+            ranked = np.partition(magnitude.T, (low, high), axis=-1)
+            floor = ranked[:, low] + (ranked[:, high] - ranked[:, low]) * (quarter / 4)
+            del ranked
             # Keep a residual to avoid silencing sustained vowels at music frequencies.
-            gain = np.clip(1 - 1.15 * floor / np.maximum(magnitude, 1e-6), .18, 1)
-            filtered = _overlap_add(np.fft.irfft(spectrum * gain) * window, hop, window)
+            np.maximum(magnitude, 1e-6, out=magnitude)
+            np.divide(-1.15 * floor, magnitude, out=magnitude)
+            magnitude += 1
+            np.clip(magnitude, .18, 1, out=magnitude)
+            spectrum *= magnitude
+            filtered = _overlap_add(_windowed_inverse(spectrum, window), hop, window)
+            del magnitude, spectrum
             offset = start - left + width
             output.writeframesraw(np.clip(np.rint(filtered[offset:offset + end - start]),
                                           -32768, 32767).astype("<i2").tobytes())

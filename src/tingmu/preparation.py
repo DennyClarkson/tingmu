@@ -409,6 +409,7 @@ def acquire_transcript(ctx: PreparationContext):
                 ctx.finished = True
                 return
             if not ctx.plan.teach_enabled and ctx.document.metadata.get("lesson_status") == "local_only":
+                ctx.store.ensure_subtitle_files(ctx.document)
                 ctx.report("本地字幕已就绪，尚未生成模型讲解与译文")
                 ctx.finished = True
                 return

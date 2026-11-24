@@ -1,6 +1,5 @@
 """Local Markdown language books with protected manual writing and source provenance."""
 
-from collections import Counter
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 import hashlib
@@ -80,7 +79,9 @@ class NotebookManager:
 
     def _entries(self, language):
         with self.store._connection() as db:
-            states = {r["entry_id"]: dict(r) for r in db.execute("SELECT * FROM notebook_collections")}
+            states = {r["entry_id"]: dict(r) for r in db.execute(
+                "SELECT c.* FROM entries e JOIN notebook_collections c ON c.entry_id=e.id "
+                "WHERE e.target_language=?", (language,))}
             entries = [dict(r) for r in db.execute("SELECT * FROM entries WHERE target_language=? ORDER BY id",
                                                   (language,))]
             archived = [json.loads(r[0]) for r in db.execute("""
@@ -348,7 +349,7 @@ class NotebookManager:
 
     def snapshot(self, target_language):
         language = _language(target_language)
-        with _LOCK:
+        with _LOCK, self.database.session():
             path = self._path(language)
             markdown = path.read_text(encoding="utf-8") if path.exists() else ""
             entries = self._entries(language)
@@ -356,6 +357,7 @@ class NotebookManager:
                 notes = [self._view_note(row, markdown) for row in db.execute(
                     "SELECT * FROM notebook_notes WHERE language=? ORDER BY created_at,id", (language,))]
                 languages = {r[0] for r in db.execute("SELECT language FROM notebook_v5_migrations")}
+                counts = dict(db.execute("SELECT target_language,count(*) FROM entries GROUP BY target_language"))
                 linked = {i for n in notes for i in n["entry_ids"]}
                 sources = {e["id"]: {**{k: e[k] for k in _SOURCE_FIELDS}, "archived": False}
                            for e in entries if e["id"] in linked}
@@ -365,18 +367,17 @@ class NotebookManager:
                                           WHERE target_language=? AND entry_id IN (SELECT value FROM json_each(?))""",
                                           (language, json.dumps(sorted(missing)))):
                         sources[row[0]] = {**json.loads(row[1]), "archived": True}
-            all_entries = self.store.entries()
-            languages.update(e["target_language"] for e in all_entries)
+            languages.update(counts)
             languages.add(language)
-            counts = Counter(e["target_language"] for e in all_entries)
             organized = sum(e["organized"] for e in entries)
-            due = self.practice(language)
+            due = self._practice(language, entries)
             topics = [{"id": n["id"], "title": n["title"], "entry_ids": n["entry_ids"]} for n in notes]
             return {"language": language, "title": _title(language), "markdown": markdown,
                     "revision": _revision(markdown), "path": str(path), "topics": topics,
                     "collections": entries, "entries": entries, "notes": notes,
                     "note_sources": [sources[i] for i in sorted(sources)],
-                    "books": [{"language": lang, "title": _title(lang), "count": counts[lang]}
+                    "practice": due,
+                    "books": [{"language": lang, "title": _title(lang), "count": counts.get(lang, 0)}
                               for lang in sorted(languages)],
                     "stats": {"total": len(entries), "words": sum(e["kind"] == "word" for e in entries),
                               "notes": sum(e["kind"] == "note" for e in entries), "due": len(due),
@@ -386,12 +387,11 @@ class NotebookManager:
 
     def sync(self, target_language):
         language = _language(target_language)
-        with _LOCK:
-            current = self.snapshot(language)
+        with _LOCK, self.database.session():
             if not self._path(language).exists():
                 self._write(language, f"# {_title(language)}\n\n## 我的笔记\n\n"
                             "在这里记录自己的理解和例句。收藏保留在收集箱，只有明确整理后才加入笔记。\n",
-                            current["revision"])
+                            _revision(""))
             with self.store._connection() as db:
                 db.execute("INSERT OR IGNORE INTO notebook_v5_migrations VALUES (?)", (language,))
             return self.snapshot(language)
@@ -721,11 +721,17 @@ class NotebookManager:
 
     def practice(self, target_language):
         language = _language(target_language)
+        with self.database.session():
+            return self._practice(language, self._entries(language))
+
+    def _practice(self, language, entries):
         with self.store._connection() as db:
-            reviews = {r["entry_id"]: dict(r) for r in db.execute("SELECT * FROM notebook_reviews")}
+            reviews = {r["entry_id"]: dict(r) for r in db.execute(
+                "SELECT r.* FROM entries e JOIN notebook_reviews r ON r.entry_id=e.id "
+                "WHERE e.target_language=?", (language,))}
         now = datetime.now(timezone.utc).isoformat()
         cards = []
-        for entry in self._entries(language):
+        for entry in entries:
             review = reviews.get(entry["id"], {})
             if review.get("due_at", "") > now:
                 continue

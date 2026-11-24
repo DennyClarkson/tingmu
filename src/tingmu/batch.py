@@ -164,8 +164,7 @@ class PreparationQueue:
                         continue
 
     def _save(self):
-        # Timestamps alone do not constitute a visible queue change. Progress
-        # checkpoints retain run()'s 500 ms throttle and immediate stage updates.
+        # Timestamp-only changes do not require a new durable snapshot.
         signature = json.dumps([{key: value for key, value in job.items() if key != "updated_at"}
                                 for job in self._jobs], ensure_ascii=False, sort_keys=True)
         if signature == self._saved_payload:
@@ -377,10 +376,12 @@ class PreparationQueue:
                     nonlocal last_snapshot
                     now = time.monotonic()
                     details = getattr(message, "details", {})
-                    save = last_snapshot is None or now - last_snapshot >= 0.5 or "stage" in details or "stage_code" in details
+                    stage_event = "stage" in details or "stage_code" in details
+                    notify = last_snapshot is None or now - last_snapshot >= 0.5 or stage_event
                     cached = (self.store.load_document(job["media_path"], settings.language)
-                              if save and not details and not job.get("plan") else None)
+                              if notify and not details and not job.get("plan") else None)
                     with self._mutation():
+                        previous_stage = (job.get("stage_code"), job.get("stage_name"))
                         job.update(progress=str(message), updated_at=time.time())
                         _apply_progress(job, details)
                         if cached:
@@ -390,9 +391,15 @@ class PreparationQueue:
                                 "reviewed_count" if stage == "reviewing" else "annotated_count", 0)
                             if stage == "verifying":
                                 job["completed_cues"] = len(cached.metadata["translation_review"]["verified"])
-                        if save:
+                        changed_stage = stage_event and previous_stage != (job.get("stage_code"), job.get("stage_name"))
+                        if changed_stage or "plan" in details or "decision" in details:
                             last_snapshot = now
                             self._save()
+                        elif notify:
+                            # The material checkpoint owns resumable work. Keep
+                            # live counters visible between durable stage/status changes.
+                            last_snapshot = now
+                            self._revision += 1
                     report(f"{job['name']} · {message}")
 
                 try:

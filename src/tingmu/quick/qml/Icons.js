@@ -26,10 +26,15 @@ var icons = {
     "resize": "<path d=\"m7 18 11-11m-5 11 5-5\"/>"
 }
 
+var sources = Object.create(null)
+
 function source(name, color) {
     if (!icons[name]) return ""
+    var key = name + "|" + String(color)
+    if (sources[key]) return sources[key]
     var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="'
               + String(color) + '" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">'
               + icons[name] + '</svg>'
-    return "data:image/svg+xml," + encodeURIComponent(svg)
+    sources[key] = "data:image/svg+xml," + encodeURIComponent(svg)
+    return sources[key]
 }

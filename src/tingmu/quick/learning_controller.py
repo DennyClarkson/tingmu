@@ -50,27 +50,38 @@ class LearningController:
     def refresh(self):
         return self._refresh_notebooks()
 
-    def _refresh_notebooks(self):
+    def _refresh_notebooks(self, snapshot=None):
         if self.ports.is_closed():
             return
-        try:
-            from tingmu.richtext import markdown_blocks
+        manager = self.ports.notebook_manager()
+        with manager.database.session():
+            try:
+                from tingmu.richtext import markdown_blocks
 
-            self.state.notebooks = self.ports.notebook_manager().snapshot(self.state.language)
-            preview = re.sub(
-                r"(?m)^<!-- tingmu:(?:collected:(?:start|end)|note:[^:>]+:(?:start|end|sources)) -->[ \t]*$",
-                "",
-                self.state.notebooks.get("markdown", ""),
-            )
-            self.state.notebooks["blocks"] = markdown_blocks(preview)
-            for note in self.state.notebooks.get("notes", []):
-                note["blocks"] = markdown_blocks(note.get("markdown", note.get("body", "")))
-            self.state.notebooks["practice"] = self.ports.notebook_manager().practice(self.state.language)
-            self.ports.notebooksChanged.emit()
-        except (OSError, ValueError) as exc:
-            self.ports.error(exc, domain="learning")
-        finally:
-            self.ports.refresh_entries()
+                previous = self.state.notebooks
+                if previous.get("language") != self.state.language:
+                    previous = {}
+                snapshot = snapshot or manager.snapshot(self.state.language)
+                if previous.get("revision") == snapshot["revision"] and "blocks" in previous:
+                    snapshot["blocks"] = previous["blocks"]
+                else:
+                    preview = re.sub(
+                        r"(?m)^<!-- tingmu:(?:collected:(?:start|end)|note:[^:>]+:(?:start|end|sources)) -->[ \t]*$",
+                        "", snapshot["markdown"],
+                    )
+                    snapshot["blocks"] = markdown_blocks(preview)
+                old_notes = {note["id"]: note for note in previous.get("notes", [])}
+                for note in snapshot["notes"]:
+                    old = old_notes.get(note["id"], {})
+                    text = note.get("markdown", note["body"])
+                    note["blocks"] = (old["blocks"] if old.get("markdown", old.get("body")) == text and "blocks" in old
+                                      else markdown_blocks(text))
+                self.state.notebooks = snapshot
+                self.ports.notebooksChanged.emit()
+            except (OSError, ValueError) as exc:
+                self.ports.error(exc, domain="learning")
+            finally:
+                self.ports.refresh_entries()
 
     def _organize_notebook(self, *, entry_ids=None, instructions=""):
         enabled, profile = self.ports.model_registry().text_role(self.ports.settings(), "companion")
@@ -116,18 +127,16 @@ class LearningController:
 
     def command_select_notebook(self, name, p):
         self.state.language = str(p.get("language", self.ports.settings().target_language))
-        self.ports.notebook_manager().sync(self.state.language)
-        self._refresh_notebooks()
+        self._refresh_notebooks(self.ports.notebook_manager().sync(self.state.language))
 
     def command_sync_notebook(self, name, p):
-        self.ports.notebook_manager().sync(self.state.language)
-        self._refresh_notebooks()
+        self._refresh_notebooks(self.ports.notebook_manager().sync(self.state.language))
         self.ports.set_state(domain="learning", status="收藏箱与笔记已刷新；可选择 AI 整理写入笔记")
 
     def command_save_notebook(self, name, p):
         language = str(p.get("language", self.state.language))
-        self.ports.notebook_manager().save(language, str(p["markdown"]), str(p["revision"]))
-        self._refresh_notebooks()
+        saved = self.ports.notebook_manager().save(language, str(p["markdown"]), str(p["revision"]))
+        self._refresh_notebooks(saved if language == self.state.language else None)
         self.ports.set_state(domain="learning", status="学习笔记已保存")
 
     def command_organize_notebook(self, name, p):

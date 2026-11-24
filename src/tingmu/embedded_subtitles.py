@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import base64
 from bisect import bisect_right
+from contextlib import ExitStack
 from dataclasses import dataclass
+from functools import lru_cache
 from io import BytesIO
 from itertools import groupby
 import json
@@ -33,6 +35,30 @@ class SubtitleError(ValueError):
 class BitmapFrame:
     url: str
     bounds: dict[str, float]
+
+
+class BitmapPage:
+    """Keep decoded geometry on the page and materialize URLs only around playback."""
+    def __init__(self, scratch, times, files):
+        self._scratch = scratch
+        self.times = times
+        self.files = files
+        self._url = lru_cache(maxsize=4)(self._read_url)
+
+    @staticmethod
+    def _read_url(path):
+        return "data:image/png;base64," + base64.b64encode(path.read_bytes()).decode("ascii")
+
+    def at(self, position):
+        index = bisect_right(self.times, position) - 1
+        if index < 0 or not self.files[index]:
+            return ""
+        path, bounds = self.files[index]
+        return BitmapFrame(self._url(path), bounds)
+
+    def close(self):
+        self._url.cache_clear()
+        self._scratch.cleanup()
 
 
 @dataclass(frozen=True)
@@ -76,6 +102,8 @@ def _run(args, folder, stop, *, images=False):
                                    stderr=subprocess.DEVNULL,
                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         try:
+            seen = set()
+            published_bytes = 0
             deadline = time.monotonic() + 90
             while process.poll() is None:
                 if stop.wait(0.05):
@@ -84,8 +112,23 @@ def _run(args, folder, stop, *, images=False):
                     raise SubtitleError("内嵌字幕解码超时。")
                 if os.fstat(output.fileno()).st_size > MAX_BYTES:
                     raise SubtitleError("内嵌字幕数据超过单次读取上限。")
-                if images and sum(p.stat().st_size for p in folder.glob("*.png")) > MAX_BYTES:
-                    raise SubtitleError("此段图形字幕过于密集。")
+                if images:
+                    # image2 publishes complete PNGs by rename. Only the current
+                    # temporary file can grow between consecutive polls.
+                    in_progress = 0
+                    for entry in folder.iterdir():
+                        if entry.name in seen:
+                            continue
+                        if entry.suffix == ".png":
+                            published_bytes += entry.stat().st_size
+                            seen.add(entry.name)
+                        elif entry.suffix == ".tmp":
+                            try:
+                                in_progress += entry.stat().st_size
+                            except FileNotFoundError:
+                                pass  # Renamed between the listing and the stat.
+                    if published_bytes + in_progress > MAX_BYTES:
+                        raise SubtitleError("此段图形字幕过于密集。")
             if process.returncode:
                 raise SubtitleError("无法解码这条内嵌字幕。")
             output.seek(0)
@@ -198,15 +241,16 @@ def load_page(media, ordinal, track, page, stop):
     # DVB/PGS may announce the true source canvas in the first display event.
     # In that case FFmpeg must be free to resize its input plane dynamically.
     canvas_args = ["-canvas_size", f"{track.width}x{track.height}"] if track.native_canvas else []
-    with _scratch() as temp:
-        folder = Path(temp)
+    with ExitStack() as cleanup:
+        scratch = _scratch()
+        folder = Path(cleanup.enter_context(scratch))
         _run([_binary("ffmpeg"), "-nostdin", "-v", "error", "-protocol_whitelist", "file,pipe",
               "-ss", f"{seek / 1000:.3f}",
               "-t", f"{duration + 1:.3f}", *canvas_args,
               "-i", media, "-filter_complex_threads", "1", "-filter_complex",
               f"[0:s:{ordinal}]scale={width}:{height},format=rgba[caption]", "-map", "[caption]",
               "-t", f"{duration:.3f}", "-fps_mode", "passthrough", "-enc_time_base", "1/1000",
-              "-threads", "1", "-frames:v", "512", "-frame_pts", "1", "-y", "%012d.png"],
+              "-threads", "1", "-frames:v", "512", "-frame_pts", "1", "-atomic_writing", "1", "-y", "%012d.png"],
              folder, stop, images=True)
         files = sorted(folder.glob("*.png"))
         if len(files) >= 511 or sum(p.stat().st_size for p in files) > MAX_BYTES:
@@ -230,8 +274,9 @@ def load_page(media, ordinal, track, page, stop):
                 bounds = {"x": int(cols[0]) / width, "y": int(rows[0]) / height,
                           "width": int(cols[-1] - cols[0] + 1) / width,
                           "height": int(rows[-1] - rows[0] + 1) / height}
-                url = "data:image/png;base64," + base64.b64encode(path.read_bytes()).decode("ascii")
-                value = BitmapFrame(url, bounds)
+                value = (path, bounds)
             times.append(stamp)
             values.append(value)
-        return Events(tuple(times), tuple(values))
+        page = BitmapPage(scratch, tuple(times), tuple(values))
+        cleanup.pop_all()  # The page owns these files until eviction or track close.
+        return page

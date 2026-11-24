@@ -5,8 +5,8 @@ from typing import Any, Callable
 from copy import deepcopy
 from dataclasses import fields, replace
 from pathlib import Path
-from PySide6.QtCore import QUrl
-from tingmu.media_inbox import preparation_block_reason
+from PySide6.QtCore import QFileSystemWatcher, QTimer, QUrl
+from PySide6.QtGui import QGuiApplication
 from tingmu.models import AppSettings, preparation_identity_settings
 
 
@@ -35,6 +35,12 @@ class LibraryState:
     inbox_paused: bool = False
     media_inbox: dict = field(default_factory=dict)
     inbox_timer: Any = None
+    watcher: Any = None
+    watch_timer: Any = None
+    inbox_generation: int = 0
+    inbox_busy: bool = False
+    inbox_requested: bool = False
+    inbox_pending_visible: bool = False
 
 
 @dataclass(frozen=True)
@@ -86,12 +92,57 @@ class LibraryController:
             self.ports.add_paths,
         )
 
-    def _scan_media_inbox(self):
-        if self.ports.is_closed() or (self.state.inbox_thread and self.state.inbox_thread.is_alive()):
+    def start_inbox(self, parent):
+        self.state.watcher = QFileSystemWatcher(parent)
+        self.state.watch_timer = QTimer(parent)
+        self.state.watch_timer.setSingleShot(True)
+        self.state.watch_timer.setInterval(150)
+        self.state.watcher.directoryChanged.connect(lambda _: self.state.watch_timer.start())
+        self.state.watch_timer.timeout.connect(lambda: self._scan_media_inbox(background=True))
+        self.state.inbox_timer = QTimer(parent)
+        self.state.inbox_timer.timeout.connect(lambda: self._scan_media_inbox(background=True))
+        parent.focusWindowChanged.connect(self._window_changed)
+        self.state.inbox_timer.start(2000)
+        QTimer.singleShot(0, lambda: self._scan_media_inbox(background=True))
+
+    def stop_inbox(self):
+        self.state.inbox_timer.stop()
+        self.state.watch_timer.stop()
+        paths = self.state.watcher.directories()
+        if paths:
+            self.state.watcher.removePaths(paths)
+        self.state.inbox_stop.set()
+
+    def invalidate_preflight(self):
+        if not self.ports.is_closed():
+            self.state.inbox_generation += 1
+            self.state.watch_timer.start()
+
+    def _window_changed(self):
+        if not self.ports.is_closed():
+            self._update_interval(waiting=bool(self.ports.mediaInbox().get("waiting")))
+
+    def _update_interval(self, waiting=False):
+        windows = QGuiApplication.topLevelWindows()
+        hidden = bool(windows) and not any(w.isVisible() for w in windows)
+        interval = 2000 if waiting else 60000 if hidden else 20000
+        if self.state.inbox_timer.interval() != interval:
+            self.state.inbox_timer.setInterval(interval)
+
+    def _scan_media_inbox(self, *, background=False):
+        if self.ports.is_closed():
             return
+        if self.state.inbox_busy:
+            self.state.inbox_requested = True
+            self.state.inbox_pending_visible |= not background
+            return
+        self.state.inbox_busy = True
+        if not background:
+            self.state.inbox_generation += 1
+            self.ports.set_inbox_state(scanning=True)
         settings = replace(self.ports.settings())
+        generation = self.state.inbox_generation
         scanner, store, stop = self.state.inbox_scanner, self.ports.store, self.state.inbox_stop
-        self.ports.set_inbox_state(scanning=True)
 
         def scan():
             try:
@@ -111,7 +162,9 @@ class LibraryController:
                     return
                 candidates = [p for p, stage in documents.items() if stage != "ready"]
                 # A ready sidecar needs no speech model; each path gets its own gate.
-                result["blocked"] = {p: preparation_block_reason(settings, [p]) for p in candidates}
+                result["blocked"] = scanner.preparation_reasons(settings, candidates, generation, stop.is_set)
+                result["directories"] = tuple(scanner.directories)
+                result["generation"] = generation
                 result["documents"] = documents
                 result["settings"] = settings.to_dict()
             except Exception as exc:
@@ -124,23 +177,39 @@ class LibraryController:
     def _inbox_completed(self, result):
         if self.ports.is_closed():
             return
+        self.state.inbox_busy = False
+        if self.state.inbox_requested:
+            visible = self.state.inbox_pending_visible
+            self.state.inbox_requested = self.state.inbox_pending_visible = False
+            QTimer.singleShot(0, lambda: self._scan_media_inbox(background=not visible))
         if result.get("failure"):
+            self._update_interval(waiting=True)
             self.ports.set_inbox_state(scanning=False, blocked="暂时无法检查媒体文件夹，稍后自动重试")
             return
         # Accept legacy dataclass snapshots without runtime-only bookkeeping.
         received_settings = {k: v for k, v in result["settings"].items() if not k.startswith("_")}
-        if received_settings != self.ports.settings().to_dict():
+        if (received_settings != self.ports.settings().to_dict()
+                or result.get("generation", self.state.inbox_generation) != self.state.inbox_generation):
             self.ports.set_inbox_state(scanning=False)
             return
         # A partial/inaccessible scan must never purge index entries.
         if result["error"]:
+            self._update_interval(waiting=True)
             self.ports.set_inbox_state(scanning=False, blocked=result["error"])
             return
+        if "directories" in result:
+            desired = set(result["directories"])
+            previous = set(self.state.watcher.directories())
+            if previous - desired:
+                self.state.watcher.removePaths(sorted(previous - desired))
+            if desired - previous:
+                self.state.watcher.addPaths(sorted(desired - previous))
+        self._update_interval(bool(result["waiting"]))
         added, removed = self.state.catalog.reconcile_inbox(result["ready"], result["present"])
-        snapshot = self.ports.queue().snapshot()
         ready = result["ready"]
         selected, blocked = [], []
         enabled = self.ports.settings().auto_prepare_media and not self.state.inbox_paused
+        snapshot = self.ports.queue().snapshot() if removed or (enabled and ready) else []
         if enabled:
             for path in self.state.catalog.automatic & ready.keys():
                 if result["documents"].get(path) == "ready":
@@ -235,7 +304,8 @@ class LibraryController:
                 ),
                 lambda result: self.ports.set_state(status="自动准备已结束；可在媒体库和队列查看结果"),
             )
-        self.ports.refresh_jobs()
+        if selected or removed:
+            self.ports.refresh_jobs()
 
     def _publish_library(self, paths, language, summaries=None):
         jobs = {j["media_path"]: j for j in self.ports.queue().snapshot()}

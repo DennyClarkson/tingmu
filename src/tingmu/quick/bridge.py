@@ -42,7 +42,7 @@ from .queue_controller import QueueController, QueueState, QueuePorts
 from .tasks import BackgroundTaskManager, TaskState, TaskPorts
 from .localization import ui_text
 from .playback_sources import PlaybackSources
-from .state import DomainStates, command_domain
+from .state import DomainProperty, DomainStates, command_domain, isolated
 from .list_models import StableListModel
 from .library_summary import LibrarySummaryCache
 
@@ -445,7 +445,8 @@ class Bridge(QObject):
             log_exception=self.log.exception, set_state=lambda **kw: self._set_state(**kw),
             entries_changed=self.entriesChanged.emit, collection_feedback=self.collectionFeedback.emit,
             word_key=lambda text, language: word_key(text, language)))
-        self._feature_init()
+        with store.database.session():
+            self._feature_init()
         self._refresh_library()
         self._refresh_jobs()
         self._update_playback()
@@ -457,11 +458,9 @@ class Bridge(QObject):
         self._inboxCompleted.connect(self._inbox_completed)
         self._set_state(mediaDir=str(self.catalog.media_dir), mediaInbox={
             "scanning": False, "waiting": 0, "ready": 0, "blocked": "", "status": "正在检查媒体文件夹"})
-        self.inbox_timer = QTimer(self)
-        self.inbox_timer.setInterval(2000)
-        self.inbox_timer.timeout.connect(self._scan_media_inbox)
-        self.inbox_timer.start()
-        QTimer.singleShot(0, self._scan_media_inbox)
+        self._library_controller.start_inbox(self)
+        self.settingsChanged.connect(self._library_controller.invalidate_preflight)
+        self.modelsChanged.connect(self._library_controller.invalidate_preflight)
         if draft_migration_error:
             self._error(draft_migration_error, domain="learning")
 
@@ -555,41 +554,15 @@ class Bridge(QObject):
     def jobModel(self):
         return self._job_model
 
-    @Property("QVariantMap", notify=mediaStateChanged)
-    def mediaState(self):
-        return self._domain_states.snapshot("media")
-
-    @Property("QVariantMap", notify=queueStateChanged)
-    def queueState(self):
-        return self._domain_states.snapshot("queue")
-
-    @Property("QVariantMap", notify=chatStateChanged)
-    def chatState(self):
-        return self._domain_states.snapshot("chat")
-
-    @Property("QVariantMap", notify=downloadStateChanged)
-    def downloadState(self):
-        return self._domain_states.snapshot("download")
-
-    @Property("QVariantMap", notify=learningStateChanged)
-    def learningState(self):
-        return self._domain_states.snapshot("learning")
-
-    @Property("QVariantMap", notify=modelStateChanged)
-    def modelState(self):
-        return self._domain_states.snapshot("models")
-
-    @Property("QVariantMap", notify=workspaceStateChanged)
-    def workspaceState(self):
-        return self._domain_states.snapshot("workspace")
-
-    @Property("QVariantMap", notify=applicationStateChanged)
-    def applicationState(self):
-        return self._domain_states.snapshot("application")
-
-    @Property("QVariantMap", notify=notificationStateChanged)
-    def notificationState(self):
-        return self._domain_states.snapshot("notification")
+    mediaState = DomainProperty("media", mediaStateChanged)
+    queueState = DomainProperty("queue", queueStateChanged)
+    chatState = DomainProperty("chat", chatStateChanged)
+    downloadState = DomainProperty("download", downloadStateChanged)
+    learningState = DomainProperty("learning", learningStateChanged)
+    modelState = DomainProperty("models", modelStateChanged)
+    workspaceState = DomainProperty("workspace", workspaceStateChanged)
+    applicationState = DomainProperty("application", applicationStateChanged)
+    notificationState = DomainProperty("notification", notificationStateChanged)
 
     @Property("QVariantMap", notify=mediaInboxChanged)
     def mediaInbox(self):
@@ -666,6 +639,12 @@ class Bridge(QObject):
     @Property("QVariantList", notify=cuesChanged)
     def cues(self):
         return self._cues
+
+    @Slot(result="QVariantList")
+    def cueSnapshot(self):
+        # A method result is a QML value. Iterating the sequence property directly
+        # makes Qt call its Python getter (and convert the whole list) for each row.
+        return self.cues
 
     @Property(int, notify=cuesChanged)
     def cueCount(self):
@@ -795,8 +774,9 @@ class Bridge(QObject):
 
     def _set_state(self, *, domain=None, **values):
         changed = self._domain_states.update(values, domain or self._operation_domain)
-        if any(self._state.get(k) != v for k, v in values.items()):
-            self._state.update(deepcopy(values))
+        updates = {key: isolated(value) for key, value in values.items() if self._state.get(key) != value}
+        if updates:
+            self._state.update(updates)
             self.stateChanged.emit()
         for name in changed:
             getattr(self, ("model" if name == "models" else name) + "StateChanged").emit()
@@ -991,7 +971,9 @@ class Bridge(QObject):
 
     @Slot(str, object, str)
     def _job_completed(self, key, value, error):
-        return self._tasks_controller._job_completed(key, value, error)
+        self._tasks_controller._job_completed(key, value, error)
+        if key == "model-download" and not self._closed:
+            self._library_controller.invalidate_preflight()
 
     def _enqueue(self, paths, subtitle_paths=None):
         return self._queue_controller._enqueue(paths, subtitle_paths)
@@ -1108,8 +1090,8 @@ class Bridge(QObject):
         self._unsubscribe_queue()
         self.position_timer.stop()
         self.diagnostic_timer.stop()
-        self.inbox_timer.stop()
-        self._inbox_stop.set()
+        self._library_controller.stop_inbox()
+        self._playback_controller.notify_timer.stop()
         self._player.stop()
         pending = self.task_manager.shutdown()
         self.task_manager.close_when_finished(self.store.close)

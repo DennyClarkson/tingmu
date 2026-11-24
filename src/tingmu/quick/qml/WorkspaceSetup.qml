@@ -24,19 +24,20 @@ AppDialog {
     readonly property bool cantonese: /^(yue(?:[-_]|$)|zh-hk$|cantonese$)/i.test(backend.settings.target_language)
     property var current: workspaces.info
     function activatePage() {
+        form.active = true
         creating = false
         section = "general"
         savedSource = backend.settings.source_language
         savedTarget = backend.settings.target_language
-        known.code = savedSource
-        learning.code = savedTarget
+        form.item.knownLanguage.code = savedSource
+        form.item.learningLanguage.code = savedTarget
     }
     Connections {
         target: backend
         function onSettingsChanged() {
-            if (!root.opened || root.creating) return
-            if (known.code === root.savedSource) known.code = backend.settings.source_language
-            if (learning.code === root.savedTarget) learning.code = backend.settings.target_language
+            if (!root.opened || root.creating || !form.item) return
+            if (form.item.knownLanguage.code === root.savedSource) form.item.knownLanguage.code = backend.settings.source_language
+            if (form.item.learningLanguage.code === root.savedTarget) form.item.learningLanguage.code = backend.settings.target_language
             root.savedSource = backend.settings.source_language
             root.savedTarget = backend.settings.target_language
         }
@@ -50,13 +51,14 @@ AppDialog {
         initialOpen = false
     }
     function beginCreate() {
+        form.active = true
         creating = true
         reuseOffer = workspaces.textReuseOffer()
-        reuseText.checked = false
-        workspaceName.text = ""
-        known.code = backend.settings.source_language
-        learning.code = backend.settings.target_language
-        workspaceName.forceActiveFocus()
+        form.item.reuseToggle.checked = false
+        form.item.nameInput.text = ""
+        form.item.knownLanguage.code = backend.settings.source_language
+        form.item.learningLanguage.code = backend.settings.target_language
+        form.item.nameInput.forceActiveFocus()
     }
     function openCreate() { openAsCreate = true; open() }
     function confirmDownload(kind) {
@@ -141,99 +143,108 @@ AppDialog {
                     id: scroll
                     rightPadding: 10
                     Layout.fillWidth: true; Layout.fillHeight: true; clip: true; contentWidth: availableWidth
-                    ColumnLayout {
-                        width: scroll.availableWidth; spacing: 12
-                        ColumnLayout {
-                            visible: root.creating; Layout.fillWidth: true; spacing: 6
-                            Hint { text: qsTranslate("Tingmu", "工作区名称") }
-                            Field { id: workspaceName; objectName: "workspaceName"; Layout.fillWidth: true; maximumLength: 80; placeholderText: qsTranslate("Tingmu", "例如：港剧听力") }
-                            Toggle { id:reuseText;objectName:"reuseWorkspaceText";visible:root.reuseOffer.roles.some(r=>!r.local);text:qsTranslate("Tingmu", "允许此工作区使用全局分配的远程文本模型") }
-                            Hint {
-                                text: reuseText.checked ? root.reuseOffer.roles.map(r=>qsTranslate("TingmuStatus", r.role || "")+" · "+r.model+" · "+r.host).join("\n") + qsTranslate("Tingmu", "\n将按以上用途向所列服务发送学习文本。")
-                                    : qsTranslate("Tingmu", "新工作区可使用全局分配的本机模型。使用远程文本服务需要在此工作区授权。")
-                            }
-                        }
-                        ColumnLayout {
-                            visible: root.creating || root.section === "general"; Layout.fillWidth: true; spacing: 10
-                            RowLayout {
-                                Hint { text: qsTranslate("Tingmu", "界面语言 / Language") }
-                                Choice {
-                                    objectName: "workspaceInterfaceLanguage"
-                                    model: ["简体中文", "繁體中文", "English"]
-                                    readonly property var codes: ["zh-CN", "zh-TW", "en"]
-                                    currentIndex: codes.indexOf(interfaceLanguage.code)
-                                    onActivated: interfaceLanguage.select(codes[currentIndex])
-                                }
-                            }
-                            RowLayout {
-                                Layout.fillWidth: true; spacing: 14
-                                WorkspaceLanguage { id: known; objectName: "knownLanguage"; Layout.fillWidth: true; label: qsTranslate("Tingmu", "用哪种语言学") }
-                                WorkspaceLanguage { id: learning; objectName: "learningLanguage"; Layout.fillWidth: true; label: qsTranslate("Tingmu", "想学哪种语言") }
-                            }
-                            TButton {
-                                visible: !root.creating
-                                enabled: known.code !== backend.settings.source_language || learning.code !== backend.settings.target_language
-                                text: qsTranslate("Tingmu", "保存语言"); onClicked: workspaces.action("languages", {source: known.code, target: learning.code})
-                            }
-                            Rectangle { Layout.fillWidth: true; height: 1; color: Theme.line }
-                            RowLayout {
-                                Layout.fillWidth: true
-                                SectionTitle { text: qsTranslate("Tingmu", "文件位置") }
-                                TButton { visible: !root.creating; text: qsTranslate("Tingmu", "打开文件夹"); onClicked: workspaces.action("folder", {}) }
-                            }
-                            Hint { text: root.creating ? root.current.defaultParent + "/" + workspaceName.text : root.current.path; wrapMode: Text.WrapAnywhere }
-                            RowLayout {
-                                visible: !root.creating; Layout.fillWidth: true
-                                Toggle { Layout.fillWidth: true; text: qsTranslate("Tingmu", "自动准备放入 media 的视频")
-                                    checked: !!backend.settings.auto_prepare_media
-                                    onToggled: backend.setting("auto_prepare_media", checked) }
-                                TButton { text: qsTranslate("Tingmu", "打开视频目录"); onClicked: workspaces.action("mediaFolder", {}) }
-                            }
-                            Hint { text: qsTranslate("Tingmu", "media/　导入的视频和随附字幕\ndocuments/　生成的字幕和逐句学习材料\nnotebooks/　分语言整理的 Markdown 笔记\nexports/　默认导出位置\nstudy.db　收藏、对话和播放记录"); lineHeight: 1.45 }
-                            Hint { visible:!root.creating; text:backend.lessonModel.configured ? qsTranslate("Tingmu", "已配置逐句讲解与译稿核验模型。") : qsTranslate("Tingmu", "当前只准备原文字幕。可在「文本模型与 API」分配逐句讲解模型。") }
-                        }
-                        ColumnLayout {
-                            visible: !root.creating && root.section === "models"; Layout.fillWidth: true; spacing: 10
-                            Hint { text: root.cantonese
-                                ? qsTranslate("Tingmu", "粤语原声可选 Qwen3-ASR，下载时会一并取得对齐模型。Whisper 可选 large-v3-turbo 或 large-v3；small 不支持指定粤语。")
-                                : qsTranslate("Tingmu", "多语种识别可先试 Whisper small。选择 Qwen 或转写接口前，请确认模型支持当前学习语言 ") + backend.settings.target_language + "。" }
-                            SpeechSettings { Layout.fillWidth: true }
+                    FirstUseLoader {
+                        id: form
+                        requested: root.visible
+                        width: scroll.availableWidth
+                        sourceComponent: ColumnLayout {
+                            spacing: 12
+                            property alias knownLanguage: known
+                            property alias learningLanguage: learning
+                            property alias nameInput: workspaceName
+                            property alias reuseToggle: reuseText
                             ColumnLayout {
-                                visible: backend.settings.asr_backend === "local"; Layout.fillWidth: true; spacing: 7
+                                visible: root.creating; Layout.fillWidth: true; spacing: 6
+                                Hint { text: qsTranslate("Tingmu", "工作区名称") }
+                                Field { id: workspaceName; objectName: "workspaceName"; Layout.fillWidth: true; maximumLength: 80; placeholderText: qsTranslate("Tingmu", "例如：港剧听力") }
+                                Toggle { id:reuseText;objectName:"reuseWorkspaceText";visible:root.reuseOffer.roles.some(r=>!r.local);text:qsTranslate("Tingmu", "允许此工作区使用全局分配的远程文本模型") }
                                 Hint {
-                                    text: root.current && qsTranslate("TingmuStatus", workspaces.readinessFor(backend.settings.asr_model) || "")
-                                    color: Theme.accent
+                                    text: reuseText.checked ? root.reuseOffer.roles.map(r=>qsTranslate("TingmuStatus", r.role || "")+" · "+r.model+" · "+r.host).join("\n") + qsTranslate("Tingmu", "\n将按以上用途向所列服务发送学习文本。")
+                                        : qsTranslate("Tingmu", "新工作区可使用全局分配的本机模型。使用远程文本服务需要在此工作区授权。")
                                 }
-                                Hint { text: qsTranslate("Tingmu", "设备选 cpu 可用处理器识别；有兼容的 NVIDIA GPU 可选 cuda。auto 会根据运行环境选择设备。\n同一模型供所有工作区共用，缓存位于 ") + root.current.cache; wrapMode: Text.WrapAnywhere }
+                            }
+                            ColumnLayout {
+                                visible: root.creating || root.section === "general"; Layout.fillWidth: true; spacing: 10
                                 RowLayout {
-                                    TButton { objectName: "workspaceDownload"; text: qsTranslate("Tingmu", "下载所选模型"); visible: !String(backend.settings.asr_model).startsWith("local:"); enabled: !backend.applicationState.busy; onClicked: root.confirmDownload("download") }
-                                    TButton { text: qsTranslate("Tingmu", "打开共享模型目录"); visible: String(backend.settings.asr_model).startsWith("local:"); onClicked: workspaces.action("modelFolder", {}) }
-                                    TButton { text: qsTranslate("Tingmu", "查看缓存"); quiet: true; onClicked: workspaces.action("cache", {}) }
+                                    Hint { text: qsTranslate("Tingmu", "界面语言 / Language") }
+                                    Choice {
+                                        objectName: "workspaceInterfaceLanguage"
+                                        model: ["简体中文", "繁體中文", "English"]
+                                        readonly property var codes: ["zh-CN", "zh-TW", "en"]
+                                        currentIndex: codes.indexOf(interfaceLanguage.code)
+                                        onActivated: interfaceLanguage.select(codes[currentIndex])
+                                    }
                                 }
-                            }
-                            Hint { text: workspaces.speechStatus.split(" · ").map(label => qsTranslate("Tingmu", label)).join(" · ") }
-                            RowLayout {
-                                TButton { text: qsTranslate("Tingmu", "下载人声分离与换人检测模型"); enabled: !backend.applicationState.busy; onClicked: root.confirmDownload("downloadSpeech") }
-                                TButton { text: qsTranslate("Tingmu", "暂停下载"); visible: !!backend.downloadState.modelDownloading; onClicked: workspaces.action("stopDownload", {}) }
-                            }
-                            DownloadProgress { visible: !!backend.downloadState.modelDownloading; Layout.fillWidth: true }
-                        }
-                        ColumnLayout {
-                            visible: !root.creating && root.section === "text"; Layout.fillWidth: true; spacing: 11
-                            SectionTitle { text: qsTranslate("Tingmu", "全局任务分配") }
-                            Hint { text: qsTranslate("Tingmu", "逐句讲解模型为每句准备讲解，再核对译稿。可选择本机 API 或允许的远程连接。") }
-                            Repeater {
-                                model: [{label: qsTranslate("Tingmu", "字幕文本复核"), field: "review_model"}, {label: qsTranslate("Tingmu", "逐句讲解"), field: "model"}, {label: qsTranslate("Tingmu", "学习对话"), field: "companion_model"}]
-                                delegate: RowLayout {
-                                    required property var modelData
+                                RowLayout {
+                                    Layout.fillWidth: true; spacing: 14
+                                    WorkspaceLanguage { id: known; objectName: "knownLanguage"; Layout.fillWidth: true; label: qsTranslate("Tingmu", "用哪种语言学") }
+                                    WorkspaceLanguage { id: learning; objectName: "learningLanguage"; Layout.fillWidth: true; label: qsTranslate("Tingmu", "想学哪种语言") }
+                                }
+                                TButton {
+                                    visible: !root.creating
+                                    enabled: known.code !== backend.settings.source_language || learning.code !== backend.settings.target_language
+                                    text: qsTranslate("Tingmu", "保存语言"); onClicked: workspaces.action("languages", {source: known.code, target: learning.code})
+                                }
+                                Rectangle { Layout.fillWidth: true; height: 1; color: Theme.line }
+                                RowLayout {
                                     Layout.fillWidth: true
-                                    Hint { Layout.preferredWidth: 112; Layout.fillWidth: false; text: modelData.label }
-                                    Hint { text: backend.settings[modelData.field] || qsTranslate("Tingmu", "待配置"); color: Theme.text }
+                                    SectionTitle { text: qsTranslate("Tingmu", "文件位置") }
+                                    TButton { visible: !root.creating; text: qsTranslate("Tingmu", "打开文件夹"); onClicked: workspaces.action("folder", {}) }
                                 }
+                                Hint { text: root.creating ? root.current.defaultParent + "/" + workspaceName.text : root.current.path; wrapMode: Text.WrapAnywhere }
+                                RowLayout {
+                                    visible: !root.creating; Layout.fillWidth: true
+                                    Toggle { Layout.fillWidth: true; text: qsTranslate("Tingmu", "自动准备放入 media 的视频")
+                                        checked: !!backend.settings.auto_prepare_media
+                                        onToggled: backend.setting("auto_prepare_media", checked) }
+                                    TButton { text: qsTranslate("Tingmu", "打开视频目录"); onClicked: workspaces.action("mediaFolder", {}) }
+                                }
+                                Hint { text: qsTranslate("Tingmu", "media/　导入的视频和随附字幕\ndocuments/　生成的字幕和逐句学习材料\nnotebooks/　分语言整理的 Markdown 笔记\nexports/　默认导出位置\nstudy.db　收藏、对话和播放记录"); lineHeight: 1.45 }
+                                Hint { visible:!root.creating; text:backend.lessonModel.configured ? qsTranslate("Tingmu", "已配置逐句讲解与译稿核验模型。") : qsTranslate("Tingmu", "当前只准备原文字幕。可在「文本模型与 API」分配逐句讲解模型。") }
                             }
-                            TextModelPolicy { Layout.fillWidth: true }
-                            LlmConcurrencySettings { Layout.fillWidth: true }
-                            TButton { text: qsTranslate("Tingmu", "管理全局连接与任务分配…"); primary: true; onClicked: root.modelsRequested() }
+                            ColumnLayout {
+                                visible: !root.creating && root.section === "models"; Layout.fillWidth: true; spacing: 10
+                                Hint { text: root.cantonese
+                                    ? qsTranslate("Tingmu", "粤语原声可选 Qwen3-ASR，下载时会一并取得对齐模型。Whisper 可选 large-v3-turbo 或 large-v3；small 不支持指定粤语。")
+                                    : qsTranslate("Tingmu", "多语种识别可先试 Whisper small。选择 Qwen 或转写接口前，请确认模型支持当前学习语言 ") + backend.settings.target_language + "。" }
+                                SpeechSettings { Layout.fillWidth: true }
+                                ColumnLayout {
+                                    visible: backend.settings.asr_backend === "local"; Layout.fillWidth: true; spacing: 7
+                                    Hint {
+                                        text: root.current && qsTranslate("TingmuStatus", workspaces.readinessFor(backend.settings.asr_model) || "")
+                                        color: Theme.accent
+                                    }
+                                    Hint { text: qsTranslate("Tingmu", "设备选 cpu 可用处理器识别；有兼容的 NVIDIA GPU 可选 cuda。auto 会根据运行环境选择设备。\n同一模型供所有工作区共用，缓存位于 ") + root.current.cache; wrapMode: Text.WrapAnywhere }
+                                    RowLayout {
+                                        TButton { objectName: "workspaceDownload"; text: qsTranslate("Tingmu", "下载所选模型"); visible: !String(backend.settings.asr_model).startsWith("local:"); enabled: !backend.applicationState.busy; onClicked: root.confirmDownload("download") }
+                                        TButton { text: qsTranslate("Tingmu", "打开共享模型目录"); visible: String(backend.settings.asr_model).startsWith("local:"); onClicked: workspaces.action("modelFolder", {}) }
+                                        TButton { text: qsTranslate("Tingmu", "查看缓存"); quiet: true; onClicked: workspaces.action("cache", {}) }
+                                    }
+                                }
+                                Hint { text: workspaces.speechStatus.split(" · ").map(label => qsTranslate("Tingmu", label)).join(" · ") }
+                                RowLayout {
+                                    TButton { text: qsTranslate("Tingmu", "下载人声分离与换人检测模型"); enabled: !backend.applicationState.busy; onClicked: root.confirmDownload("downloadSpeech") }
+                                    TButton { text: qsTranslate("Tingmu", "暂停下载"); visible: !!backend.downloadState.modelDownloading; onClicked: workspaces.action("stopDownload", {}) }
+                                }
+                                DownloadProgress { visible: !!backend.downloadState.modelDownloading; Layout.fillWidth: true }
+                            }
+                            ColumnLayout {
+                                visible: !root.creating && root.section === "text"; Layout.fillWidth: true; spacing: 11
+                                SectionTitle { text: qsTranslate("Tingmu", "全局任务分配") }
+                                Hint { text: qsTranslate("Tingmu", "逐句讲解模型为每句准备讲解，再核对译稿。可选择本机 API 或允许的远程连接。") }
+                                Repeater {
+                                    model: [{label: qsTranslate("Tingmu", "字幕文本复核"), field: "review_model"}, {label: qsTranslate("Tingmu", "逐句讲解"), field: "model"}, {label: qsTranslate("Tingmu", "学习对话"), field: "companion_model"}]
+                                    delegate: RowLayout {
+                                        required property var modelData
+                                        Layout.fillWidth: true
+                                        Hint { Layout.preferredWidth: 112; Layout.fillWidth: false; text: modelData.label }
+                                        Hint { text: backend.settings[modelData.field] || qsTranslate("Tingmu", "待配置"); color: Theme.text }
+                                    }
+                                }
+                                TextModelPolicy { Layout.fillWidth: true }
+                                LlmConcurrencySettings { Layout.fillWidth: true }
+                                TButton { text: qsTranslate("Tingmu", "管理全局连接与任务分配…"); primary: true; onClicked: root.modelsRequested() }
+                            }
                         }
                     }
                 }
@@ -251,9 +262,9 @@ AppDialog {
                 text: root.creating ? qsTranslate("Tingmu", "创建工作区") : qsTranslate("Tingmu", "完成")
                 onClicked: {
                     if (root.creating) {
-                        workspaces.action("create", {name: workspaceName.text, source: known.code, target: learning.code,
-                            textReuseSignature: reuseText.checked ? root.reuseOffer.signature : ""})
-                    } else if (workspaces.action("languages", {source: known.code, target: learning.code}) && workspaces.action("enter", {})) root.close()
+                        workspaces.action("create", {name: form.item.nameInput.text, source: form.item.knownLanguage.code, target: form.item.learningLanguage.code,
+                            textReuseSignature: form.item.reuseToggle.checked ? root.reuseOffer.signature : ""})
+                    } else if (workspaces.action("languages", {source: form.item.knownLanguage.code, target: form.item.learningLanguage.code}) && workspaces.action("enter", {})) root.close()
                 }
             }
         }

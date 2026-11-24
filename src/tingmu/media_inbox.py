@@ -2,19 +2,21 @@
 
 from __future__ import annotations
 
+from functools import cache
 import os
+import stat
 from pathlib import Path
 import time
 
 from .media import MEDIA_EXTENSIONS, SUBTITLE_EXTENSIONS
 from .pipeline import find_subtitle
-from .storage import media_fingerprint
 
 
-def _not_being_written(path):
-    """Windows copy handles must close before the inbox accepts a finished file."""
-    if os.name != "nt":
-        return True
+_INBOX_EXTENSIONS = MEDIA_EXTENSIONS | SUBTITLE_EXTENSIONS
+
+
+@cache
+def _win_file_api():
     import ctypes
     from ctypes import wintypes
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -22,15 +24,33 @@ def _not_being_written(path):
     create.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
                        wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
     create.restype = wintypes.HANDLE
-    # Share reads only: an existing writer (including Explorer) prevents acquisition.
-    handle = create(str(path), 0x80000000, 1, None, 3, 0x80, None)
-    if handle == wintypes.HANDLE(-1).value:
-        return False
     close = kernel.CloseHandle
     close.argtypes = [wintypes.HANDLE]
     close.restype = wintypes.BOOL
-    close(handle)
-    return True
+    return create, close, wintypes.HANDLE(-1).value
+
+
+def _reparse(info):
+    return bool(getattr(info, "st_file_attributes", 0) & stat.FILE_ATTRIBUTE_REPARSE_POINT)
+
+
+def _not_being_written(path):
+    """Windows copy handles must close before the inbox accepts a finished file."""
+    if os.name != "nt":
+        return True
+    create, close, invalid = _win_file_api()
+    # Share reads only and open the reparse point itself in case the entry changed.
+    handle = create(str(path), 0x80000000, 1, None, 3, 0x00200000, None)
+    if handle == invalid:
+        return False
+    try:
+        # Recheck the accepted path with the leaf pinned against rename/delete.
+        info = path.lstat()
+        return stat.S_ISREG(info.st_mode) and not _reparse(info) and path.resolve(strict=True) == path
+    except (OSError, RuntimeError):
+        return False
+    finally:
+        close(handle)
 
 
 class InboxScanner:
@@ -45,6 +65,12 @@ class InboxScanner:
         self.quiet_seconds = quiet_seconds
         self.observed = {}
         self._stages = {}
+        self._ready = set()
+        self.directories = {}
+        self._block_cache = {}
+        self._block_context = None
+        self._model_reason = None
+        self._model_checked_at = 0.0
 
     def document_stages(self, store, ready, language, cancelled):
         """Check only changed study files on a stable inbox scan."""
@@ -80,27 +106,49 @@ class InboxScanner:
         errors = []
         root = self.folder
         if root.resolve() != root or root.is_symlink() or root.is_junction():
+            self._ready.clear()
+            self.observed.clear()
+            self.directories.clear()
             return {"ready": {}, "present": [], "waiting": [], "error": "媒体目录不能是链接"}
-        def walk_error(error):
-            errors.append(type(error).__name__)
-        for directory, folders, names in os.walk(root, followlinks=False, onerror=walk_error):
+        directories = {}
+        stack = [root]
+        while stack:
             if cancelled():
                 return None
-            parent = Path(directory)
-            if parent.resolve() != parent:
-                folders[:] = []
-                continue
-            folders[:] = sorted(name for name in folders if not name.startswith(".")
-                                and not (parent / name).is_symlink() and not (parent / name).is_junction())
-            for name in sorted(names):
-                path = parent / name
-                if name.startswith(".") or path.suffix.lower() not in MEDIA_EXTENSIONS | SUBTITLE_EXTENSIONS:
+            parent = stack.pop()
+            try:
+                if parent.resolve() != parent:
                     continue
-                if path.is_symlink() or path.is_junction() or path.resolve() != path:
+                parent_stat = parent.lstat()
+                if not stat.S_ISDIR(parent_stat.st_mode) or _reparse(parent_stat):
                     continue
-                fingerprint = media_fingerprint(path)
-                if fingerprint and path.is_file():
-                    files[str(path)] = fingerprint
+                with os.scandir(parent) as listing:
+                    entries = sorted(listing, key=lambda entry: entry.name)
+                children, local = [], {}
+                for entry in entries:
+                    if entry.name.startswith(".") or entry.is_symlink() or entry.is_junction():
+                        continue
+                    path = Path(entry.path)
+                    if entry.is_dir(follow_symlinks=False):
+                        children.append(path)
+                    elif path.suffix.lower() in _INBOX_EXTENSIONS:
+                        # Read fresh identity and attributes without following a replaced entry.
+                        try:
+                            info = path.lstat()
+                        except FileNotFoundError:
+                            continue
+                        if stat.S_ISREG(info.st_mode) and not _reparse(info):
+                            local[str(path)] = (info.st_size, info.st_mtime_ns, info.st_dev, info.st_ino)
+                if parent.resolve() == parent:
+                    directories[str(parent)] = (parent_stat.st_ino, parent_stat.st_mtime_ns)
+                    files.update(local)
+                    stack.extend(reversed(children))
+            except FileNotFoundError:
+                if parent == root:
+                    errors.append("FileNotFoundError")
+            except OSError as error:
+                errors.append(type(error).__name__)
+        self.directories = directories
         ready, waiting, present, next_observed = {}, [], [], {}
         subtitles = {}
         for path, fingerprint in files.items():
@@ -121,14 +169,47 @@ class InboxScanner:
             previous, since = self.observed.get(path, (None, now))
             since = since if signature == previous else now
             next_observed[path] = (signature, since)
-            if (fingerprint["size"] > 0 and now - since >= self.quiet_seconds
-                    and all(_not_being_written(Path(p)) for p in [path, *companions])):
-                ready[path] = fingerprint
+            if (fingerprint[0] > 0 and now - since >= self.quiet_seconds
+                    and ((signature == previous and path in self._ready)
+                         or all(_not_being_written(Path(p)) for p in [path, *companions]))):
+                ready[path] = {"size": fingerprint[0], "mtime_ns": fingerprint[1]}
             else:
                 waiting.append(path)
+        self._ready = set(ready)
         self.observed = next_observed
         return {"ready": ready, "present": present, "waiting": waiting,
                 "error": "媒体目录暂时无法读取，稍后重试" if errors else ""}
+
+    def preparation_reasons(self, settings, candidates, generation, cancelled):
+        """Cache each path gate and share the local-model probe across candidates."""
+        context = (settings.preparation_workflow, settings.target_language, settings.asr_backend,
+                   settings.asr_model, settings.allow_audio_upload, generation)
+        now = time.monotonic()
+        # Also detect manual changes to shared model files outside the application.
+        if context != self._block_context or now - self._model_checked_at >= 60:
+            self._block_cache.clear()
+            self._model_reason = None
+            self._model_checked_at = now
+            self._block_context = context
+        refreshed = {}
+        for path in candidates:
+            if cancelled():
+                break
+            media = Path(path)
+            version = (self.observed.get(path), self.directories.get(str(media.parent)))
+            previous = self._block_cache.get(path)
+            if previous and version == previous[0]:
+                refreshed[path] = previous
+                continue
+            if settings.preparation_workflow == "subtitle_agent" or find_subtitle(media, settings.target_language):
+                reason = ""
+            else:
+                if self._model_reason is None:
+                    self._model_reason = _asr_block_reason(settings)
+                reason = self._model_reason
+            refreshed[path] = version, reason
+        self._block_cache = refreshed
+        return {path: cached[1] for path, cached in refreshed.items()}
 
 
 def preparation_block_reason(settings, paths):
@@ -140,6 +221,10 @@ def preparation_block_reason(settings, paths):
         return ""
     if not paths or all(find_subtitle(path, settings.target_language) for path in paths):
         return ""
+    return _asr_block_reason(settings)
+
+
+def _asr_block_reason(settings):
     if settings.asr_backend == "external":
         return "" if settings.allow_audio_upload is True else "请先明确允许将音轨发送到已配置的转写服务"
     if settings.asr_backend == "local_api":
