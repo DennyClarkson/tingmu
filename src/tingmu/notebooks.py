@@ -67,39 +67,9 @@ class NotebookManager:
 
     def __init__(self, store):
         self.store = store
+        self.database = store.database
         self.root = Path(store.data_dir) / "notebooks"
-        with store._connection() as db:
-            db.executescript("""
-                CREATE TABLE IF NOT EXISTS notebook_state (
-                    language TEXT PRIMARY KEY, topics TEXT NOT NULL, generated TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS notebook_reviews (
-                    entry_id INTEGER PRIMARY KEY, rating TEXT NOT NULL, repetitions INTEGER NOT NULL,
-                    interval_days REAL NOT NULL, due_at TEXT NOT NULL, reviewed_at TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS notebook_collections (
-                    entry_id INTEGER PRIMARY KEY, organized_at TEXT NOT NULL DEFAULT '',
-                    entry_note TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL DEFAULT ''
-                );
-                CREATE TABLE IF NOT EXISTS notebook_notes (
-                    id TEXT PRIMARY KEY, language TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL,
-                    entry_ids TEXT NOT NULL, sources_markdown TEXT NOT NULL, source_language TEXT NOT NULL,
-                    origin TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS notebook_v5_migrations (language TEXT PRIMARY KEY);
-                CREATE TABLE IF NOT EXISTS notebook_sources (
-                    entry_id INTEGER PRIMARY KEY, target_language TEXT NOT NULL, entry_json TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS notebook_entry_note_history (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT, entry_id INTEGER NOT NULL,
-                    entry_note TEXT NOT NULL, revision TEXT NOT NULL, saved_at TEXT NOT NULL
-                );
-                CREATE INDEX IF NOT EXISTS entries_word_lookup ON entries(source_language,target_language,text)
-                    WHERE kind='word';
-                CREATE INDEX IF NOT EXISTS notebook_archived_word_lookup ON notebook_sources(
-                    target_language, json_extract(entry_json,'$.source_language'), json_extract(entry_json,'$.text'))
-                    WHERE json_extract(entry_json,'$.kind')='word';
-            """)
+
         self._migrate_legacy()
 
     def _path(self, language):
@@ -251,8 +221,7 @@ class NotebookManager:
 
     def _migrate_legacy(self):
         # Migration indexes existing content without rewriting a single Markdown byte.
-        with _LOCK, self.store._connection() as db:
-            db.execute("BEGIN IMMEDIATE")
+        with _LOCK, self.store._connection(immediate=True) as db:
             done = {r[0] for r in db.execute("SELECT language FROM notebook_v5_migrations")}
             old = {r["language"]: dict(r) for r in db.execute("SELECT * FROM notebook_state")}
             paths = {p.parent.name.removeprefix("~"): p for p in self.root.glob("*/notebook.md")}
@@ -462,8 +431,7 @@ class NotebookManager:
         self._check_text(note, 20000, allow_empty=True)
         if target_language is not None:
             _language(target_language)
-        with _LOCK, self.store._connection() as db:
-            db.execute("BEGIN IMMEDIATE")
+        with _LOCK, self.store._connection(immediate=True) as db:
             entry = db.execute("SELECT target_language FROM entries WHERE id=?", (entry_id,)).fetchone()
             if not entry or (target_language is not None and entry[0] != target_language):
                 raise ValueError("收藏不存在或不属于当前学习语言。")
@@ -577,8 +545,7 @@ class NotebookManager:
             written = (path, old, _revision(text))
 
         try:
-            with self.store._connection() as db:
-                db.execute("BEGIN IMMEDIATE")
+            with self.store._connection(immediate=True) as db:
                 yield db, write
         except Exception:
             if written:
@@ -704,7 +671,8 @@ class NotebookManager:
                                         "sentence": e["sentence"][:1200], "saved_note": e["note"][:1500],
                                         "entry_note": e["entry_note"][:3000],
                                         "video": _video(e["media_path"])[:160]} for e in batch]}
-                raw = agent._complete(ORGANIZE_PROMPT, payload, ORGANIZE_SCHEMA)
+                from .llm_client import completion_port
+                raw = completion_port(agent).complete(ORGANIZE_PROMPT, payload, ORGANIZE_SCHEMA)
                 try:
                     current = decode_topics(raw, batch)
                 except (ValueError, TypeError, KeyError):
@@ -734,8 +702,7 @@ class NotebookManager:
         if type(entry_id) is not int or rating not in ("again", "hard", "good", "easy"):
             raise ValueError("复习评分无效。")
         now = datetime.now(timezone.utc)
-        with self.store._connection() as db:
-            db.execute("BEGIN IMMEDIATE")
+        with self.store._connection(immediate=True) as db:
             if not db.execute("SELECT id FROM entries WHERE id=?", (entry_id,)).fetchone():
                 raise ValueError("收藏来源不存在。")
             prior = db.execute("SELECT * FROM notebook_reviews WHERE entry_id=?", (entry_id,)).fetchone()

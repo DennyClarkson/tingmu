@@ -33,7 +33,7 @@ Item {
                 required property var modelData
                 property bool matches: !search.text || modelData.name.toLowerCase().indexOf(search.text.toLowerCase())>=0
                 width:files.width; height:matches ? 66 : 0; visible:matches
-                radius:5; color:backend.state.mediaPath===modelData.path ? Theme.selection : rowMouse.containsMouse ? Theme.hover : "transparent"
+                radius:5; color:backend.mediaState.mediaPath===modelData.path ? Theme.selection : rowMouse.containsMouse ? Theme.hover : "transparent"
                 MouseArea { id:rowMouse; anchors.fill:parent; hoverEnabled:true; onClicked:backend.command("openMedia",{path:mediaRow.modelData.path}) }
                 RowLayout {
                     anchors.fill:parent; anchors.margins:7; spacing:7
@@ -74,7 +74,7 @@ Item {
             Text { textFormat:Text.PlainText; Layout.fillWidth:true; text:qsTranslate("Tingmu", "可同时选择多个视频；扫描文件夹仅建立索引，不复制媒体。"); color:Theme.muted; font.family:Theme.font; font.pixelSize:12; wrapMode:Text.Wrap }
             TButton { text:qsTranslate("Tingmu", "打开数据文件夹"); onClicked:backend.command("openDataFolder",{}) }
             TButton { text:qsTranslate("Tingmu", "扫描工作区 media 文件夹"); onClicked:backend.command("scanWorkspaceMedia",{}) }
-            Text { textFormat:Text.PlainText; Layout.fillWidth:true; text:backend.state.dataDir || ""; color:Theme.muted; font.family:Theme.font; font.pixelSize:10; wrapMode:Text.WrapAnywhere }
+            Text { textFormat:Text.PlainText; Layout.fillWidth:true; text:backend.applicationState.dataDir || ""; color:Theme.muted; font.family:Theme.font; font.pixelSize:10; wrapMode:Text.WrapAnywhere }
         }
     }
 }

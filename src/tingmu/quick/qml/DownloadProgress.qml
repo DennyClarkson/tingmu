@@ -5,12 +5,12 @@ import "Style.js" as S
 
 ColumnLayout {
     id: root
-    property var sample: backend.state.downloadProgress || ({})
+    property var sample: backend.downloadState.downloadProgress || ({})
     readonly property real total: sample.total || 0
     spacing: 4
     Text {
         Layout.fillWidth: true
-        text: qsTranslate("TingmuStatus", backend.state.downloadMessage || "") || qsTranslate("Tingmu", "正在检查模型文件")
+        text: qsTranslate("TingmuStatus", backend.downloadState.downloadMessage || "") || qsTranslate("Tingmu", "正在检查模型文件")
         wrapMode: Text.WrapAnywhere; textFormat: Text.PlainText
         color: Theme.text; font.family: Theme.font; font.pixelSize: 12
     }

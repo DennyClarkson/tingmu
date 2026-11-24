@@ -168,6 +168,9 @@ def test_legacy_v4_migration_is_byte_preserving_and_marks_only_existing_material
     raw = ("# 手写旧标题\r\n\r\n自己的旧思考\r\n" + generated + "\r\n").encode("utf-8")
     path.write_bytes(raw)
     with store._connection() as db:
+        # Store now creates the whole schema; reconstruct the old table explicitly.
+        db.execute("DROP TABLE notebook_state")
+        db.execute("PRAGMA user_version=0")
         db.execute("CREATE TABLE notebook_state(language TEXT PRIMARY KEY,topics TEXT,generated TEXT)")
         db.execute("INSERT INTO notebook_state VALUES (?,?,?)",
                    ("yue", json.dumps([{"title": "旧主题", "entry_ids": [entries[0]["id"]]}]), generated))

@@ -1,3 +1,33 @@
+# Handoff — 2026-11-24 · 架构验收后收尾微调（已验收）
+
+Phase 3/4 已通过最终架构验收。本轮只完成指定三项：笔记本草稿写入/删除失败阻止关闭、菜单收起和托盘退出；导出命名及覆盖确认统一走 native_dialogs 注入端口；切区前确认旧窗草稿落盘，只有新会话与目录选择均成功才消费 switch_summary。未扩大重构或重建便携包；此版现已获用户确认，授权提交并合并主分支。
+
+新增 `test_draft_exit_guards.py`、`test_export_dialog_ports.py`、`test_switch_draft_rollback.py` 共 16 项回归，既有测试和断言未修改。切区测试使用真实 QML 编辑内容，验证失败保留草稿和摘要，以及成功时先落盘再创建新会话。
+
+完整离线检查：`uv lock --check --offline` → `Resolved 68 packages in 0.80ms`；Ruff → `All checks passed!`；`git diff --check` 无输出、退出 0；**962 passed, 1 warning, 113 subtests passed in 133.71s (0:02:13)**，零跳过。Windows 真窗口专项 **20 passed in 11.67s**。全部使用 `--require-ffmpeg` 和仓库内隔离缓存/数据；唯一警告为已有 wordseg/pkg_resources 弃用提示。详见 [审阅报告最新收尾记录](docs/refactor-phase3-4.md)。用户于 2026-11-24 确认收尾版本通过。
+
+# Handoff — 2026-11-23 · Step 0 / Phase 3 / Phase 4（历史审阅点，已通过）
+
+在 `refactor/state-management-phase1-2` 分支完成六项 Phase 1/2 审阅修正，再依次完成 Phase 3、Phase 4。Phase 1/2 已通过架构审阅；本轮已停在最终审阅点。模块、依赖图、兼容清单、测试用例及完整验证原文见 [审阅报告](docs/refactor-phase3-4.md)。没有提交、推送、重新打包或更新安装目录；没有访问真实收费 API 或改动仓库外媒体。
+
+Phase 3 抽出 LlmClient、共享并发批调度器及七阶段准备流程，保留 prepare_media 与全部 checkpoint/源句契约。Phase 4 将 Bridge/Mixin 拆成组合控制器、统一后台任务管理、声明式 UI/Agent 分发及可注入对话框；工作区改用公开端口。Database 统一 schema/user_version 迁移与事务连接，聊天兼容投影和迁移标记原子提交，UI 无 SQL。
+
+完整离线验证依次为 **866 / 904 / 946 passed**，每阶段另有 **113 subtests passed，0 skipped**；离线依赖锁、Ruff、`git diff --check` 全通过。最终全量耗时 135.80 秒。Windows 真窗口专项 **60 passed in 34.70s**，覆盖浮窗/全屏弹窗父窗口、稳定列表、草稿与工作区切换。全部使用 `--require-ffmpeg`，缓存和合成数据位于仓库 `.cache/`；只剩原有 wordseg/pkg_resources 弃用警告。首次失败及修复记录在报告中保留，未删减测试或弱化断言。
+
+以 Step 0 后为基准，Bridge 1854→1120 行、features 904→3 行、agent 1295→1077 行、pipeline 691→78 行。保留旧字段/方法代理、FeatureMixin 与 TextSetupMixin 导入适配、传输 monkeypatch hook、旧模块路径和任务展示回退；当前 Bridge/WorkspaceController 均只继承 QObject。旧 QWidget 两文件未动。聊天编排与组合初始化仍较长；后台取消为协作式，阻塞传输退出后再关闭 Store。数据库只在显式 session/事务范围复用连接，空闲不持有 Windows 文件句柄。
+
+# Handoff — 2026-11-23 · 架构与状态管理重构 Phase 1 / 2（历史审阅点）
+
+本轮仅完成 Phase 1、Phase 2，停在审阅点。基线 `41c61b7`，分支 `refactor/state-management-phase1-2`。逐项文件、依赖方向、兼容层、全部新增用例名及验证原文见 [审阅报告](docs/refactor-phase1-2.md)。Phase 3、Phase 4 未开始；没有刷新正式或独立便携包，没有推送或改动仓库外文件。
+
+Phase 1 修复全局角色被旧设置快照回滚、布局限制丢草稿、后台共享可变消息/设置以及重复弹窗。草稿迁移到工作区 SQLite，保留一次迁移快照；角色写入经过显式增量接口，普通工作区偏好与全局角色分离；弹窗由根窗口单一托管。完整离线回归 **771 passed、113 subtests passed、0 skipped**，Ruff、离线依赖锁和 Git whitespace 检查通过。
+
+Phase 2 增加独立领域状态与局部错误、稳定 ID 列表模型和 Markdown 缓存；用任务/确认事件替换队列与工作区切换的空闲轮询，播放进度定时器仅播放时运行。收件箱复用 worker，媒体库读取/摘要与批量位置查询在后台执行，按文件版本缓存并拒绝过期代次。补齐文档读取同时替换、线程完成信号尚未退出、关闭后迟到信号的回归。
+
+最终完整离线回归 **822 passed、113 subtests passed、0 skipped**（214.22 秒）；Ruff 和离线依赖锁通过，`git diff --check` 无输出、退出 0。Windows 真窗口专项 **12 passed**，覆盖单一弹窗/全屏与浮动窗口、列表实例与阅读位置保持、偏好验证及字幕拖动恢复。FFmpeg 可用，全量使用 `--require-ffmpeg`。只有原有 wordseg/pkg_resources 弃用警告。证据位于忽略目录 `.cache/qa/state-refactor/`。全部验证使用隔离合成数据，没有调用真实收费 API。
+
+保留 Bridge 的既有私有测试入口及 `state/messages/jobs` 兼容视图；`prepare_media()`、原文/源 ID/声学时间戳、`.pending` 发布格式与旧 QWidget 路径未改。新草稿表为增量扩展；旧布局兼容导入不代表旧 EXE 能编辑新表，未做降级交互验收。媒体库首次异步读取时短暂显示缓存或占位，收件箱继续周期扫描但不反复创建线程。后续先由架构审查 Agent 逐项 diff 验收，再决定是否进入 Phase 3。
+
 # Handoff — 2026-11-23 · 听幕 0.12.0
 
 **仓库维护。** [README](README.md) 提供从便携包和源码开始使用的入口。日常验证按[开发指南](docs/development.md)在本机执行，使用 `--require-ffmpeg` 确保两项合成 MKV 字幕测试实际解码。本机与本次最后的 [Windows 托管回归](https://github.com/DennyClarkson/tingmu/actions/runs/45179352534)均通过 744 项测试和 113 项子测试。随后关闭了 GitHub 工作流并移除推送和 PR 触发器。以下保留本版本的产品交付记录。

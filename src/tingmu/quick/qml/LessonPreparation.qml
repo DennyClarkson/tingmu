@@ -3,7 +3,7 @@ import QtQuick.Layouts
 
 ColumnLayout {
     id: root
-    readonly property var counts: backend.state.lessonCounts || ({total:0, taught:0, verified:0})
+    readonly property var counts: backend.mediaState.lessonCounts || ({total:0, taught:0, verified:0})
     readonly property bool ready: counts.total > 0 && counts.verified + (counts.provided || 0) === counts.total
     property bool showWhenReady: true
     visible: counts.total > 0 && (showWhenReady || !ready)
@@ -20,8 +20,8 @@ ColumnLayout {
     TButton {
         objectName: "prepareLessonButton"
         visible: !root.ready
-        enabled: !backend.state.queueRunning
-        text: backend.state.queueRunning ? qsTranslate("Tingmu", "正在准备…") : backend.lessonModel.configured ? qsTranslate("Tingmu", "补全讲解与译稿") : qsTranslate("Tingmu", "配置逐句讲解模型…")
+        enabled: !backend.queueState.queueRunning
+        text: backend.queueState.queueRunning ? qsTranslate("Tingmu", "正在准备…") : backend.lessonModel.configured ? qsTranslate("Tingmu", "补全讲解与译稿") : qsTranslate("Tingmu", "配置逐句讲解模型…")
         onClicked: backend.command(backend.lessonModel.configured ? "prepareLessons" : "openLessonSettings", {})
     }
 }

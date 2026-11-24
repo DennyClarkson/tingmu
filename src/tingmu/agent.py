@@ -4,28 +4,20 @@ from __future__ import annotations
 
 import copy
 import json
-import os
 import re
-import time
 import threading
-from collections import deque
-from dataclasses import asdict, dataclass, replace
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from dataclasses import asdict, replace
 from urllib.parse import urlsplit
 
 from .models import MAX_LLM_CONCURRENCY, Cue, LanguagePair, Token
-from .providers import ProviderError as AgentError, request as provider_request, safe_metadata
+from .providers import ProviderError as AgentError
+from .llm_client import LlmClient, default_config, environment
+from .batch_scheduler import BatchResponse, ConcurrentBatchScheduler, PartialBatchResult, RepairPolicy
 from .task_progress import Progress, batch_progress
 
 
 class AnnotationValidationError(AgentError):
     pass
-
-
-@dataclass
-class PartialBatchResult[T]:
-    completed: list[T]
-    errors: dict[str, str]
 
 
 def request_ids(cues):
@@ -88,56 +80,12 @@ class _TokenReconstructionError(AnnotationValidationError):
 
 
 def _environment(names: tuple[str, ...]) -> str:
-    for name in names:
-        value = os.environ.get(name, "").strip()
-        if value:
-            return value
-    if os.name == "nt":
-        import winreg
-
-        for root, path in (
-            (winreg.HKEY_CURRENT_USER, r"Environment"),
-            (winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment"),
-        ):
-            try:
-                with winreg.OpenKey(root, path) as key:
-                    for name in names:
-                        try:
-                            value = str(winreg.QueryValueEx(key, name)[0]).strip()
-                            if value:
-                                return value
-                        except OSError:
-                            pass
-            except OSError:
-                pass
-    return ""
+    """Compatibility hook for callers supplying process/user environment values."""
+    return environment(names)
 
 
 def _config(provider: str) -> tuple[str, str, str]:
-    if provider not in ("openai", "deepseek"):
-        raise AgentError("请选择 OpenAI、DeepSeek 或本地模式。")
-    prefix = provider.upper()
-    aliases = (
-        ("OPENAI_API_KEY", "OpenAI", "OPENAI") if provider == "openai" else ("DEEPSEEK_API_KEY", "DEEPSEEK")
-    )
-    key = _environment(aliases)
-    base = _environment((prefix + "_BASE_URL", prefix + "_API_BASE")) or (
-        "https://api.openai.com/v1" if provider == "openai" else "https://api.deepseek.com"
-    )
-    parsed = urlsplit(base)
-    if (
-        parsed.scheme != "https"
-        or not parsed.hostname
-        or parsed.username
-        or parsed.password
-        or parsed.query
-        or parsed.fragment
-    ):
-        raise AgentError("API 地址必须是无用户信息和查询参数的 HTTPS 地址。")
-    model = _environment((prefix + "_MODEL",)) or (
-        "gpt-5.4-mini" if provider == "openai" else "deepseek-flash"
-    )
-    return key, base.rstrip("/"), model
+    return default_config(provider, environment=_environment)
 
 
 def provider_status() -> dict:
@@ -158,17 +106,8 @@ def provider_status() -> dict:
 def _words(text: str) -> list[str]:
     if text.isascii():
         return re.findall(r"[A-Za-z]+(?:['-][A-Za-z]+)*|\d+(?:\.\d+)?|[^\w\s]|\w+", text)
-    from PySide6.QtCore import QTextBoundaryFinder
-    finder = QTextBoundaryFinder(QTextBoundaryFinder.BoundaryType.Word, text)
-    # Qt measures offsets in UTF-16 code units, including for astral characters.
-    encoded = text.encode("utf-16-le")
-    result, start = [], 0
-    while (end := finder.toNextBoundary()) >= 0:
-        word = encoded[start * 2:end * 2].decode("utf-16-le")
-        if word and not word.isspace():
-            result.append(word)
-        start = end
-    return result
+    from .unicode_words import words
+    return words(text)
 
 
 def _spaced_jyutping(reading: str | None) -> str:
@@ -605,10 +544,14 @@ def splittable_batch_error(error):
 
 
 def batch_worker(agent):
-    """Copy request configuration while isolating per-batch response accounting."""
-    worker = copy.copy(agent)
-    if getattr(agent, "_profile", None):
-        worker._profile = dict(agent._profile)
+    """Compatibility worker factory; real tasks explicitly fork their owned client."""
+    if isinstance(agent, TextBatchTask):
+        return agent.new_worker()
+    # External verifier adapters need only their concrete protocol, not a learning
+    # agent. Preserve injected callables while copying mutable configuration.
+    worker = object.__new__(type(agent))
+    for key, value in vars(agent).items():
+        setattr(worker, key, value if callable(value) else copy.deepcopy(value))
     worker.last_response_metadata = {}
     worker.response_metadata = []
     worker.batch_metadata = []
@@ -617,132 +560,93 @@ def batch_worker(agent):
     return worker
 
 
-class LearningAgent:
-    def __init__(self, provider: str = "deepseek", model: str | None = None, *, profile=None):
-        self._profile = dict(profile) if profile else None
-        self.provider = (self._profile.get("provider", provider) if self._profile else provider).lower()
-        self.last_response_metadata: dict = {}
-        self.response_metadata: list[dict] = []
-        if self._profile:
-            self.model = self._profile["model"]
-            self._key, self._base = "", self._profile["base_url"]
-        elif self.provider == "local":
-            self.model = "local-dictionaries"
-            self._key, self._base = "", ""
-        else:
-            self._key, self._base, default = _config(self.provider)
-            self.model = model or default
-        self.timeout = 120
+def _client_property(name):
+    return property(lambda owner: getattr(owner.client, name),
+                    lambda owner, value: setattr(owner.client, name, value))
+
+
+class TextBatchTask:
+    """Shared client ownership and batch configuration, without teaching behavior."""
+
+    provider = _client_property("provider")
+    model = _client_property("model")
+    _profile = _client_property("_profile")
+    _key = _client_property("_key")
+    _base = _client_property("_base")
+    timeout = _client_property("timeout")
+    max_completion_tokens = _client_property("max_completion_tokens")
+    reasoning_effort = _client_property("reasoning_effort")
+    last_response_metadata = _client_property("last_response_metadata")
+    response_metadata = _client_property("response_metadata")
+
+    def __init__(self, provider="deepseek", model=None, *, profile=None):
+        self.client = LlmClient(provider, model, profile=profile, config_resolver=_config)
         self.chunk_size = 6
         self.split_invalid_batches = False
         self.repair_feedback = {}
         self.pending_repair_errors = {}
         self.repair_attempt = 0
         self.max_workers = 2
-        self.batch_metadata: list[dict] = []
-        self.completed_cues: list[Cue] = []
-        self.checkpoint_metadata: dict = {}
-        self.max_completion_tokens = self._profile.get("max_tokens", 6000) if self._profile else 6000
+        self.batch_metadata = []
+        self.completed_cues = []
+        self.checkpoint_metadata = {}
         self.preserve_text = False
         self.provided_translations = {}
         self.reference_hints = {}
         self.unreviewed_source = False
         self.teaching_preferences = ""
-        self.reasoning_effort = ""
+
+    def new_worker(self):
+        worker = object.__new__(type(self))
+        worker.client = self.client.fork()
+        for name in ("chunk_size", "split_invalid_batches", "repair_feedback", "repair_attempt",
+                     "max_workers", "preserve_text", "provided_translations", "reference_hints",
+                     "unreviewed_source", "teaching_preferences", "_review_context", "context_metadata",
+                     "allow_partial_translations"):
+            if hasattr(self, name):
+                setattr(worker, name, copy.deepcopy(getattr(self, name)))
+        worker.batch_metadata, worker.completed_cues = [], []
+        worker.checkpoint_metadata, worker.pending_repair_errors = {}, {}
+        worker.review_metadata = {}
+        # Explicit legacy injection boundary: mocks retain identity/call history,
+        # while normal methods resolve on the fresh concrete worker instance.
+        for name in ("_complete", "_request", "_stream_request", "_annotate_batch", "verify_translations"):
+            if name in self.__dict__:
+                setattr(worker, name, self.__dict__[name])
+        return worker
+
+    def transport_config(self):
+        return self.client.transport_config()
 
     def _transport_config(self):
-        return self._profile or {"provider": self.provider, "protocol": "openai",
-                                 "base_url": self._base, "_key": self._key,
-                                 "key_source": "environment"}
+        return self.transport_config()
 
-    def _request(self, path: str, body: dict | None = None, *, on_reasoning=None) -> dict:
-        return provider_request(self._transport_config(), path, body, timeout=self.timeout, on_reasoning=on_reasoning)
+    def request(self, path, body=None, *, on_reasoning=None):
+        return self.client.request(path, body, on_reasoning=on_reasoning)
+
+    def _request(self, path, body=None, *, on_reasoning=None):
+        return self.client.request(path, body, on_reasoning=on_reasoning)
+
+    def stream_request(self, body, *, on_delta=None, cancelled=None, on_reasoning=None):
+        return self.client.stream_request(body, on_delta=on_delta, cancelled=cancelled, on_reasoning=on_reasoning)
 
     def _stream_request(self, body, *, on_delta=None, cancelled=None, on_reasoning=None):
-        return provider_request(self._transport_config(), "/chat/completions", body,
-                                timeout=self.timeout, on_delta=on_delta, cancelled=cancelled, on_reasoning=on_reasoning)
+        return self.client.stream_request(body, on_delta=on_delta, cancelled=cancelled, on_reasoning=on_reasoning)
 
-    def list_models(self) -> list[str]:
+    def complete(self, system, payload, schema=None):
+        return self.client.complete(system, payload, schema, request=self._request,
+                                    annotation_version=ANNOTATION_VERSION)
+
+    def _complete(self, system, payload, schema=None):
+        return self.complete(system, payload, schema)
+
+    def list_models(self):
         result = self._request("/models")
-        return sorted(
-            item["id"]
-            for item in result.get("data", [])
-            if isinstance(item, dict) and isinstance(item.get("id"), str)
-        )
+        return sorted(item["id"] for item in result.get("data", [])
+                      if isinstance(item, dict) and isinstance(item.get("id"), str))
 
-    def _complete(self, system: str, payload: dict, schema: dict | None = None) -> str:
-        body = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
-            ],
-        }
-        if self.provider == "openai":
-            body["max_completion_tokens"] = self.max_completion_tokens
-            body["store"] = False
-            if self.model.startswith(("gpt-5", "o1", "o3", "o4")):
-                body["reasoning_effort"] = "low"
-            elif self.model.startswith("gpt-6"):
-                body["reasoning_effort"] = "medium"
-            if schema:
-                body["response_format"] = {
-                    "type": "json_schema",
-                    "json_schema": {"name": "subtitle_annotations", "strict": True, "schema": schema},
-                }
-        else:
-            body["max_tokens"] = self.max_completion_tokens
-            if self.provider == "deepseek":
-                body["thinking"] = {"type": "disabled"}
-            if schema:
-                body["response_format"] = {"type": "json_object"}
-        if self._profile and self._profile.get("reasoning_effort"):
-            body["reasoning_effort"] = self._profile["reasoning_effort"]
-        if self.reasoning_effort and self.reasoning_effort != "default":
-            body["reasoning_effort"] = self.reasoning_effort
-        if schema:
-            # Native Anthropic and compatibility fallbacks still receive the exact
-            # schema in the trusted instruction. Local validation is never relaxed.
-            body["messages"][0]["content"] += "\nRequired JSON schema: " + json.dumps(schema, ensure_ascii=False)
-        started = time.monotonic()
-        for format_attempt in range(3):
-            try:
-                response = self._request("/chat/completions", body)
-                break
-            except AgentError as exc:
-                if (exc.status not in (400, 422) or exc.category in ("tool_schema", "reasoning_parameter")
-                        or not body.get("response_format") or format_attempt == 2):
-                    raise
-                if body["response_format"]["type"] == "json_schema":
-                    body["response_format"] = {"type": "json_object"}
-                else:
-                    body.pop("response_format")
-        self.last_response_metadata = {
-            "provider": self.provider,
-            "requested_model": self.model,
-            **safe_metadata(response),
-            "latency_seconds": round(time.monotonic() - started, 3),
-            "finish_reason": None,
-            "thinking": body.get("thinking"),
-            "reasoning_effort": body.get("reasoning_effort"),
-            "max_output_tokens": self.max_completion_tokens,
-            "annotation_version": ANNOTATION_VERSION,
-            "response_format": body.get("response_format", {}).get("type", "prompt"),
-        }
-        self.response_metadata.append(self.last_response_metadata)
-        try:
-            choice = response["choices"][0]
-            self.last_response_metadata["finish_reason"] = choice.get("finish_reason")
-            if choice.get("finish_reason") != "stop":
-                raise AgentError("模型回答被截断或拒绝，未应用此批结果。",
-                                 category="length" if choice.get("finish_reason") == "length" else "response")
-            content = choice["message"]["content"]
-            if not isinstance(content, str) or not content.strip():
-                raise AgentError("模型返回空内容，未应用此批结果。")
-            return content
-        except (KeyError, IndexError, TypeError):
-            raise AgentError("API 返回的回答结构无效。") from None
 
+class LearningAgent(TextBatchTask):
     def _annotate_batch(self, cues, language, cursor, end, stopped, context_texts, context_positions):
         batch = cues[cursor:end]
         first_position = context_positions[batch[0].id]
@@ -922,273 +826,8 @@ class LearningAgent:
                     "apostrophes; do not expand contractions. All required keys and correct types are mandatory."
                 )
 
-    def annotate(
-        self,
-        cues: list[Cue],
-        language: LanguagePair,
-        progress=None,
-        cancelled=None,
-        checkpoint=None,
-        context_cues: list[Cue] | None = None,
-    ) -> list[Cue]:
-        if len({cue.id for cue in cues}) != len(cues):
-            raise AnnotationValidationError("输入字幕 ID 重复。")
-        if self.provider == "local":
-            return annotate_local(cues, language)
-        if self.chunk_size < 1 or type(self.max_workers) is not int or not 1 <= self.max_workers <= MAX_LLM_CONCURRENCY:
-            raise AgentError(f"字幕批量大小必须为正数，并发数必须为 1 至 {MAX_LLM_CONCURRENCY}。")
-        timeline = cues if context_cues is None else context_cues
-        context_positions = {cue.id: index for index, cue in enumerate(timeline)}
-        if len(context_positions) != len(timeline) or any(cue.id not in context_positions for cue in cues):
-            raise AnnotationValidationError("完整上下文的字幕 ID 重复或缺少待分析字幕。")
-        pending_positions = [context_positions[cue.id] for cue in cues]
-        if pending_positions != sorted(pending_positions):
-            raise AnnotationValidationError("待分析字幕与完整上下文顺序不一致。")
-        # Snapshot full-timeline text before callbacks update the saved document;
-        # completed neighbors remain context and never become new correction targets.
-        context_texts = [
-            (cue.original_text or cue.text)
-            if context_cues is not None and not self.preserve_text else cue.text for cue in timeline
-        ]
-        stop_event = threading.Event()
-
-        def stopped():
-            if cancelled and cancelled():
-                stop_event.set()
-            return stop_event.is_set()
-
-        self.pending_repair_errors = {c.id: self.repair_feedback[c.id] for c in cues if c.id in self.repair_feedback}
-        if stopped():
-            raise AgentError("学习分析已取消；已完成批次可从检查点恢复。")
-        plans = []
-        cursor = 0
-        while cursor < len(cues):
-            end, chars = cursor, 0
-            while end < len(cues) and end - cursor < self.chunk_size:
-                if end > cursor and pending_positions[end] != pending_positions[end - 1] + 1:
-                    break  # completed timeline rows must remain neighboring context
-                if (cues[end].id in self.pending_repair_errors) != (cues[cursor].id in self.pending_repair_errors):
-                    break
-                if (cues[end].id in self.provided_translations) != (cues[cursor].id in self.provided_translations):
-                    break
-                chars += len(cues[end].text)
-                if end > cursor and chars > 2500:
-                    break
-                end += 1
-            plans.append(tuple(range(cursor, end)))
-            cursor = end
-        completed, outcomes, errors = {}, {}, []
-        previous_metadata = list(self.response_metadata)
-        self.batch_metadata = []
-        self.last_response_metadata = {}
-        self.completed_cues = []
-        self.checkpoint_metadata = {"final_retry_attempted": False, "final_retry_succeeded": False}
-        callback_error = None
-        checkpoint_failed = False
-        progress_failed = False
-
-        def report(message):
-            nonlocal callback_error, progress_failed
-            if progress and not progress_failed:
-                try:
-                    progress(message)
-                except Exception as exc:
-                    callback_error = callback_error or exc
-                    progress_failed = True
-                    stop_event.set()
-
-        template = batch_worker(self)
-
-        def locate_error(error, source):
-            error.cue_number = context_positions[source.id] + 1
-            error.cue_start = source.start
-
-        def run_batch(index, indices, feedback, repair_attempt):
-            # Every worker owns its response state and HTTP requests. Immutable API
-            # configuration is copied; no shared last_response_metadata is mutated.
-            worker = batch_worker(template)
-            worker.repair_feedback = feedback
-            worker.repair_attempt = repair_attempt
-            start, end = indices[0], indices[-1] + 1
-            targets, first, last = cues, start, end
-            if end - start != len(indices):
-                targets, first, last = [cues[i] for i in indices], 0, len(indices)
-            split = False
-            result, failure = None, None
-            try:
-                result = worker._annotate_batch(
-                    targets, language, first, last, stopped, context_texts, context_positions
-                )
-                if isinstance(result, PartialBatchResult) and (
-                    repair_attempt >= 2 or (repair_attempt and len(indices) == 1)
-                ):
-                    source = next(cues[i] for i in indices if cues[i].id in result.errors)
-                    failure = AnnotationValidationError(result.errors[source.id])
-                    locate_error(failure, source)
-                    stop_event.set()
-            except Exception as exc:
-                failure = exc
-                split = template.split_invalid_batches and len(indices) > 1 and splittable_batch_error(exc)
-                if not split:
-                    if len(indices) == 1 and splittable_batch_error(exc):
-                        locate_error(exc, cues[start])
-                    stop_event.set()  # stop scheduling immediately, before coordinator wakes
-            requests = copy.deepcopy(worker.response_metadata)
-            if not requests and worker.last_response_metadata:
-                requests = [copy.deepcopy(worker.last_response_metadata)]
-            for request in requests:
-                request["batch_index"] = index
-            outcome = {
-                "batch_index": index,
-                "cue_start_index": start,
-                "cue_end_index": end,
-                "status": "completed"
-                if failure is None
-                else ("cancelled" if isinstance(failure, _BatchCancelled) else "failed"),
-                "requests": requests,
-            }
-            outcome["timeline_start_index"] = pending_positions[start]
-            outcome["timeline_end_index"] = pending_positions[end - 1] + 1
-            if split:
-                outcome["status"] = "split"
-            elif isinstance(result, PartialBatchResult) and failure is None:
-                outcome["status"] = "partial"
-            if end - start != len(indices):
-                outcome["cue_indices"] = list(indices)
-            if repair_attempt:
-                outcome["repair_attempt"] = repair_attempt
-            if failure is not None:
-                outcome["error_type"] = type(failure).__name__
-                outcome["error"] = str(failure) if isinstance(failure, AgentError) else "批次处理失败。"
-            return result, outcome, failure
-
-        def ordered_results():
-            return [completed[c.id] for c in cues if c.id in completed]
-
-        queued = deque(range(len(plans)))
-        parents = {}
-        repair_jobs = {index: ({cues[i].id: self.pending_repair_errors[cues[i].id] for i in indices}, 0)
-                       for index, indices in enumerate(plans) if cues[indices[0]].id in self.pending_repair_errors}
-        with ThreadPoolExecutor(max_workers=template.max_workers, thread_name_prefix="tingmu-language") as pool:
-            pending = {}
-
-            def schedule():
-                while len(pending) < template.max_workers and queued and not stopped():
-                    index = queued.popleft()
-                    indices = plans[index]
-                    feedback, repair_attempt = repair_jobs.get(index, ({}, 0))
-                    event = batch_progress(index, pending_positions[indices[0]] + 1, pending_positions[indices[-1]] + 1,
-                                           len(indices), repair=bool(feedback))
-                    report(Progress(f"语言分析 {event} · {self.provider}/{self.model}", **event.details))
-                    if stopped():
-                        break
-                    pending[pool.submit(run_batch, index, indices, feedback, repair_attempt)] = index
-
-            try:
-                schedule()
-                while pending:
-                    stopped()  # observe cancellation while waiting for in-flight calls
-                    done, _ = wait(pending, timeout=0.1, return_when=FIRST_COMPLETED)
-                    if not done:
-                        continue
-                    changed = False
-                    for future in sorted(done, key=lambda item: pending[item]):
-                        index = pending.pop(future)
-                        result, outcome, failure = future.result()
-                        outcomes[index] = outcome
-                        if index in parents:
-                            outcome["parent_batch_index"] = parents[index]
-                        indices = plans[index]
-                        feedback, repair_attempt = repair_jobs.get(index, ({}, 0))
-                        children = []
-                        if outcome["status"] == "split":
-                            middle = len(indices) // 2
-                            children = [indices[:middle], indices[middle:]]
-                            if not feedback:
-                                feedback = {cues[i].id: str(failure) for i in indices}
-                            self.pending_repair_errors.update(feedback)
-                            changed = True
-                        if isinstance(result, PartialBatchResult):
-                            feedback = result.errors
-                            self.pending_repair_errors.update(feedback)
-                            changed = True
-                            remaining = tuple(i for i in indices if cues[i].id in feedback)
-                            outcome["failed_cue_indices"] = list(remaining)
-                            if failure is None:
-                                children = [remaining]
-                                if repair_attempt and len(remaining) > 1:
-                                    middle = len(remaining) // 2
-                                    children = [remaining[:middle], remaining[middle:]]
-                                repair_attempt += 1
-                            result = result.completed
-                        if result:
-                            completed.update((c.id, c) for c in result)
-                            for cue in result:
-                                self.pending_repair_errors.pop(cue.id, None)
-                            changed = True
-                        report(batch_progress(index, pending_positions[indices[0]] + 1, pending_positions[indices[-1]] + 1,
-                                              len(indices), status=outcome["status"], done=len(result or []),
-                                              repair=index in repair_jobs))
-                        if failure is not None and not children and not isinstance(failure, _BatchCancelled):
-                            errors.append(failure)
-                            if template.split_invalid_batches and len(indices) == 1 and splittable_batch_error(failure):
-                                self.pending_repair_errors[cues[indices[0]].id] = str(failure)
-                                changed = True
-                        for child in children:
-                            child_index = len(plans)
-                            plans.append(child)
-                            parents[child_index] = index
-                            child_feedback = {cues[i].id: feedback[cues[i].id] for i in child}
-                            repair_jobs[child_index] = (child_feedback, repair_attempt)
-                        if children:
-                            queued.extendleft(reversed(range(len(plans) - len(children), len(plans))))
-                        self.batch_metadata = [outcomes[i] for i in sorted(outcomes)]
-                        self.response_metadata = previous_metadata + [
-                            request for item in self.batch_metadata for request in item["requests"]
-                        ]
-                        if outcome["requests"]:
-                            self.last_response_metadata = outcome["requests"][-1]
-                        if outcome["status"] == "split":
-                            report(f"批次 {index + 1} 将拆小重试。")
-                        elif outcome["status"] == "partial":
-                            report(f"批次 {index + 1} 仅重试 {len(remaining)} 条未通过的字幕。")
-                        elif failure is not None:
-                            report(f"批次 {index + 1} 未完成；正在保存其他已验证结果。")
-                    if changed:
-                        self.completed_cues = ordered_results()
-                        if checkpoint and not checkpoint_failed:
-                            # Do not let a disk/callback error exit before accounting
-                            # for other paid in-flight responses. Drain them first.
-                            try:
-                                checkpoint(copy.deepcopy(self.completed_cues))
-                            except Exception as exc:
-                                callback_error = callback_error or exc
-                                checkpoint_failed = True
-                                self.checkpoint_metadata["error_type"] = type(exc).__name__
-                                stop_event.set()
-                    schedule()
-            finally:
-                stop_event.set()
-        if checkpoint_failed and checkpoint and self.completed_cues:
-            # One final cumulative attempt can recover a transient write failure.
-            # Persistent disk failure is still surfaced; in-memory validated data
-            # and all request/batch metadata remain accessible to the caller.
-            self.checkpoint_metadata["final_retry_attempted"] = True
-            try:
-                checkpoint(copy.deepcopy(self.completed_cues))
-                self.checkpoint_metadata["final_retry_succeeded"] = True
-            except Exception as exc:
-                self.checkpoint_metadata["final_retry_error_type"] = type(exc).__name__
-        if callback_error is not None:
-            raise callback_error
-        if errors:
-            raise errors[0]
-        if len(self.completed_cues) != len(cues):
-            raise AgentError("学习分析已取消；已完成批次可从检查点恢复。")
-        # Cancellation after the last response still preserves that completed checkpoint.
-        if cancelled and cancelled():
-            raise AgentError("学习分析已取消；已完成批次可从检查点恢复。")
-        return ordered_results()
+    def annotate(self, cues, language, progress=None, cancelled=None, checkpoint=None, context_cues=None):
+        return run_annotation(self, cues, language, progress, cancelled, checkpoint, context_cues)
 
     def verify_translations(self, cues, language, context):
         """Independently check the teacher's drafts, returning only known-language translations."""
@@ -1293,3 +932,146 @@ class LearningAgent:
                 "omitted_count": len(entries) - len(selected),
             },
         )
+
+
+def run_annotation(
+    self,
+    cues: list[Cue],
+    language: LanguagePair,
+    progress=None,
+    cancelled=None,
+    checkpoint=None,
+    context_cues: list[Cue] | None = None,
+    *, stage_label="语言分析", cancellation_label="学习分析",
+) -> list[Cue]:
+    if len({cue.id for cue in cues}) != len(cues):
+        raise AnnotationValidationError("输入字幕 ID 重复。")
+    if self.provider == "local":
+        return annotate_local(cues, language)
+    if self.chunk_size < 1 or type(self.max_workers) is not int or not 1 <= self.max_workers <= MAX_LLM_CONCURRENCY:
+        raise AgentError(f"字幕批量大小必须为正数，并发数必须为 1 至 {MAX_LLM_CONCURRENCY}。")
+    timeline = cues if context_cues is None else context_cues
+    context_positions = {cue.id: index for index, cue in enumerate(timeline)}
+    if len(context_positions) != len(timeline) or any(cue.id not in context_positions for cue in cues):
+        raise AnnotationValidationError("完整上下文的字幕 ID 重复或缺少待分析字幕。")
+    pending_positions = [context_positions[cue.id] for cue in cues]
+    if pending_positions != sorted(pending_positions):
+        raise AnnotationValidationError("待分析字幕与完整上下文顺序不一致。")
+    # Snapshot full-timeline text before callbacks update the saved document;
+    # completed neighbors remain context and never become new correction targets.
+    context_texts = [
+        (cue.original_text or cue.text)
+        if context_cues is not None and not self.preserve_text else cue.text for cue in timeline
+    ]
+    self.pending_repair_errors = {c.id: self.repair_feedback[c.id] for c in cues if c.id in self.repair_feedback}
+    if cancelled and cancelled():
+        raise AgentError(f"{cancellation_label}已取消；已完成批次可从检查点恢复。")
+    plans = []
+    cursor = 0
+    while cursor < len(cues):
+        end, chars = cursor, 0
+        while end < len(cues) and end - cursor < self.chunk_size:
+            if end > cursor and pending_positions[end] != pending_positions[end - 1] + 1:
+                break
+            if (cues[end].id in self.pending_repair_errors) != (cues[cursor].id in self.pending_repair_errors):
+                break
+            if (cues[end].id in self.provided_translations) != (cues[cursor].id in self.provided_translations):
+                break
+            chars += len(cues[end].text)
+            if end > cursor and chars > 2500:
+                break
+            end += 1
+        plans.append(tuple(range(cursor, end)))
+        cursor = end
+    previous_metadata = list(self.response_metadata)
+    self.batch_metadata, self.completed_cues = [], []
+    self.last_response_metadata = {}
+    template = batch_worker(self)
+    progress_failed = False
+
+    def report(message):
+        nonlocal progress_failed
+        if progress and not progress_failed:
+            try:
+                progress(message)
+            except Exception as exc:
+                progress_failed = True
+                scheduler.stop(exc)
+
+    def locate_error(index, message, original):
+        error = original if original is not None else AnnotationValidationError(message)
+        error.cue_number = context_positions[cues[index].id] + 1
+        error.cue_start = cues[index].start
+        return error
+
+    def execute(job, stopped):
+        worker = batch_worker(template)
+        worker.repair_feedback = dict(job.feedback)
+        worker.repair_attempt = job.attempt
+        start, end = job.indices[0], job.indices[-1] + 1
+        targets, first, last = cues, start, end
+        if end - start != len(job.indices):
+            targets, first, last = [cues[i] for i in job.indices], 0, len(job.indices)
+        result, failure = None, None
+        try:
+            result = worker._annotate_batch(targets, language, first, last, stopped, context_texts, context_positions)
+        except Exception as exc:
+            failure = exc
+        requests = copy.deepcopy(worker.response_metadata)
+        if not requests and worker.last_response_metadata:
+            requests = [copy.deepcopy(worker.last_response_metadata)]
+        for request in requests:
+            request["batch_index"] = job.index
+        return BatchResponse(result, requests, failure)
+
+    def before_submit(job):
+        event = batch_progress(job.index, pending_positions[job.indices[0]] + 1,
+                               pending_positions[job.indices[-1]] + 1, len(job.indices), repair=bool(job.feedback))
+        report(Progress(f"{stage_label} {event} · {self.provider}/{self.model}", **event.details))
+
+    def publish(scheduler, outcome):
+        job, failure = outcome.job, outcome.failure
+        start, end = job.indices[0], job.indices[-1] + 1
+        record = {"batch_index": job.index, "cue_start_index": start, "cue_end_index": end,
+                  "status": outcome.status, "requests": outcome.requests,
+                  "timeline_start_index": pending_positions[start],
+                  "timeline_end_index": pending_positions[end - 1] + 1}
+        if job.parent is not None:
+            record["parent_batch_index"] = job.parent
+        if end - start != len(job.indices):
+            record["cue_indices"] = list(job.indices)
+        if job.attempt:
+            record["repair_attempt"] = job.attempt
+        if outcome.errors and outcome.status != "split":
+            record["failed_cue_indices"] = [i for i in job.indices if cues[i].id in outcome.errors]
+        if failure is not None:
+            record["error_type"] = type(failure).__name__
+            record["error"] = str(failure) if isinstance(failure, AgentError) else "批次处理失败。"
+        records[job.index] = record
+        self.batch_metadata = [records[i] for i in sorted(records)]
+        self.response_metadata = previous_metadata + [request for row in self.batch_metadata for request in row["requests"]]
+        if outcome.requests:
+            self.last_response_metadata = outcome.requests[-1]
+        self.completed_cues = scheduler.ordered_results()
+        report(batch_progress(job.index, pending_positions[start] + 1, pending_positions[end - 1] + 1,
+                              len(job.indices), status=outcome.status, done=len(outcome.completed), repair=bool(job.feedback)))
+        if outcome.status == "split":
+            report(f"批次 {job.index + 1} 将拆小重试。")
+        elif outcome.status == "partial":
+            report(f"批次 {job.index + 1} 仅重试 {len(outcome.errors)} 条未通过的字幕。")
+        elif failure is not None:
+            report(f"批次 {job.index + 1} 未完成；正在保存其他已验证结果。")
+
+    records = {}
+    scheduler = ConcurrentBatchScheduler(
+        keys=[cue.id for cue in cues], plans=plans, execute=execute, max_workers=template.max_workers,
+        result_key=lambda cue: cue.id, recoverable=splittable_batch_error, make_error=locate_error,
+        policy=RepairPolicy(split_invalid=template.split_invalid_batches), cancelled=cancelled,
+        cancelled_error=lambda exc: isinstance(exc, _BatchCancelled), feedback=self.pending_repair_errors,
+        before_submit=before_submit, on_update=publish, checkpoint=checkpoint, thread_name="tingmu-language")
+    self.pending_repair_errors = scheduler.pending_errors
+    self.checkpoint_metadata = scheduler.checkpoint_metadata
+    result = scheduler.run()
+    if len(result) != len(cues) or (cancelled and cancelled()):
+        raise AgentError(f"{cancellation_label}已取消；已完成批次可从检查点恢复。")
+    return result

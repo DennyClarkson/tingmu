@@ -2,6 +2,8 @@
 
 从源码启动、运行离线回归、定位改动，都可以从仓库根目录（含 `pyproject.toml`）完成。以下使用 Windows x64 与 PowerShell。项目声明支持 Python `>=3.12,<3.14`，安装脚本与 Windows 回归使用 3.12。
 
+架构重构的阶段证据见 [Phase 1/2](refactor-phase1-2.md) 与 [Step 0 / Phase 3/4](refactor-phase3-4.md)。新增 UI 命令在 `quick/commands.py` 声明处理器和错误域，Agent 工具仍走独立白名单；后台任务通过 `BackgroundTaskManager` 启动。数据库变更统一加入 `database.py` 的版本化迁移，勿在管理器构造或 UI 中补建表。测试历史数据库时显式构造旧 schema 和 `user_version`；Store 初始化现在会创建完整现行 schema。
+
 ## 安装 CPU 开发环境
 
 从仓库页复制克隆地址，用 Git 克隆后进入项目目录。先确认 `git --version` 和 `uv --version` 可用。选择空间充足的磁盘。安装脚本把虚拟环境放在 `.venv/`，把 uv 缓存、由 uv 下载的 Python 和临时文件放到项目 `.cache/`，只设置当前进程的环境变量。

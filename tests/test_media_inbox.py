@@ -127,7 +127,9 @@ def test_inbox_index_survives_existing_index_restart_and_user_removal(tmp_path):
 def test_preflight_missing_models_and_explicit_remote_consent(tmp_path, monkeypatch):
     media = tmp_path / "episode.mp4"
     media.write_bytes(b"sample")
-    monkeypatch.setattr("tingmu.workspace_models.model_status", lambda _: "尚未检测到完整模型")
+    from tingmu.workspace_models import ModelReadiness
+    monkeypatch.setattr("tingmu.workspace_models.model_readiness",
+                        lambda _: ModelReadiness(False, "model_missing", "尚未检测到完整模型"))
     settings = AppSettings()
     assert "等待安装" in preparation_block_reason(settings, [media])
     settings.asr_backend = "external"
@@ -148,7 +150,9 @@ def test_inbox_language_gate_matches_selected_model(tmp_path, monkeypatch, model
     media = tmp_path / "lesson.mp4"
     media.write_bytes(b"media")
     monkeypatch.setattr("tingmu.model_advisor.probe_hardware", lambda: pytest.fail("unexpected hardware probe"))
-    monkeypatch.setattr("tingmu.workspace_models.model_status", lambda _: "已就绪")
+    from tingmu.workspace_models import ModelReadiness
+    monkeypatch.setattr("tingmu.workspace_models.model_readiness",
+                        lambda _: ModelReadiness(True, "ready", "已就绪"))
     settings = AppSettings(source_language="sw", target_language=language, asr_model=model)
     reason = preparation_block_reason(settings, [media])
     if supported:

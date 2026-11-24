@@ -3,6 +3,7 @@ from dataclasses import asdict
 import json
 
 import pytest
+from PySide6.QtCore import QObject
 
 from tingmu.app_actions import ActionContext, ActionError
 from tingmu.corrections import freeze_target, read_target, revise_target
@@ -134,7 +135,9 @@ def test_guidance_freezes_playback_and_dispatches_only_revision_tools(quick, qtb
         else:
             content = find(window, "companionModule").property("loadedItem")
         invoke(find(content, "correctCompanionSubtitle"), "clicked")
-    dialog = find(content, "subtitleCorrectionDialog")
+    dialog = find(window, "subtitleCorrectionDialog")
+    assert len(window.findChildren(QObject, "subtitleCorrectionDialog")) == 1
+    assert dialog.property("parent").window() == content.window()
     assert dialog.property("opened")
     assert find(dialog, "subtitleCorrectionGuidance").window() == content.window()
     find(dialog, "subtitleCorrectionGuidance").setProperty("text", "这里说的是下车。")

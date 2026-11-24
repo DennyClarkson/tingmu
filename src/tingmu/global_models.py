@@ -1,10 +1,13 @@
 """Installation-wide text connections and task assignments for managed study folders."""
 
+from contextlib import contextmanager
+import copy
 import json
 from pathlib import Path
 import re
 import uuid
 import time
+import threading
 
 from .models import AppSettings
 from .portable_paths import _migration_lock
@@ -21,8 +24,7 @@ PROFILE_FIELDS = {"id", "label", "provider", "protocol", "base_url", "model", "e
 
 
 def workspace_preferences(settings):
-    from dataclasses import asdict
-    return {k: v for k, v in asdict(settings).items() if k not in ROLE_FIELDS}
+    return {k: v for k, v in settings.to_dict().items() if k not in ROLE_FIELDS}
 
 
 def _read_json(path, fallback):
@@ -73,24 +75,49 @@ class GlobalModelStore:
             self.workspace = _read_json(directory / "tingmu-workspace.json", {})["id"]
         self.root.mkdir(parents=True, exist_ok=True)
         self._path = self.root / "model-profiles.json"
+        self._cache_lock = threading.RLock()
+        self._cached_state = None
+        self._cached_signature = None
         state = self._state()
         if state.get("version") != 2 or self.workspace not in state.get("imports", {}):
             with self._transaction():
                 self._migrate(directory)
 
+    @contextmanager
     def _transaction(self):
-        return _migration_lock(self.root, ".model-registry.lock")
+        with _migration_lock(self.root, ".model-registry.lock"), self._cache_lock:
+            # Every writer re-reads after acquiring the cross-process lock.
+            self._cached_state = None
+            yield
+
+    def _signature(self):
+        try:
+            stat = self._path.stat()
+            return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+        except FileNotFoundError:
+            return None
 
     def _state(self):
         from .providers import ProviderError
         try:
-            if self._path.resolve() != self._path:
-                raise ValueError
-            state = _read_json(self._path, {"version": 1, "profiles": {}})
-            if (not isinstance(state, dict) or state.get("version", 1) not in (1, 2)
-                    or not isinstance(state.get("profiles"), dict)):
-                raise ValueError
-            return state
+            with self._cache_lock:
+                if self._path.resolve() != self._path:
+                    raise ValueError
+                signature = self._signature()
+                if self._cached_state is not None and signature == self._cached_signature:
+                    return copy.deepcopy(self._cached_state)
+                state = _read_json(self._path, {"version": 1, "profiles": {}})
+                if (not isinstance(state, dict) or state.get("version", 1) not in (1, 2)
+                        or not isinstance(state.get("profiles"), dict)):
+                    raise ValueError
+                # A concurrent replacement may occur between stat and read. Never
+                # label the older snapshot with the replacement's signature.
+                if signature == self._signature():
+                    self._cached_signature = signature
+                    self._cached_state = copy.deepcopy(state)
+                else:
+                    self._cached_state = None
+                return state
         except (ValueError, OSError):
             raise ProviderError("模型配置无法读取，原文件已保留。") from None
 
@@ -141,6 +168,7 @@ class GlobalModelStore:
         for attempt in range(6):
             try:
                 atomic_json(self._path, state)
+                self._cached_state = None
                 return
             except PermissionError:
                 if attempt == 5:
@@ -173,17 +201,30 @@ class GlobalModelStore:
         return settings
 
     def save_role_changes(self, settings):
-        # A workspace save must not replace another window's newer role selections.
+        """Compatibility adapter for callers editing the legacy settings fields."""
         defaults = AppSettings()
         baseline = getattr(settings, "_loaded_roles", {})
         changes = {k: getattr(settings, k) for k in ROLE_FIELDS
                    if getattr(settings, k) != baseline.get(k, getattr(defaults, k))}
         if changes:
-            with self._transaction():
-                state = self._state()
-                state["roles"].update(changes)
-                self._save_state(state)
-        self.load_roles(settings)
+            state = self.update_roles(changes)
+        else:
+            state = self._state()
+        self.load_roles(settings, state=state)
+
+    def update_roles(self, changes):
+        """Explicit field-level role update; unrelated assignments stay current."""
+        if not isinstance(changes, dict) or any(
+                key not in ROLE_FIELDS or not isinstance(value, str) for key, value in changes.items()):
+            raise ValueError("模型用途设置无效。")
+        with self._transaction():
+            state = self._state()
+            return self._save_roles(state, changes)
+
+    def _save_roles(self, state, changes):
+        state["roles"].update(changes)
+        self._save_state(state)
+        return state
 
     def assign(self, roles, profile_id):
         from .providers import ProviderError
@@ -195,11 +236,12 @@ class GlobalModelStore:
                 raise ProviderError("请先保存模型连接")
             if profile and not profile.get("model", "").strip():
                 raise ProviderError("请先为连接选择或填写模型 ID 并保存，再分配用途。")
+            changes = {}
             for role in roles:
                 ident, provider, model = ROLES[role]
-                state["roles"].update({ident: profile_id, provider: profile["provider"] if profile else getattr(defaults, provider),
-                                       model: profile["model"] if profile else getattr(defaults, model)})
-            self._save_state(state)
+                changes.update({ident: profile_id, provider: profile["provider"] if profile else getattr(defaults, provider),
+                                model: profile["model"] if profile else getattr(defaults, model)})
+            self._save_roles(state, changes)
 
     def delete_profile(self, ident):
         with self._transaction():

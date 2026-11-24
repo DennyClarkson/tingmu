@@ -87,7 +87,7 @@ Item {
             Layout.fillWidth:true; Layout.fillHeight:true
             Rectangle { anchors.fill:parent; color:Theme.video }
             Column {
-                anchors.centerIn:parent; spacing:16; visible:!backend.state.mediaPath
+                anchors.centerIn:parent; spacing:16; visible:!backend.mediaState.mediaPath
                 Text { textFormat:Text.PlainText; anchors.horizontalCenter:parent.horizontalCenter; text:qsTranslate("Tingmu", "听 幕"); color:Theme.captionText; font.family:Theme.font; font.pixelSize:36; font.weight:Font.Light }
                 TButton { anchors.horizontalCenter:parent.horizontalCenter; text:qsTranslate("Tingmu", "打开视频"); iconSource:"arrow-up-right"; primary:true; onClicked:backend.command("openFiles",{}) }
             }
@@ -183,7 +183,7 @@ Item {
             gradient:Gradient { GradientStop{position:0;color:Theme.scrim} GradientStop{position:1;color:Theme.transparent} }
             RowLayout {
                 anchors.left:parent.left; anchors.right:parent.right; anchors.top:parent.top; anchors.margins:24
-                Text { textFormat:Text.PlainText; Layout.fillWidth:true; text:backend.state.mediaName || qsTranslate("Tingmu", "听幕"); color:Theme.text; font.family:Theme.font; font.pixelSize:16; elide:Text.ElideMiddle }
+                Text { textFormat:Text.PlainText; Layout.fillWidth:true; text:backend.mediaState.mediaName || qsTranslate("Tingmu", "听幕"); color:Theme.text; font.family:Theme.font; font.pixelSize:16; elide:Text.ElideMiddle }
                 TButton { text:root.overlayVisible ? qsTranslate("Tingmu", "隐藏伴侣") : qsTranslate("Tingmu", "显示伴侣"); onClicked:{root.overlayVisible=!root.overlayVisible;root.saveOverlay()} }
                 TButton { text:qsTranslate("Tingmu", "退出全屏  Esc"); onClicked:root.toggleFullscreen() }
             }
@@ -313,7 +313,7 @@ Item {
                         Toggle { objectName:"showLearningTrack";text:qsTranslate("Tingmu", "显示学习字幕");checked:root.displayCaption;onToggled:{root.displayCaption=checked;root.savePlayerPrefs()} }
                         Toggle { objectName:"showTranslationTrack";text:qsTranslate("Tingmu", "显示")+qsTranslate("TingmuLanguage", backend.lessonModel.language || "")+qsTranslate("Tingmu", "译文");checked:root.displayTranslation;onToggled:{root.displayTranslation=checked;root.savePlayerPrefs()} }
                         LessonPreparation {}
-                        TButton { text:qsTranslate("Tingmu", "准备当前视频");visible:!backend.cueCount;enabled:!!backend.state.mediaPath;onClicked:backend.command("prepareCurrent",{}) }
+                        TButton { text:qsTranslate("Tingmu", "准备当前视频");visible:!backend.cueCount;enabled:!!backend.mediaState.mediaPath;onClicked:backend.command("prepareCurrent",{}) }
                         Rectangle { Layout.fillWidth:true;height:1;color:Theme.line }
                         Toggle {
                             objectName:"showEmbeddedTrack";text:qsTranslate("Tingmu", "显示内嵌字幕");enabled:embeddedChoice.count>0
@@ -340,7 +340,7 @@ Item {
                         Toggle { objectName:"showImportedTrack";text:qsTranslate("Tingmu", "显示导入字幕");checked:root.displayImported;onToggled:{root.displayImported=checked;root.savePlayerPrefs()} }
                         SectionLabel { text:backend.sources.importedName || qsTranslate("Tingmu", "可导入 SRT、VTT、ASS 或 SSA 作为独立播放字幕。") }
                         RowLayout {
-                            TButton { text:backend.sources.importedName ? qsTranslate("Tingmu", "更换字幕文件…") : qsTranslate("Tingmu", "导入字幕文件…");enabled:!!backend.state.mediaPath;onClicked:backend.command("importSubtitle",{}) }
+                            TButton { text:backend.sources.importedName ? qsTranslate("Tingmu", "更换字幕文件…") : qsTranslate("Tingmu", "导入字幕文件…");enabled:!!backend.mediaState.mediaPath;onClicked:backend.command("importSubtitle",{}) }
                             TButton { text:qsTranslate("Tingmu", "移除");visible:!!backend.sources.importedName;onClicked:backend.command("removeDisplaySubtitle",{}) }
                         }
                     }

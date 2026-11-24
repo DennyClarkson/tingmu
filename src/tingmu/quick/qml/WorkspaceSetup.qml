@@ -204,17 +204,17 @@ AppDialog {
                                 }
                                 Hint { text: qsTranslate("Tingmu", "设备选 cpu 可用处理器识别；有兼容的 NVIDIA GPU 可选 cuda。auto 会根据运行环境选择设备。\n同一模型供所有工作区共用，缓存位于 ") + root.current.cache; wrapMode: Text.WrapAnywhere }
                                 RowLayout {
-                                    TButton { objectName: "workspaceDownload"; text: qsTranslate("Tingmu", "下载所选模型"); visible: !String(backend.settings.asr_model).startsWith("local:"); enabled: !backend.state.busy; onClicked: root.confirmDownload("download") }
+                                    TButton { objectName: "workspaceDownload"; text: qsTranslate("Tingmu", "下载所选模型"); visible: !String(backend.settings.asr_model).startsWith("local:"); enabled: !backend.applicationState.busy; onClicked: root.confirmDownload("download") }
                                     TButton { text: qsTranslate("Tingmu", "打开共享模型目录"); visible: String(backend.settings.asr_model).startsWith("local:"); onClicked: workspaces.action("modelFolder", {}) }
                                     TButton { text: qsTranslate("Tingmu", "查看缓存"); quiet: true; onClicked: workspaces.action("cache", {}) }
                                 }
                             }
                             Hint { text: workspaces.speechStatus.split(" · ").map(label => qsTranslate("Tingmu", label)).join(" · ") }
                             RowLayout {
-                                TButton { text: qsTranslate("Tingmu", "下载人声分离与换人检测模型"); enabled: !backend.state.busy; onClicked: root.confirmDownload("downloadSpeech") }
-                                TButton { text: qsTranslate("Tingmu", "暂停下载"); visible: !!backend.state.modelDownloading; onClicked: workspaces.action("stopDownload", {}) }
+                                TButton { text: qsTranslate("Tingmu", "下载人声分离与换人检测模型"); enabled: !backend.applicationState.busy; onClicked: root.confirmDownload("downloadSpeech") }
+                                TButton { text: qsTranslate("Tingmu", "暂停下载"); visible: !!backend.downloadState.modelDownloading; onClicked: workspaces.action("stopDownload", {}) }
                             }
-                            DownloadProgress { visible: !!backend.state.modelDownloading; Layout.fillWidth: true }
+                            DownloadProgress { visible: !!backend.downloadState.modelDownloading; Layout.fillWidth: true }
                         }
                         ColumnLayout {
                             visible: !root.creating && root.section === "text"; Layout.fillWidth: true; spacing: 11
@@ -238,8 +238,8 @@ AppDialog {
             }
         }
         Hint {
-            visible: !!text; color: (root.current.error || backend.state.error) ? Theme.error : Theme.accent
-            text: qsTranslate("TingmuStatus", root.current.error || backend.state.error || (root.section === "models" ? backend.state.status : "") || "")
+            visible: !!text; color: (root.current.error || backend.workspaceState.error) ? Theme.error : Theme.accent
+            text: qsTranslate("TingmuStatus", root.current.error || backend.workspaceState.error || (root.section === "models" ? backend.workspaceState.status : "") || "")
         }
         RowLayout {
             Layout.alignment: Qt.AlignRight

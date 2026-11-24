@@ -6,7 +6,7 @@ import "Style.js" as S
 ApplicationWindow {
     id:app
     objectName:"mainWindow"
-    title:(backend.state.mediaName ? backend.state.mediaName + " — " : "") + (workspaces.info.id === "default" ? qsTranslate("Tingmu", workspaces.info.name) : workspaces.info.name) + qsTranslate("Tingmu", " · 听幕")
+    title:(backend.mediaState.mediaName ? backend.mediaState.mediaName + " — " : "") + (workspaces.info.id === "default" ? qsTranslate("Tingmu", workspaces.info.name) : workspaces.info.name) + qsTranslate("Tingmu", " · 听幕")
     width:1480; height:930
     minimumWidth:Math.min(980,Math.max(760,Screen.desktopAvailableWidth-24))
     minimumHeight:Math.min(600,Math.max(420,Screen.desktopAvailableHeight-64))
@@ -21,20 +21,22 @@ ApplicationWindow {
     palette.button:Theme.raised
     palette.buttonText:Theme.text
     palette.highlight:Theme.accent
-    property var savedLayout:backend.layout || ({})
+    readonly property var savedLayout:backend.layout || ({})
+    property var layoutDraft: savedLayout
+    Connections { target: backend; function onLayoutChanged() { app.layoutDraft = backend.layout } }
     property bool restoring:true
     property bool closingSession:false
     property string dropTarget:""
-    property string viewMode:savedLayout.viewMode || "watch"
-    property var viewLayouts:savedLayout.viewLayouts || ({})
-    property var viewExtras:savedLayout.viewExtras || ({})
+    property string viewMode:layoutDraft.viewMode || "watch"
+    property var viewLayouts:layoutDraft.viewLayouts || ({})
+    property var viewExtras:layoutDraft.viewExtras || ({})
     property var additionalModules:viewExtras[viewMode] || ({})
     property var moduleSlots:viewLayouts[viewMode] || defaultSlots(viewMode)
     function chatSubtitle(){
-        if(backend.state.chatStopping)return qsTranslate("Tingmu", "正在停止…等待当前连接结束")
-        if(!backend.state.chatBusy)return ""
-        var messages=backend.messages || []
-        for(var i=messages.length-1;i>=0;i--){var message=messages[i];if(message.role==="assistant" && (message.status==="pending" || message.status==="streaming"))return ({connecting:qsTranslate("Tingmu", "正在连接…"),thinking:qsTranslate("Tingmu", "正在思考…"),acting:qsTranslate("Tingmu", "正在执行学习操作…"),answering:qsTranslate("Tingmu", "正在生成回复…")})[message.phase] || (message.status==="pending" ? qsTranslate("Tingmu", "正在连接…") : qsTranslate("Tingmu", "正在回复…"))}
+        if(backend.chatState.chatStopping)return qsTranslate("Tingmu", "正在停止…等待当前连接结束")
+        if(!backend.chatState.chatBusy)return ""
+        var status=backend.chatState.activeStatus
+        if(status==="pending" || status==="streaming")return ({connecting:qsTranslate("Tingmu", "正在连接…"),thinking:qsTranslate("Tingmu", "正在思考…"),acting:qsTranslate("Tingmu", "正在执行学习操作…"),answering:qsTranslate("Tingmu", "正在生成回复…")})[backend.chatState.activePhase] || (status==="pending" ? qsTranslate("Tingmu", "正在连接…") : qsTranslate("Tingmu", "正在回复…"))
         return ""
     }
     function defaultSlots(mode){return mode==="prepare" ? {queue:"player",player:"queue",subtitles:"chat",chat:"subtitles"} : {subtitles:"chat",chat:"subtitles"}}
@@ -72,30 +74,31 @@ ApplicationWindow {
         var occupied=slotModule(target).moduleId;var prior=moduleSlots[key] || key
         var next=Object.assign({},moduleSlots);next[key]=target;next[occupied]=prior;moduleSlots=next
         docks()[key].detached=false
-        var copy=Object.assign({},savedLayout);copy.moduleSlots=next;savedLayout=copy;docks()[key].save();persist.restart();return true
+        var copy=Object.assign({},layoutDraft);copy.moduleSlots=next;layoutDraft=copy;docks()[key].save();persist.restart();return true
     }
-    function moduleLayout(key){return savedLayout.modules ? savedLayout.modules[key] : null}
-    function overlayLayout(){return savedLayout.overlay || null}
-    function saveModule(key,value){var copy=Object.assign({},savedLayout);var mods=Object.assign({},copy.modules || {});mods[key]=value;copy.modules=mods;savedLayout=copy;persist.restart()}
-    function saveOverlay(value){var copy=Object.assign({},savedLayout);copy.overlay=value;savedLayout=copy;persist.restart()}
-    function savePreference(key,value){var copy=Object.assign({},savedLayout);var prefs=Object.assign({},copy.preferences || {});prefs[key]=value;copy.preferences=prefs;savedLayout=copy;persist.restart()}
-    function preference(key){return savedLayout.preferences ? savedLayout.preferences[key] : null}
+    function moduleLayout(key){return layoutDraft.modules ? layoutDraft.modules[key] : null}
+    function overlayLayout(){return layoutDraft.overlay || null}
+    function saveModule(key,value){var copy=Object.assign({},layoutDraft);var mods=Object.assign({},copy.modules || {});mods[key]=value;copy.modules=mods;layoutDraft=copy;persist.restart()}
+    function saveOverlay(value){var copy=Object.assign({},layoutDraft);copy.overlay=value;layoutDraft=copy;persist.restart()}
+    function savePreference(key,value){var copy=Object.assign({},layoutDraft);var prefs=Object.assign({},copy.preferences || {});prefs[key]=value;copy.preferences=prefs;layoutDraft=copy;persist.restart()}
+    function preference(key){return layoutDraft.preferences ? layoutDraft.preferences[key] : null}
     function saveWorkspace(){
         if(restoring)return
-        var copy=Object.assign({},savedLayout)
+        var copy=Object.assign({},layoutDraft)
         var views=Object.assign({},viewLayouts);views[viewMode]=moduleSlots;viewLayouts=views;copy.viewLayouts=views;copy.viewMode=viewMode
         var extras=Object.assign({},viewExtras);extras[viewMode]=additionalModules;viewExtras=extras;copy.viewExtras=extras
         copy.workspace={width:app.width,height:app.height,x:app.x,y:app.y,leftWidth:leftColumn.width,rightWidth:rightColumn.width,playerHeight:playerDock.height,libraryHeight:libraryDock.height,companionHeight:companionDock.height}
-        savedLayout=copy;backend.saveLayout(copy)
+        layoutDraft=copy;backend.saveLayout(copy)
     }
     function resetWorkspace(){
         libraryDock.detached=false;queueDock.detached=false;playerDock.detached=false;subtitleDock.detached=false;companionDock.detached=false;chatDock.detached=false
         leftColumn.SplitView.preferredWidth=248;rightColumn.SplitView.preferredWidth=364
         playerDock.SplitView.preferredHeight=app.height*0.54;libraryDock.SplitView.preferredHeight=app.height*0.48;companionDock.SplitView.preferredHeight=app.height*0.51
-        moduleSlots=defaultSlots(viewMode);additionalModules={};savedLayout=Object.assign({},savedLayout,{modules:{},moduleSlots:moduleSlots});saveWorkspace()
+        moduleSlots=defaultSlots(viewMode);additionalModules={};layoutDraft=Object.assign({},layoutDraft,{modules:{},moduleSlots:moduleSlots});saveWorkspace()
     }
     Component.onCompleted:{
-        var w=savedLayout.workspace || ({})
+        layoutDraft = savedLayout
+        var w=layoutDraft.workspace || ({})
         app.width=Math.max(app.minimumWidth,Math.min(w.width || 1480,Screen.desktopAvailableWidth-24))
         app.height=Math.max(app.minimumHeight,Math.min(w.height || 930,Screen.desktopAvailableHeight-64))
         var narrow=app.width<1300
@@ -107,13 +110,21 @@ ApplicationWindow {
         restoring=false
         if(workspaces.info.showSetup) Qt.callLater(function(){workspaceSetup.open()})
     }
+    function flushAllDrafts() {
+        if (!learningPanel.flushDrafts()) return false
+        if (companionDock.loadedItem && !companionDock.loadedItem.flushDrafts()) return false
+        return true
+    }
     onClosing: function(event) {
+        if (!flushAllDrafts()) {
+            event.accepted = false
+            return
+        }
         if (!closingSession && desktopTray.shouldHideOnClose(app)) {
             event.accepted = false
             desktopTray.hideToTray()
             return
         }
-        learningPanel.flushDrafts()
         Theme.closing = true
         saveWorkspace()
         persist.stop()
@@ -123,8 +134,28 @@ ApplicationWindow {
         for (var key in all) all[key].detached = false
     }
     DeveloperPanel{id:developerPanel}
+    function openDialog(name, origin, payload) {
+        var host = origin && origin !== app && origin.Window.window ? origin.Window.window : app
+        var overlay = origin && origin !== app && origin.Overlay.overlay ? origin.Overlay.overlay : app.Overlay.overlay
+        if (name === "models") {
+            modelManager.transientParent = host
+            modelManager.open()
+        } else if (name === "teaching") {
+            teachingPreferences.parent = overlay
+            teachingPreferences.open()
+        } else if (name === "correction") {
+            subtitleCorrection.parent = overlay
+            subtitleCorrection.begin((payload || {}).cueId || "")
+        }
+    }
+    Connections {
+        target: backend
+        function onDialogRequested(name, origin, payload) { app.openDialog(name, origin, payload) }
+    }
     ModelManager{id:modelManager}
-    WorkspaceSetup{id:workspaceSetup;onModelsRequested:modelManager.open()}
+    TeachingPreferences{id:teachingPreferences}
+    SubtitleCorrection{id:subtitleCorrection}
+    WorkspaceSetup{id:workspaceSetup;onModelsRequested:app.openDialog("models",app,{})}
     Connections {
         target:backend
         function onAppAction(name,payload){
@@ -149,7 +180,7 @@ ApplicationWindow {
         }
         Connections {
             target: backend
-            function onStateChanged() { if (!backend.state.modelDownloading && activeDownload.opened) activeDownload.close() }
+            function onDownloadStateChanged() { if (!backend.downloadState.modelDownloading && activeDownload.opened) activeDownload.close() }
         }
     }
     TextConnectionConsent { onConfirmationRequested: { app.raise(); app.requestActivate() } }
@@ -187,14 +218,14 @@ ApplicationWindow {
                     Action{text:qsTranslate("Tingmu", "添加多个视频…");onTriggered:backend.command("addFiles",{})}
                     Action{text:qsTranslate("Tingmu", "打开文件夹…    Ctrl+Shift+O");onTriggered:backend.command("openFolder",{})}
                     MenuSeparator{}
-                    Action{text:qsTranslate("Tingmu", "导入播放字幕…");enabled:!!backend.state.mediaPath;onTriggered:backend.command("importSubtitle",{})}
-                    Action{text:backend.settings.preparation_workflow === "subtitle_agent" ? qsTranslate("Tingmu", "选择字幕并加入 Agent 队列…") : backend.cueCount ? qsTranslate("Tingmu", "从字幕替换学习文档…") : qsTranslate("Tingmu", "从字幕建立学习文档…");enabled:!!backend.state.mediaPath;onTriggered:backend.command("importStudySubtitle",{})}
+                    Action{text:qsTranslate("Tingmu", "导入播放字幕…");enabled:!!backend.mediaState.mediaPath;onTriggered:backend.command("importSubtitle",{})}
+                    Action{text:backend.settings.preparation_workflow === "subtitle_agent" ? qsTranslate("Tingmu", "选择字幕并加入 Agent 队列…") : backend.cueCount ? qsTranslate("Tingmu", "从字幕替换学习文档…") : qsTranslate("Tingmu", "从字幕建立学习文档…");enabled:!!backend.mediaState.mediaPath;onTriggered:backend.command("importStudySubtitle",{})}
                     Action{text:qsTranslate("Tingmu", "导出字幕…");onTriggered:backend.command("exportSubtitle",{})}
-                    Action{text:qsTranslate("Tingmu", "导出")+qsTranslate("TingmuLanguage", backend.lessonModel.language || "")+qsTranslate("Tingmu", "译稿…");enabled:!!backend.state.lessonCounts && backend.state.lessonCounts.total>0 && (backend.state.lessonCounts.verified + (backend.state.lessonCounts.provided || 0))===backend.state.lessonCounts.total;onTriggered:backend.command("exportTranslation",{})}
+                    Action{text:qsTranslate("Tingmu", "导出")+qsTranslate("TingmuLanguage", backend.lessonModel.language || "")+qsTranslate("Tingmu", "译稿…");enabled:!!backend.mediaState.lessonCounts && backend.mediaState.lessonCounts.total>0 && (backend.mediaState.lessonCounts.verified + (backend.mediaState.lessonCounts.provided || 0))===backend.mediaState.lessonCounts.total;onTriggered:backend.command("exportTranslation",{})}
                     Action{text:qsTranslate("Tingmu", "打开数据文件夹");onTriggered:backend.command("openDataFolder",{})}
                     MenuSeparator{}
-                    Action{objectName:"globalTextModelsAction";text:qsTranslate("Tingmu", "全局文本模型…");onTriggered:modelManager.open()}
-                    Action{objectName:"hideToTrayAction";text:qsTranslate("Tingmu", "收起到系统托盘");enabled:desktopTray.available;onTriggered:desktopTray.hideToTray()}
+                    Action{objectName:"globalTextModelsAction";text:qsTranslate("Tingmu", "全局文本模型…");onTriggered:app.openDialog("models",app,{})}
+                    Action{objectName:"hideToTrayAction";text:qsTranslate("Tingmu", "收起到系统托盘");enabled:desktopTray.available;onTriggered:if(app.flushAllDrafts())desktopTray.hideToTray()}
                     Action{text:qsTranslate("Tingmu", "退出听幕");onTriggered:desktopTray.quitApplication()}
                 }
                 AppMenu {
@@ -203,7 +234,7 @@ ApplicationWindow {
                     Action{text:qsTranslate("Tingmu", "上一句");onTriggered:backend.command("previousCue",{})}
                     Action{text:qsTranslate("Tingmu", "下一句");onTriggered:backend.command("nextCue",{})}
                     Action{text:qsTranslate("Tingmu", "重听当前句");onTriggered:backend.command("repeatCue",{})}
-                    Action{text:qsTranslate("Tingmu", "保存当前画面");enabled:!!backend.state.mediaPath;onTriggered:backend.command("saveFrame",{})}
+                    Action{text:qsTranslate("Tingmu", "保存当前画面");enabled:!!backend.mediaState.mediaPath;onTriggered:backend.command("saveFrame",{})}
                     MenuSeparator{}
                     Action{text:qsTranslate("Tingmu", "上一个视频");onTriggered:backend.command("previousMedia",{})}
                     Action{text:qsTranslate("Tingmu", "下一个视频");onTriggered:backend.command("nextMedia",{})}
@@ -277,7 +308,7 @@ ApplicationWindow {
             handle:Rectangle{implicitHeight:8;implicitWidth:8;color:"transparent";Rectangle{anchors.centerIn:parent;width:30;height:2;color:SplitHandle.hovered || SplitHandle.pressed ? Theme.accent : Theme.line}}
             onResizingChanged:if(!resizing)persist.restart()
             DockPanel { id:libraryDock;objectName:"libraryModule";moduleId:"library";title:qsTranslate("Tingmu", "媒体库");subtitle:String(backend.library.length);workspace:app;visible:app.slotEnabled(moduleId);SplitView.preferredHeight:430;SplitView.fillHeight:!queueDock.visible;SplitView.minimumHeight:app.slotMinimumHeight("library",250);panelContent:Component{LibraryPanel{}} }
-            DockPanel { id:queueDock;objectName:"queueModule";moduleId:"queue";title:qsTranslate("Tingmu", "处理队列");subtitle:backend.state.queueRunning ? qsTranslate("Tingmu", "进行中") : String(backend.jobs.length);workspace:app;visible:app.slotEnabled(moduleId);SplitView.fillHeight:true;SplitView.minimumHeight:app.slotMinimumHeight("queue",210);panelContent:Component{QueuePanel{}} }
+            DockPanel { id:queueDock;objectName:"queueModule";moduleId:"queue";title:qsTranslate("Tingmu", "处理队列");subtitle:backend.queueState.queueRunning ? qsTranslate("Tingmu", "进行中") : String(backend.queueState.totalCount || 0);workspace:app;visible:app.slotEnabled(moduleId);SplitView.fillHeight:true;SplitView.minimumHeight:app.slotMinimumHeight("queue",210);panelContent:Component{QueuePanel{}} }
         }
         SplitView {
             id:centerColumn;orientation:Qt.Vertical
@@ -285,7 +316,7 @@ ApplicationWindow {
             SplitView.fillWidth:true;SplitView.minimumWidth:420
             handle:Rectangle{implicitHeight:8;implicitWidth:8;color:"transparent";Rectangle{anchors.centerIn:parent;width:30;height:2;color:SplitHandle.hovered || SplitHandle.pressed ? Theme.accent : Theme.line}}
             onResizingChanged:if(!resizing)persist.restart()
-            DockPanel { id:playerDock;objectName:"playerModule";moduleId:"player";title:qsTranslate("Tingmu", "放映");subtitle:backend.state.mediaName || "";workspace:app;visible:app.slotEnabled(moduleId);SplitView.preferredHeight:490;SplitView.fillHeight:!subtitleDock.visible;SplitView.minimumHeight:app.slotMinimumHeight("player",300);panelContent:Component{PlayerPanel{workspace:app}} }
+            DockPanel { id:playerDock;objectName:"playerModule";moduleId:"player";title:qsTranslate("Tingmu", "放映");subtitle:backend.mediaState.mediaName || "";workspace:app;visible:app.slotEnabled(moduleId);SplitView.preferredHeight:490;SplitView.fillHeight:!subtitleDock.visible;SplitView.minimumHeight:app.slotMinimumHeight("player",300);panelContent:Component{PlayerPanel{workspace:app}} }
             DockPanel { id:subtitleDock;objectName:"subtitleModule";moduleId:"subtitles";title:qsTranslate("Tingmu", "字幕");subtitle:String(backend.cueCount);workspace:app;visible:app.slotEnabled(moduleId);SplitView.fillHeight:true;SplitView.minimumHeight:app.slotMinimumHeight("subtitles",180);panelContent:Component{SubtitlePanel{}} }
         }
         SplitView {
@@ -307,12 +338,12 @@ ApplicationWindow {
         height:30;color:Theme.bg
         RowLayout {
             anchors.fill:parent;anchors.leftMargin:20;anchors.rightMargin:20;spacing:9
-            Rectangle{width:5;height:5;radius:3;color:backend.state.error ? Theme.error : Theme.accent}
-            Text { objectName:"applicationStatus";textFormat:Text.PlainText;Layout.fillWidth:true;text:qsTranslate("TingmuStatus", backend.state.error || backend.state.status || "") || qsTranslate("Tingmu", "就绪");color:backend.state.error ? Theme.error : Theme.muted;font.family:Theme.font;font.pixelSize:10;elide:Text.ElideRight}
-            TButton{visible:!!backend.state.error;iconSource:"close";quiet:true;implicitHeight:24;tip:qsTranslate("Tingmu", "关闭提示");onClicked:backend.command("dismissError",{})}
-            TButton { visible: !!backend.state.modelDownloading; text: qsTranslate("Tingmu", "查看下载"); quiet: true
+            Rectangle{width:5;height:5;radius:3;color:backend.notificationState.error ? Theme.error : Theme.accent}
+            Text { objectName:"applicationStatus";textFormat:Text.PlainText;Layout.fillWidth:true;text:qsTranslate("TingmuStatus", backend.notificationState.error || backend.notificationState.status || "") || qsTranslate("Tingmu", "就绪");color:backend.notificationState.error ? Theme.error : Theme.muted;font.family:Theme.font;font.pixelSize:10;elide:Text.ElideRight}
+            TButton{visible:!!backend.notificationState.error;iconSource:"close";quiet:true;implicitHeight:24;tip:qsTranslate("Tingmu", "关闭提示");onClicked:backend.command("dismissError",{})}
+            TButton { visible: !!backend.downloadState.modelDownloading; text: qsTranslate("Tingmu", "查看下载"); quiet: true
                 implicitHeight: 24; onClicked: activeDownload.open() }
-            Text { textFormat:Text.PlainText;text:!backend.settings.text_models_enabled ? qsTranslate("Tingmu", "文本模型已停用") : backend.state.cloudEnabled ? qsTranslate("Tingmu", "允许远程文本 API") : qsTranslate("Tingmu", "文本仅用本机 API");color:Theme.muted;font.family:Theme.font;font.pixelSize:10}
+            Text { textFormat:Text.PlainText;text:!backend.settings.text_models_enabled ? qsTranslate("Tingmu", "文本模型已停用") : backend.applicationState.cloudEnabled ? qsTranslate("Tingmu", "允许远程文本 API") : qsTranslate("Tingmu", "文本仅用本机 API");color:Theme.muted;font.family:Theme.font;font.pixelSize:10}
         }
     }
     AppDialog {
@@ -323,6 +354,6 @@ ApplicationWindow {
     AppDialog {
         id:aboutDialog;title:qsTranslate("Tingmu", "关于听幕");anchors.centerIn:parent;width:390;modal:true;standardButtons:Dialog.Close
         background:Rectangle{color:Theme.panel;radius:10;border.color:Theme.line}
-        contentItem:ColumnLayout{spacing:14;Text { textFormat:Text.PlainText;text:qsTranslate("Tingmu", "听幕");color:Theme.text;font.family:Theme.font;font.pixelSize:30}Text { textFormat:Text.PlainText;Layout.fillWidth:true;text:qsTranslate("Tingmu", "在故事里，听懂另一种语言。\n\n本地播放与识别，逐句阅读与收藏。\n文本模型的复核和解释仍需对照原声。");color:Theme.muted;font.family:Theme.font;font.pixelSize:13;wrapMode:Text.Wrap;lineHeight:1.4}Text { textFormat:Text.PlainText;text:"VERSION " + (backend.state.version || "3");color:Theme.accent;font.family:Theme.mono;font.pixelSize:11}}
+        contentItem:ColumnLayout{spacing:14;Text { textFormat:Text.PlainText;text:qsTranslate("Tingmu", "听幕");color:Theme.text;font.family:Theme.font;font.pixelSize:30}Text { textFormat:Text.PlainText;Layout.fillWidth:true;text:qsTranslate("Tingmu", "在故事里，听懂另一种语言。\n\n本地播放与识别，逐句阅读与收藏。\n文本模型的复核和解释仍需对照原声。");color:Theme.muted;font.family:Theme.font;font.pixelSize:13;wrapMode:Text.Wrap;lineHeight:1.4}Text { textFormat:Text.PlainText;text:"VERSION " + (backend.applicationState.version || "3");color:Theme.accent;font.family:Theme.mono;font.pixelSize:11}}
     }
 }

@@ -17,7 +17,7 @@ ScrollView {
     property string collectionMessage: ""
     property bool collectionSuccess: true
     property bool tokenFeedback:false
-    readonly property string wordContext: shown ? JSON.stringify([backend.state.dataDir, backend.state.mediaPath,
+    readonly property string wordContext: shown ? JSON.stringify([backend.applicationState.dataDir, backend.mediaState.mediaPath,
         backend.settings.source_language, backend.settings.target_language, track, cue.id, cue.text]) : ""
     property string armedWord: ""
     readonly property var wordStates: {
@@ -40,7 +40,7 @@ ScrollView {
         current.confirm = armedWord === key
         clearConfirmation()
         tokenFeedback = current.tokenIndex >= 0
-        if (backend.state.mediaPath) current.mediaPath = backend.state.mediaPath
+        if (backend.mediaState.mediaPath) current.mediaPath = backend.mediaState.mediaPath
         const outcome = backend.collectWord(current)
         if (outcome === "confirm") {
             armedWord = key
@@ -82,14 +82,13 @@ ScrollView {
     property bool showExplanation: true
     property bool compact: false
     property bool interactive:!compact || !backend.playbackDetails.playing
-    readonly property bool mediaOpened:!!backend.state.mediaPath
-    readonly property bool preparing:mediaOpened && backend.jobs.some(function(job){return (job.path===backend.state.mediaPath || job.media_path===backend.state.mediaPath) && job.status==="running"})
+    readonly property bool mediaOpened:!!backend.mediaState.mediaPath
+    readonly property bool preparing:mediaOpened && (backend.queueState.runningMediaPaths || []).indexOf(backend.mediaState.mediaPath)>=0
     readonly property string emptyTitle:!shown || cue.text ? "" : !mediaOpened ? qsTranslate("Tingmu", "开始观看") : preparing ? qsTranslate("Tingmu", "正在准备学习材料") : backend.cueCount===0 ? qsTranslate("Tingmu", "还没有学习字幕") : qsTranslate("Tingmu", "当前是字幕空档")
     readonly property string emptyMessage:!shown || cue.text ? "" : !mediaOpened ? qsTranslate("Tingmu", "打开一个视频，开始观看与学习。") : preparing ? qsTranslate("Tingmu", "正在处理这个视频，完成后会显示逐句内容。")
         : backend.playbackDetails.embeddedImage ? qsTranslate("Tingmu", "当前是图像字幕。切换到文字字幕、导入字幕文件或准备学习字幕后，即可收藏整句。")
         : backend.cueCount===0 ? qsTranslate("Tingmu", "视频已打开。可以准备当前视频，也可以从字幕建立学习文档。") : qsTranslate("Tingmu", "这里没有当前字幕，播放到下一句时会自动显示。")
     signal learningRequested()
-    SubtitleCorrection { id: correction }
     clip: true
     contentWidth: availableWidth
     ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
@@ -103,7 +102,7 @@ ScrollView {
                 text: root.cue.text ? S.time(root.cue.start*1000) + "  /  " + ((root.track === "embedded" ? qsTranslate("TingmuStatus", root.cue.trackName || "") : root.cue.trackName) || root.cue.speaker || qsTranslate("Tingmu", "当前句")) : root.emptyTitle
                 color:Theme.accent; font.family:Theme.font; font.pixelSize:11 }
             TButton { objectName:"correctCompanionSubtitle"; text:qsTranslate("Tingmu", "纠正此句"); quiet:true; implicitHeight:28
-                visible:root.track==="learning"; onClicked:correction.begin(root.cue.id) }
+                visible:root.track==="learning"; onClicked:backend.requestDialog("correction",root,{cueId:root.cue.id}) }
         }
         TextEdit {
             id:sourceText;objectName:"selectableCueText"
@@ -135,7 +134,7 @@ ScrollView {
                 objectName:"saveSentenceButton";text:root.sentenceSaved ? qsTranslate("Tingmu", "已收藏整句") : qsTranslate("Tingmu", "收藏整句")
                 checked:root.sentenceSaved;quiet:true;implicitHeight:28
                 property var pressedCue: null
-                function capture(){return {mediaPath:backend.state.mediaPath,cueId:root.cue.id,text:root.sentence,track:root.track}}
+                function capture(){return {mediaPath:backend.mediaState.mediaPath,cueId:root.cue.id,text:root.sentence,track:root.track}}
                 onPressed:{root.clearConfirmation();root.tokenFeedback=false;pressedCue=capture()}
                 onCanceled:pressedCue=null
                 onClicked:{backend.command("saveSentence",pressedCue || capture());pressedCue=null}

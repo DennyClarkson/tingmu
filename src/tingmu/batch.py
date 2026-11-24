@@ -1,7 +1,8 @@
 """Persistent, sequential video preparation queue with per-video checkpoints."""
 
+from contextlib import contextmanager
 from copy import deepcopy
-from dataclasses import asdict, fields
+from dataclasses import fields
 import hashlib
 import json
 from pathlib import Path
@@ -12,6 +13,7 @@ from .models import AppSettings, preparation_identity_settings
 from .diagnostics import redact_text
 from .media import MediaError
 from .pipeline import TRANSLATION_REVIEW_VERSION, find_subtitle, prepare_media
+from .preparation_stages import stage_code, stage_label
 from .providers import ProviderError
 from .storage import Store, atomic_json, canonical_path, media_fingerprint
 
@@ -42,6 +44,7 @@ def _failure_details(error, document):
     else:
         reason = "处理遇到异常，请查看开发者日志中的错误位置。"
     return {"progress": f"{stage}未完成，可重试", "error_message": reason + " 已完成步骤已保存，重试会继续处理。",
+            "stage_code": metadata.get("stage_code") or stage_code(stage),
             "completed_cues": count, "total_cues": len(document.cues) if document else 0}
 
 
@@ -53,8 +56,10 @@ def _apply_progress(job, details):
                 job[key] = details[key]
     if "plan" in details:
         job["plan"] = details["plan"]
-    if "stage" in details:
-        job.update(stage_name=details["stage"], activity="", stage_done=0, stage_total=0, unit="", batches=[])
+    if "stage" in details or "stage_code" in details:
+        code = details.get("stage_code") or stage_code(details.get("stage", ""))
+        job.update(stage_name=details.get("stage", stage_label(code)), stage_code=code,
+                   activity="", stage_done=0, stage_total=0, unit="", batches=[])
     if "activity" in details and details["activity"] != job.get("activity"):
         job.update(activity=details["activity"], stage_done=0, stage_total=0, unit="")
     if "total" in details and "done" in details:
@@ -88,6 +93,9 @@ class PreparationQueue:
         self.store = store
         self.path = store.data_dir / "preparation-queue.json"
         self._lock = threading.RLock()
+        self._subscribers = []
+        self._revision = 0
+        self._saved_payload = None
         self._pause = threading.Event()
         self._running = False
         saved = {}
@@ -113,8 +121,58 @@ class PreparationQueue:
                 _end_batches(job)
         self._save()
 
+    def subscribe(self, callback):
+        """Observe changes on their originating thread; callbacks must stay lightweight.
+
+        Return an idempotent release function. Observers run outside the queue lock
+        and can safely read, unsubscribe, or mutate the queue. One failing observer
+        cannot prevent persistence or delivery to the remaining observers.
+        """
+        if not callable(callback):
+            raise TypeError("Queue observer must be callable")
+        with self._lock:
+            if callback not in self._subscribers:
+                self._subscribers.append(callback)
+        return lambda: self.unsubscribe(callback)
+
+    def unsubscribe(self, callback):
+        with self._lock:
+            if callback in self._subscribers:
+                self._subscribers.remove(callback)
+
+    @contextmanager
+    def _mutation(self):
+        callbacks = ()
+        try:
+            with self._lock:
+                revision = self._revision
+                try:
+                    yield
+                finally:
+                    if self._revision != revision:
+                        callbacks = tuple(self._subscribers)
+        finally:
+            for callback in callbacks:
+                # An earlier observer may unsubscribe this one during delivery.
+                with self._lock:
+                    subscribed = callback in self._subscribers
+                if subscribed:
+                    try:
+                        callback()
+                    except Exception:
+                        # An observer owns its error reporting, never queue state.
+                        continue
+
     def _save(self):
+        # Timestamps alone do not constitute a visible queue change. Progress
+        # checkpoints retain run()'s 500 ms throttle and immediate stage updates.
+        signature = json.dumps([{key: value for key, value in job.items() if key != "updated_at"}
+                                for job in self._jobs], ensure_ascii=False, sort_keys=True)
+        if signature == self._saved_payload:
+            return
         atomic_json(self.path, {"version": 1, "model_scope": "global", "jobs": self._jobs})
+        self._saved_payload = signature
+        self._revision += 1
 
     def snapshot(self) -> list[dict]:
         with self._lock:
@@ -127,13 +185,13 @@ class PreparationQueue:
     def enqueue(self, paths: list[Path], settings: AppSettings,
                 subtitle_paths: dict[str, str] | None = None, *, automatic: bool = False) -> list[dict]:
         added = []
-        with self._lock:
+        with self._mutation():
             for path in paths:
                 media = canonical_path(path)
                 fingerprint = media_fingerprint(media)
                 if not fingerprint:
                     raise FileNotFoundError(f"视频不存在：{path}")
-                spec = asdict(settings)
+                spec = settings.to_dict()
                 subtitle = (subtitle_paths or {}).get(media)
                 agent_workflow = settings.preparation_workflow == "subtitle_agent"
                 if not subtitle and not agent_workflow:
@@ -180,8 +238,8 @@ class PreparationQueue:
     def enqueue_lessons(self, path: Path, settings: AppSettings) -> str:
         """Refresh one existing document without resetting lessons or invoking ASR."""
         media = canonical_path(path)
-        spec = asdict(settings)
-        with self._lock:
+        spec = settings.to_dict()
+        with self._mutation():
             document = self.store.load_document(media, settings.language)
             if not document or not document.cues:
                 raise ProviderError("此视频没有可复用的字幕，请先生成或导入字幕。")
@@ -206,14 +264,14 @@ class PreparationQueue:
 
     def pause_automatic(self):
         """Keep a deliberate pause distinct from an interrupted application shutdown."""
-        with self._lock:
+        with self._mutation():
             for job in self._jobs:
                 if job.get("origin") == "media-inbox" and job["status"] in ("running", "queued", "paused"):
                     job["auto_paused"] = True
             self._save()
 
     def resume_automatic(self):
-        with self._lock:
+        with self._mutation():
             paused = [job for job in self._jobs if job.get("auto_paused")]
             for job in paused:
                 job.pop("auto_paused")
@@ -221,7 +279,7 @@ class PreparationQueue:
                 self._save()
 
     def retry(self, job_id: str):
-        with self._lock:
+        with self._mutation():
             for job in self._jobs:
                 if job["id"] == job_id and job["status"] in ("failed", "paused", "cleared"):
                     if job.get("needs_teaching") and job["settings"].get("preparation_workflow") == "subtitle_agent":
@@ -240,14 +298,14 @@ class PreparationQueue:
                 self.retry(job["id"])
 
     def remove(self, job_id: str):
-        with self._lock:
+        with self._mutation():
             if any(j["id"] == job_id and j["status"] == "running" for j in self._jobs):
                 raise ValueError("请先暂停正在处理的视频")
             self._jobs = [j for j in self._jobs if j["id"] != job_id]
             self._save()
 
     def clear_completed(self):
-        with self._lock:
+        with self._mutation():
             self._jobs = [j for j in self._jobs if j["status"] != "completed"]
             self._save()
 
@@ -259,13 +317,13 @@ class PreparationQueue:
         wanted = set(ids)
         if not wanted:
             raise ValueError("请先选择队列中的视频")
-        with self._lock:
+        with self._mutation():
             if self._running:
                 raise ValueError("请先暂停队列，等待当前处理结束后清除材料")
             selected = [j for j in self._jobs if j["id"] in wanted]
             if len(selected) != len(wanted):
                 raise ValueError("所选任务已变化，请重新选择")
-            allowed = {f.name for f in fields(AppSettings)}
+            allowed = {f.name for f in fields(AppSettings) if not f.name.startswith("_")}
             identities = set()
             for job in selected:
                 previous = AppSettings(**{k: v for k, v in job["settings"].items() if k in allowed})
@@ -273,35 +331,18 @@ class PreparationQueue:
                 if identity not in identities:
                     self.store.reset_material(job["media_path"], previous.language, mode)
                     identities.add(identity)
-                # Retain the job's language identity; use today's model/ASR choices.
-                current = deepcopy(settings) if settings else previous
-                current.source_language, current.target_language, current.level = identity[1:]
-                current.preparation_workflow = previous.preparation_workflow
-                if mode == "teaching":
-                    for name in ("asr_backend", "asr_model", "device", "audio_track", "suppress_bgm",
-                                 "speaker_turns", "asr_endpoint", "external_asr_model", "asr_response_format",
-                                 "asr_key_env", "allow_audio_upload", "local_asr_endpoint", "local_asr_api_model",
-                                 "local_asr_key_env", "local_asr_response_format"):
-                        setattr(current, name, getattr(previous, name))
-                job.update(settings=asdict(current), status="queued" if requeue else "cleared",
-                           progress="等待重新生成" if requeue else "材料已清除", error="", error_message="",
-                           completed_cues=0, total_cues=0, updated_at=time.time())
-                for key in ("plan", "decision", "source_name", "reference_name", "evidence_counts", "evidence_notes",
-                            "plan_identity", "needs_teaching", "retry_text_settings", "stage_name", "activity",
-                            "stage_total", "stage_done", "unit", "batches"):
-                    job.pop(key, None)
-                job.pop("reuse_existing_transcript", None)
-                job["force_asr"] = mode == "all" and current.preparation_workflow == "classic"
-                job["teaching_only"] = mode == "teaching"
-                if job["force_asr"]:
-                    job["subtitle_path"] = None
+                from .material_reset import reset_job_material_state
+                reset = reset_job_material_state(job, mode, requeue, settings)
+                reset["updated_at"] = time.time()
+                job.clear()
+                job.update(reset)
             self._save()
             return len(selected)
 
     def run(self, progress=None, cancelled=None, on_error=None, *, job_ids=None,
             allow_model_downloads=None) -> list[dict]:
         selected = frozenset(job_ids) if job_ids is not None else None
-        with self._lock:
+        with self._mutation():
             if self._running:
                 raise RuntimeError("批量队列已在运行")
             self._running = True
@@ -313,15 +354,15 @@ class PreparationQueue:
 
         try:
             while not stopped():
-                with self._lock:
+                with self._mutation():
                     job = next((j for j in self._jobs if j["status"] in ("queued", "paused")
                                 and (selected is None or j["id"] in selected)), None)
                     if job is None:
                         break
                     job.update(status="running", error="", error_message="", progress="开始处理", updated_at=time.time(),
-                               plan=[], stage_name="", activity="", stage_total=0, stage_done=0, unit="", batches=[])
+                               plan=[], stage_name="", stage_code="", activity="", stage_total=0, stage_done=0, unit="", batches=[])
                     self._save()
-                allowed = {f.name for f in fields(AppSettings)}
+                allowed = {f.name for f in fields(AppSettings) if not f.name.startswith("_")}
                 spec = {**job["settings"], **job.get("retry_text_settings", {})}
                 settings = AppSettings(**{k: v for k, v in spec.items() if k in allowed})
                 active = self.store.load_settings()
@@ -336,10 +377,10 @@ class PreparationQueue:
                     nonlocal last_snapshot
                     now = time.monotonic()
                     details = getattr(message, "details", {})
-                    save = last_snapshot is None or now - last_snapshot >= 0.5 or "stage" in details
+                    save = last_snapshot is None or now - last_snapshot >= 0.5 or "stage" in details or "stage_code" in details
                     cached = (self.store.load_document(job["media_path"], settings.language)
                               if save and not details and not job.get("plan") else None)
-                    with self._lock:
+                    with self._mutation():
                         job.update(progress=str(message), updated_at=time.time())
                         _apply_progress(job, details)
                         if cached:
@@ -379,7 +420,7 @@ class PreparationQueue:
                     document = prepare_media(Path(job["media_path"]), settings, self.store,
                                              subtitle_path=Path(job["subtitle_path"]) if job["subtitle_path"] else None,
                                              progress=update, cancelled=stopped, **extra)
-                    with self._lock:
+                    with self._mutation():
                         local_only = document.metadata.get("lesson_status") == "local_only"
                         job.pop("needs_teaching", None)
                         if plan := document.metadata.get("subtitle_plan"):
@@ -394,9 +435,10 @@ class PreparationQueue:
                     details = _failure_details(exc, partial)
                     if partial and partial.metadata.get("lesson_status") == "needs_teaching":
                         details.update(needs_teaching=True, progress="等待配置逐句讲解模型")
-                        if job.get("stage_name") in ("字幕评估", "读取原字幕", "字幕识别"):
-                            details.update(stage_name="逐句讲解", activity="", stage_done=0, stage_total=0, unit="")
-                    with self._lock:
+                        if (job.get("stage_code") or stage_code(job.get("stage_name", ""))) in ("planning", "transcript"):
+                            details.update(stage_name="逐句讲解", stage_code="teaching",
+                                           activity="", stage_done=0, stage_total=0, unit="")
+                    with self._mutation():
                         job.update(details)
                         _end_batches(job)
                         job.update(status="paused" if stopped() else "failed",
@@ -411,5 +453,5 @@ class PreparationQueue:
                     report(f"{job['name']} · {details['progress']}：{details['error_message']}")
             return self.snapshot()
         finally:
-            with self._lock:
+            with self._mutation():
                 self._running = False

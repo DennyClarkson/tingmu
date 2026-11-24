@@ -16,7 +16,22 @@ AppDialog {
     property var captured: ({})
     property string messageId: ""
     property string localError: ""
-    readonly property var reply: messageId ? backend.messages.find(function(m){ return m.id === editor.messageId }) : null
+    property var reply: null
+    function refreshReply() {
+        if (!opened || !messageId) { reply = null; return }
+        var row = backend.messageModel.findById(messageId)
+        reply = row.id ? row : null
+    }
+    onMessageIdChanged: refreshReply()
+    onOpened: refreshReply()
+    onClosed: { messageId = ""; reply = null }
+    Connections {
+        target: editor.opened && editor.messageId ? backend.messageModel : null
+        function onDataChanged() { editor.refreshReply() }
+        function onRowsInserted() { editor.refreshReply() }
+        function onRowsRemoved() { editor.refreshReply() }
+        function onModelReset() { editor.refreshReply() }
+    }
     readonly property bool waiting: !!reply && ["pending", "streaming"].includes(reply.status)
     readonly property bool saved: !!reply && (reply.tool_events || []).some(function(e){
         return e.name === "revise_current_subtitle" && e.status === "success" && e.result && e.result.saved
@@ -89,7 +104,7 @@ AppDialog {
                 objectName: "submitSubtitleCorrection"
                 text: editor.messageId && !editor.waiting && !editor.saved ? qsTranslate("Tingmu", "重新复核并保存") : qsTranslate("Tingmu", "复核并保存")
                 primary: true
-                enabled: !editor.saved && !editor.waiting && !!guidance.text.trim() && !backend.state.chatBusy
+                enabled: !editor.saved && !editor.waiting && !!guidance.text.trim() && !backend.chatState.chatBusy
                 onClicked: {
                     var result = backend.submitSubtitleCorrection(editor.captured, guidance.text)
                     editor.localError = result.error || ""

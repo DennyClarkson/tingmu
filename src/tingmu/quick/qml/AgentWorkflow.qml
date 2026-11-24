@@ -23,9 +23,9 @@ ColumnLayout {
         objectName: "agentAttachSubtitle"
         Layout.fillWidth: true
         visible: backend.settings.preparation_workflow === "subtitle_agent"
-        enabled: !!backend.state.mediaPath
+        enabled: !!backend.mediaState.mediaPath
         text: qsTranslate("Tingmu", "为当前视频选字幕并入队…")
-        tip: backend.state.mediaName || qsTranslate("Tingmu", "先打开一个视频")
+        tip: backend.mediaState.mediaName || qsTranslate("Tingmu", "先打开一个视频")
         onClicked: backend.command("importStudySubtitle", {})
     }
 }

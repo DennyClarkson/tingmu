@@ -9,7 +9,10 @@ import math
 import time
 from pathlib import PureWindowsPath
 
-from .agent import AgentError, LearningAgent, _environment
+from . import agent as legacy_agent
+from .agent import AgentError, _environment
+from .llm_client import LlmClient
+from .llm_compat import LegacyTransportAdapter
 from .app_actions import ACTION_NAMES, ACTION_LABELS, ActionError, validate_arguments
 from .models import Cue, LanguagePair
 from .providers import RequestCancelled, safe_metadata, reasoning_callback
@@ -292,8 +295,8 @@ def _action_final_request(transport, body, *, on_delta=None, cancelled=None, on_
         "were unavailable: the supplied actual results are authoritative evidence of what ran. "
         "If no operation was requested, just answer the user's question normally."
     )
-    return (transport._stream_request(wire, on_delta=on_delta, cancelled=cancelled, **reasoning_options)
-            if wire.get("stream") else transport._request("/chat/completions", wire, **reasoning_options))
+    return (transport.stream_request(wire, on_delta=on_delta, cancelled=cancelled, **reasoning_options)
+            if wire.get("stream") else transport.request("/chat/completions", wire, **reasoning_options))
 
 
 def _json_action_request(transport, body, allowed, *, cancelled=None, on_reasoning=None):
@@ -314,8 +317,8 @@ def _json_action_request(transport, body, allowed, *, cancelled=None, on_reasoni
         if cancelled and cancelled():
             raise RequestCancelled("回答已停止。")
         try:
-            result = (transport._stream_request(wire, cancelled=cancelled, **reasoning_options)
-                      if wire.get("stream") else transport._request("/chat/completions", wire, **reasoning_options))
+            result = (transport.stream_request(wire, cancelled=cancelled, **reasoning_options)
+                      if wire.get("stream") else transport.request("/chat/completions", wire, **reasoning_options))
             break
         except AgentError as exc:
             if attempt or exc.status not in (400, 422) or exc.category in ("tool_schema", "reasoning_parameter"):
@@ -347,7 +350,9 @@ def _json_action_request(transport, body, allowed, *, cancelled=None, on_reasoni
 class CompanionAgent:
     def __init__(self, provider: str = "openai", model: str | None = None, *, profile=None, reasoning_effort="default"):
         configured = model or (_environment(("TINGMU_COMPANION_MODEL", "OPENAI_COMPANION_MODEL")) if provider == "openai" else "")
-        self._transport = LearningAgent(provider, configured or ("gpt-6-astra" if provider == "openai" else None), profile=profile)
+        self.client = LlmClient(provider, configured or ("gpt-6-astra" if provider == "openai" else None),
+                                profile=profile, config_resolver=legacy_agent._config)
+        self._transport = LegacyTransportAdapter(self.client)
         self.model = self._transport.model
         self.provider = self._transport.provider
         self.max_completion_tokens = profile.get("max_tokens", 2400) if profile else 2400
@@ -385,7 +390,7 @@ class CompanionAgent:
         reasoning_options = {"on_reasoning": forward_reasoning} if on_reasoning else {}
         app_context = _safe_context(context)
         from .providers import loopback_url
-        if app_context.get("cloud_text_enabled") is False and not loopback_url(self._transport._transport_config()["base_url"]):
+        if app_context.get("cloud_text_enabled") is False and not loopback_url(self._transport.transport_config()["base_url"]):
             raise AgentError("云端文本已关闭；请启用后再与学习伴侣对话。")
         prior, omitted = _bounded_history(history)
         language_name = {"zh-CN": "简体中文", "zh-TW": "繁體中文", "en": "English", "ja": "日本語"}.get(
@@ -469,8 +474,8 @@ class CompanionAgent:
                     if action_protocol:
                         result = _json_action_request(self._transport, body, allowed, cancelled=cancelled, **reasoning_options)
                     else:
-                        result = (self._transport._stream_request(body, on_delta=emit_delta, cancelled=cancelled, **reasoning_options)
-                                  if body["stream"] else self._transport._request("/chat/completions", body, **reasoning_options))
+                        result = (self._transport.stream_request(body, on_delta=emit_delta, cancelled=cancelled, **reasoning_options)
+                                  if body["stream"] else self._transport.request("/chat/completions", body, **reasoning_options))
                 except AgentError as exc:
                     if (exc.category == "tools_unsupported" and turn == 0 and body.get("tools")
                             and not emitted_this_turn and not action_protocol):

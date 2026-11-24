@@ -150,8 +150,7 @@ def preparation_block_reason(settings, paths):
     if not model_supports_language(settings.asr_model, settings.target_language):
         return (f"所选识别模型 {settings.asr_model} 无法识别 {settings.target_language}。"
                 "请添加与视频同名的字幕文件，或在工作区设置中选择支持该语言的模型或转写 API。")
-    from .workspace_models import model_status
-    status = model_status(settings.asr_model)
-    if status.startswith(("已检测到本地模型文件", "已就绪")):
+    from .workspace_models import model_readiness
+    if model_readiness(settings.asr_model).ready:
         return ""
     return f"等待安装本地识别模型 {settings.asr_model}；请在聊天中请求下载并确认，或在工作区设置中下载"

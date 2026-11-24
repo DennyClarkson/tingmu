@@ -1,6 +1,6 @@
 """Small serializable domain objects shared by UI, providers and storage."""
 
-from dataclasses import InitVar, asdict, dataclass, field, fields
+from dataclasses import asdict, dataclass, field, fields
 import math
 
 
@@ -11,7 +11,7 @@ DEFAULT_LLM_CONCURRENCY = 4
 def preparation_identity_settings(settings: dict) -> dict:
     """Scheduling changes can resume the same material and queue entry."""
     return {key: value for key, value in settings.items()
-            if key not in ("llm_high_concurrency", "llm_max_concurrency")
+            if not key.startswith("_") and key not in ("llm_high_concurrency", "llm_max_concurrency")
             and not (key == "preparation_workflow" and value == "classic")}
 
 
@@ -127,10 +127,12 @@ class AppSettings:
     llm_max_concurrency: int = DEFAULT_LLM_CONCURRENCY
     preparation_workflow: str = "classic"
 
-    _loaded_roles: InitVar[dict | None] = None
+    # Runtime edit baseline: replace() must carry it along with the role values.
+    # Explicit serialization below keeps it out of queue snapshots and settings.
+    _loaded_roles: dict = field(default_factory=dict, repr=False, compare=False)
 
-    def __post_init__(self, _loaded_roles):
-        self._loaded_roles = dict(_loaded_roles or {})
+    def __post_init__(self):
+        self._loaded_roles = dict(self._loaded_roles or {})
         if self.preparation_workflow not in ("classic", "subtitle_agent"):
             self.preparation_workflow = "classic"
         if not isinstance(self.llm_high_concurrency, bool):
@@ -140,6 +142,10 @@ class AppSettings:
         except (TypeError, ValueError, OverflowError):
             limit = DEFAULT_LLM_CONCURRENCY
         self.llm_max_concurrency = max(1, min(MAX_LLM_CONCURRENCY, limit))
+
+    def to_dict(self) -> dict:
+        """Public settings and frozen requests never include runtime bookkeeping."""
+        return {key: value for key, value in asdict(self).items() if not key.startswith("_")}
 
     @property
     def llm_workers(self) -> int:

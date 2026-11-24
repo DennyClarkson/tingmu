@@ -6,19 +6,46 @@ Item {
     id: root
     property var workspace
     property var drafts: ({})
+    property var dirtyDrafts: ({})
     property string draftKey: ""
+    Timer { id: draftTimer; interval: 350; onTriggered: root.flushDrafts() }
+    function flushDrafts() {
+        draftTimer.stop()
+        var remaining = Object.assign({}, dirtyDrafts)
+        var success = true
+        for (var key in dirtyDrafts) {
+            if (backend.writeDraft("noteDrafts", key, drafts[key])) delete remaining[key]
+            else success = false
+        }
+        dirtyDrafts = remaining
+        return success
+    }
+    function editDraft(text) {
+        if (!draftKey) return
+        var copy = Object.assign({}, drafts); copy[draftKey] = text; drafts = copy
+        var dirty = Object.assign({}, dirtyDrafts); dirty[draftKey] = true; dirtyDrafts = dirty
+        draftTimer.restart()
+    }
+    function collectNote() {
+        if (!flushDrafts()) return
+        var key = draftKey
+        if (!backend.saveCueNote(backend.activeCue.id, note.text)) return
+        if (!backend.deleteDraft("noteDrafts", key)) return
+        var copy = Object.assign({}, drafts); delete copy[key]; drafts = copy
+        note.clear()
+    }
     function changeCue() {
+        flushDrafts()
         const cueId = backend.activeCue.id || ""
-        draftKey = backend.state.mediaPath + "|" + backend.settings.source_language + "|" + backend.settings.target_language + "|" + cueId
+        draftKey = backend.mediaState.mediaPath + "|" + backend.settings.source_language + "|" + backend.settings.target_language + "|" + cueId
         note.text = drafts[draftKey] !== undefined ? drafts[draftKey] : backend.cueNote(cueId)
     }
-    Component.onCompleted: { drafts=workspace ? workspace.preference("noteDrafts") || ({}) : ({});changeCue() }
+    Component.onCompleted: { drafts=backend.loadDrafts("noteDrafts");changeCue() }
     Connections {
         target:backend
         function onActiveCueChanged(){root.changeCue()}
         function onEntriesChanged(){root.changeCue()}
     }
-    TeachingPreferences{id:teachingPrefs}
     property int page: 0
     property bool showReading: true
     property bool showTranslation: true
@@ -64,8 +91,8 @@ Item {
         }
         RowLayout {
             Layout.fillWidth: true; visible: root.page===0
-            Field { id: note; Layout.fillWidth: true; placeholderText: qsTranslate("Tingmu", "记下这一句…"); enabled: !!backend.activeCue.id; onAccepted: saveNote.clicked();onTextEdited:{var copy=Object.assign({},root.drafts);copy[root.draftKey]=text;root.drafts=copy;if(root.workspace)root.workspace.savePreference("noteDrafts",copy)} }
-            TButton { id: saveNote; text: qsTranslate("Tingmu", "收藏"); enabled: !!backend.activeCue.id; onClicked: { backend.command("saveNote",{cueId:backend.activeCue.id,note:note.text}); note.clear();var copy=Object.assign({},root.drafts);delete copy[root.draftKey];root.drafts=copy;if(root.workspace)root.workspace.savePreference("noteDrafts",copy) } }
+            Field { id: note; objectName:"cueNoteDraftInput"; Layout.fillWidth: true; placeholderText: qsTranslate("Tingmu", "记下这一句…"); enabled: !!backend.activeCue.id; onAccepted: saveNote.clicked();onTextEdited:root.editDraft(text) }
+            TButton { id: saveNote; objectName:"saveCueNoteButton"; text: qsTranslate("Tingmu", "收藏"); enabled: !!backend.activeCue.id; onClicked: root.collectNote() }
         }
         RowLayout { visible: root.page===1; TButton { text: qsTranslate("Tingmu", "导出笔记"); onClicked: backend.command("exportNotes",{}) } TButton { text: qsTranslate("Tingmu", "学习复盘"); enabled: backend.entryCount>0; onClicked: backend.command("summarizeNotes",{}) } }
     }
@@ -74,7 +101,7 @@ Item {
         contentItem: ColumnLayout {
             spacing: 10
             Text { textFormat:Text.PlainText; text: qsTranslate("Tingmu", "学习伴侣"); color: Theme.text; font.family: Theme.font; font.pixelSize: 16 }
-            TButton{text:qsTranslate("Tingmu", "我的讲解偏好");Layout.fillWidth:true;onClicked:teachingPrefs.open()}
+            TButton{text:qsTranslate("Tingmu", "我的讲解偏好");Layout.fillWidth:true;onClicked:backend.requestDialog("teaching",root,{})}
             Toggle { text: qsTranslate("Tingmu", "显示读音"); checked: root.showReading; onToggled: root.showReading=checked }
             Toggle { text: qsTranslate("Tingmu", "显示释义"); checked: root.showTranslation; onToggled: root.showTranslation=checked }
             Toggle { text: qsTranslate("Tingmu", "显示讲解"); checked: root.showExplanation; onToggled: root.showExplanation=checked }

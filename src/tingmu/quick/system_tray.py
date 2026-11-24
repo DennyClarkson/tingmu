@@ -133,6 +133,8 @@ class SystemTray(QObject):
     def quitApplication(self):
         self._exiting = True
         if self._window is not None and isValid(self._window):
-            self._window.close()
+            if not self._window.close():
+                self._exiting = False
+                return
         self._tray.hide()
         self._app.quit()

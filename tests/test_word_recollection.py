@@ -121,6 +121,7 @@ def test_old_spelling_variants_share_sources_without_losing_case_or_accents(tmp_
     # Simulate a pre-index database whose only spelling is in an archived source.
     with store._connection() as db:
         db.execute("DROP TABLE word_forms")
+        db.execute("PRAGMA user_version=0")  # Model the pre-versioned schema, not damaged current schema.
     book = NotebookManager(Store(tmp_path))
     assert book.word_collection_states("sample.mkv", second.id, ["nice", "Nice", "NICE"], pair) == {
         "nice": "organized", "Nice": "organized", "NICE": "unsaved",

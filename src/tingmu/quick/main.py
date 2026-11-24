@@ -3,7 +3,7 @@
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QTimer, QUrl
+from PySide6.QtCore import QMetaObject, QTimer, Qt, QUrl, Q_RETURN_ARG
 from PySide6.QtGui import QFont, QFontDatabase
 from PySide6.QtQml import QQmlApplicationEngine
 from PySide6.QtQuickControls2 import QQuickStyle
@@ -52,11 +52,13 @@ def create_qml_app(data_dir=None, initial_path=None, *, show_setup=False):
     return _open_session(application, catalog, workspace_id, bool(show_setup or notice), initial_path, notice)
 
 
-def _open_session(application, catalog, workspace_id, show_setup, initial_path, notice=""):
+def _open_session(application, catalog, workspace_id, show_setup, initial_path, notice="", *, switch_summary=""):
     directory = catalog.directory(workspace_id)
     ensure_folders(directory)
     store = Store(directory)
     bridge = Bridge(store)
+    if switch_summary:
+        bridge.chat.create_setup_summary(switch_summary)
     engine = QQmlApplicationEngine()
     language = application._tingmu_language
     engine.rootContext().setContextProperty("interfaceLanguage", language)
@@ -64,8 +66,14 @@ def _open_session(application, catalog, workspace_id, show_setup, initial_path, 
     def switch(new_id, pending_path, configure_models):
         # Build the replacement before closing the original session. QML drafts, video
         # position and queued callbacks all remain attached to their original Bridge.
+        window = engine.rootObjects()[0]
+        if not QMetaObject.invokeMethod(window, "flushAllDrafts", Qt.ConnectionType.DirectConnection,
+                                        Q_RETURN_ARG("QVariant")):
+            raise ValueError("当前草稿未能保存，已取消切换工作区；请重试保存后再切换。")
+        summary = controller.switch_summary
         _, new_bridge, new_engine = _open_session(application, catalog, new_id,
-                                                  "models" if configure_models else False, pending_path)
+                                                  "models" if configure_models else False, pending_path,
+                                                  switch_summary=summary)
         try:
             catalog.select(new_id)
         except Exception:
@@ -76,12 +84,7 @@ def _open_session(application, catalog, workspace_id, show_setup, initial_path, 
             application._tingmu_quick = (bridge, engine)
             application._tingmu_tray.bind(engine.rootObjects()[0], catalog.root)
             raise
-        summary = getattr(bridge, "_workspace_switch_summary", "")
-        if summary:
-            from .features import message
-            session = new_bridge.conversations.create(new_bridge._settings.language, title="工作区准备")
-            new_bridge.conversations.save(session["id"], [message("assistant", summary, model="听幕本地向导")])
-            new_bridge._select_chat(session["id"])
+        controller.switch_summary = ""
         engine.rootObjects()[0].setProperty("closingSession", True)
         engine.rootObjects()[0].close()
         bridge.shutdown()
@@ -120,7 +123,7 @@ def run_app(initial_path=None, data_dir=None):
     def exception_hook(kind, error, trace):
         current = application._tingmu_quick[0]
         current.log.exception(error)
-        current._error(f"内部错误：{kind.__name__}；请在开发者模式中查看日志")
+        current.report_error(f"内部错误：{kind.__name__}；请在开发者模式中查看日志")
     sys.excepthook = exception_hook
     try:
         return application.exec()

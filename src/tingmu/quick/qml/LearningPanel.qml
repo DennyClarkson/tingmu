@@ -19,7 +19,6 @@ Item {
     property var selectedNote:(book.notes || []).find(function(note){return note.id===root.selectedNoteId}) || ({})
     property var collections:book.collections || book.entries || []
     readonly property var noteSources:book.note_sources || []
-    TeachingPreferences{id:teachingPrefs}
     property bool showAnswer:false
     property var cards:book.practice || []
     property var card:cards.length ? cards[0] : ({})
@@ -27,12 +26,22 @@ Item {
     property var videos:{var result=[{path:"",label:"所有视频"}];collections.concat(noteSources).forEach(function(e){if(!result.some(function(v){return v.path===e.media_path}))result.push({path:e.media_path,label:(e.media_path || "").split(/[\\/]/).pop()})});return result}
     property var drafts:({})
     property string pendingAction:""
-    property bool draftsReady:false
-    Component.onCompleted:{drafts=workspace ? workspace.preference("notebookDrafts") || ({}) : ({});draftsReady=true}
-    onDraftsChanged:if(draftsReady && workspace)workspace.savePreference("notebookDrafts",drafts)
+    Component.onCompleted:{drafts=backend.loadDrafts("notebookDrafts")}
     Timer{id:draftTimer;interval:600;onTriggered:root.flushDrafts()}
-    function cacheDraft(){if(editing && editLanguage){var copy=Object.assign({},drafts);if(dirty)copy[editLanguage]={text:editor.text,revision:editRevision};else delete copy[editLanguage];drafts=copy}}
-    function flushDrafts(){draftTimer.stop();cacheDraft();if(workspace){workspace.savePreference("notebookDrafts",drafts);workspace.saveWorkspace()}}
+    function removeDraft(language){
+        if(!language)return true
+        if(!backend.deleteDraft("notebookDrafts",language))return false
+        var copy=Object.assign({},drafts);delete copy[language];drafts=copy
+        return true
+    }
+    function cacheDraft(){
+        if(!editing || !editLanguage)return true
+        if(!dirty)return removeDraft(editLanguage)
+        var value={text:editor.text,revision:editRevision}
+        var copy=Object.assign({},drafts);copy[editLanguage]=value;drafts=copy
+        return backend.writeDraft("notebookDrafts",editLanguage,value)
+    }
+    function flushDrafts(){draftTimer.stop();return cacheDraft()}
     function startEdit(){activeTab="notes";selectedNoteId="";var d=drafts[book.language];editor.text=d ? d.text : book.markdown || "";editRevision=d ? d.revision : book.revision || "";editLanguage=book.language || "";editing=true;dirty=editor.text!==(book.markdown || "")}
     function selectLanguage(language){cacheDraft();editing=false;dirty=false;topic="";videoFilter="";selectedNoteId="";backend.command("selectNotebook",{language:language})}
     function previewBlocks(){var blocks=root.selectedNoteId ? root.selectedNote.blocks || [] : root.book.blocks || [];if(!root.selectedNoteId || !blocks.length || blocks[0].kind!=="markdown")return blocks;var text=blocks[0].text || "";var heading=text.match(/^#{1,6} +([^\n]+)\n+/);if(!heading || heading[1].trim()!==root.selectedNote.title)return blocks;var copy=blocks.slice();copy[0]=Object.assign({},blocks[0],{text:text.slice(heading[0].length)});return copy}
@@ -40,7 +49,7 @@ Item {
     function fileAction(name){if(dirty){pendingAction=name;fileDialog.open()}else backend.command(name,{})}
     onBookChanged:{
         if(editing && book.language!==editLanguage){cacheDraft();editing=false;dirty=false}
-        if(editing && book.language===editLanguage && book.markdown===editor.text){dirty=false;editRevision=book.revision || "";var copy=Object.assign({},drafts);delete copy[editLanguage];drafts=copy}
+        if(editing && book.language===editLanguage && book.markdown===editor.text){dirty=false;editRevision=book.revision || "";removeDraft(editLanguage)}
         showAnswer=false
     }
     RowLayout{
@@ -49,7 +58,7 @@ Item {
         TButton{objectName:"notesTab";text:qsTranslate("Tingmu", "笔记");checked:root.activeTab==="notes";quiet:true;onClicked:root.activeTab="notes"}
         TButton{objectName:"reviewTab";text:qsTranslate("Tingmu", "复习");checked:root.activeTab==="review";quiet:true;onClicked:{root.activeTab="review";backend.command("practiceNotebook",{})}}
         Item{Layout.fillWidth:true}
-        TButton{objectName:"learningTeachingPreferencesButton";text:qsTranslate("Tingmu", "我的讲解偏好");quiet:true;onClicked:teachingPrefs.open()}
+        TButton{objectName:"learningTeachingPreferencesButton";text:qsTranslate("Tingmu", "我的讲解偏好");quiet:true;onClicked:backend.requestDialog("teaching",root,{})}
     }
     RowLayout {
         anchors.fill:parent;anchors.margins:20;anchors.topMargin:72;spacing:20
@@ -84,7 +93,7 @@ Item {
                 Layout.fillWidth:true
                 Text{Layout.fillWidth:true;text:root.practiceMode ? qsTranslate("Tingmu", "把表达变成记忆") : root.selectedNote.title || qsTranslate("Tingmu", "学习笔记");color:Theme.text;font.family:Theme.serif;font.pixelSize:25;elide:Text.ElideRight}
                 TButton{text:root.editing ? qsTranslate("Tingmu", "预览") : root.drafts[root.book.language] ? qsTranslate("Tingmu", "恢复草稿") : root.selectedNoteId ? qsTranslate("Tingmu", "编辑整本") : qsTranslate("Tingmu", "编辑");visible:!root.practiceMode;onClicked:{if(root.editing){if(root.dirty){discardDialog.open()}else root.editing=false}else root.startEdit()}}
-                TButton{objectName:"saveNotebookButton";text:root.dirty ? qsTranslate("Tingmu", "保存修改") : qsTranslate("Tingmu", "已保存");visible:root.editing && !root.practiceMode;enabled:root.dirty && !backend.state.learningBusy;primary:true;onClicked:backend.command("saveNotebook",{language:root.editLanguage,markdown:editor.text,revision:root.editRevision})}
+                TButton{objectName:"saveNotebookButton";text:root.dirty ? qsTranslate("Tingmu", "保存修改") : qsTranslate("Tingmu", "已保存");visible:root.editing && !root.practiceMode;enabled:root.dirty && !backend.learningState.learningBusy;primary:true;onClicked:backend.command("saveNotebook",{language:root.editLanguage,markdown:editor.text,revision:root.editRevision})}
                 TButton{text:qsTranslate("Tingmu", "从收藏整理");visible:!root.practiceMode;onClicked:root.activeTab="collections"}
             }
             Text{Layout.fillWidth:true;visible:root.editing && !root.practiceMode;text:qsTranslate("Tingmu", "Markdown 编辑 · 手写内容会保留；只有显式整理的收藏才会加入笔记。");color:Theme.muted;font.family:Theme.font;font.pixelSize:11;wrapMode:Text.Wrap}
@@ -126,7 +135,7 @@ Item {
                     TButton{text:qsTranslate("Tingmu", "回到视频原句");quiet:true;visible:root.cards.length>0;onClicked:{backend.command("openLink",{url:root.card.source_url || "tingmu://entry/"+root.card.id});if(root.workspace)root.workspace.changeView("watch")}}
                 }
             }
-            Text{Layout.fillWidth:true;visible:!!backend.state.error || !!backend.state.learningBusy;text:qsTranslate("TingmuStatus", backend.state.error || "") || qsTranslate("Tingmu", "正在整理现有收藏，完成后会更新笔记…");color:backend.state.error ? Theme.error : Theme.muted;font.family:Theme.font;font.pixelSize:12;wrapMode:Text.Wrap}
+            Text{Layout.fillWidth:true;visible:!!backend.learningState.error || !!backend.learningState.learningBusy;text:qsTranslate("TingmuStatus", backend.learningState.error || "") || qsTranslate("Tingmu", "正在整理现有收藏，完成后会更新笔记…");color:backend.learningState.error ? Theme.error : Theme.muted;font.family:Theme.font;font.pixelSize:12;wrapMode:Text.Wrap}
         }
         ColumnLayout {
             visible:root.activeTab==="notes" && root.width>=1050;Layout.preferredWidth:root.width<1200 ? 230 : 290;Layout.maximumWidth:root.width<1200 ? 230 : 290;Layout.minimumWidth:210;Layout.fillHeight:true;spacing:12
@@ -160,5 +169,5 @@ Item {
     AppDialog{width:380;id:fileDialog;title:qsTranslate("Tingmu", "当前有未保存的修改");anchors.centerIn:parent;modal:true;standardButtons:Dialog.Cancel
         contentItem:ColumnLayout{spacing:14;Text{Layout.fillWidth:true;text:qsTranslate("Tingmu", "打开或导出的文件只包含已保存内容。请先保存修改，或继续使用上次保存的版本。");color:Theme.text;font.family:Theme.font;wrapMode:Text.Wrap}TButton{text:qsTranslate("Tingmu", "继续使用已保存版本");onClicked:{fileDialog.close();backend.command(root.pendingAction,{})}}}
     }
-    AppDialog{width:380;id:discardDialog;title:qsTranslate("Tingmu", "保留当前草稿？");anchors.centerIn:parent;modal:true;standardButtons:Dialog.Discard | Dialog.Cancel;background:Rectangle{color:Theme.panel;border.color:Theme.line;radius:8}contentItem:Text{text:qsTranslate("Tingmu", "当前修改尚未保存。取消返回编辑，或放弃修改继续。");color:Theme.text;font.family:Theme.font}onDiscarded:{root.dirty=false;root.editing=false;var copy=Object.assign({},root.drafts);delete copy[root.editLanguage];root.drafts=copy}}
+    AppDialog{width:380;id:discardDialog;title:qsTranslate("Tingmu", "保留当前草稿？");anchors.centerIn:parent;modal:true;standardButtons:Dialog.Discard | Dialog.Cancel;background:Rectangle{color:Theme.panel;border.color:Theme.line;radius:8}contentItem:Text{text:qsTranslate("Tingmu", "当前修改尚未保存。取消返回编辑，或放弃修改继续。");color:Theme.text;font.family:Theme.font}onDiscarded:{root.dirty=false;root.editing=false;root.removeDraft(root.editLanguage)}}
 }

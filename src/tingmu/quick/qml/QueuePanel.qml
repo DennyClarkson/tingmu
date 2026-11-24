@@ -6,33 +6,41 @@ Item {
     id:root
     property var selectedIds:[]
     property string resetMode:"all"
-    readonly property bool hasPending:backend.jobs.some(function(job){return job.status==="queued" || job.status==="paused"})
-    readonly property int failedCount:backend.jobs.filter(function(job){return job.status==="failed"}).length
+    readonly property bool hasPending:!!backend.queueState.hasPending
+    readonly property int failedCount:backend.queueState.failedCount || 0
     function selected(id){return selectedIds.indexOf(id)>=0}
     function toggle(id){var next=selectedIds.slice();var i=next.indexOf(id);if(i>=0)next.splice(i,1);else next.push(id);selectedIds=next}
     function confirmReset(mode){resetMode=mode;resetConfirm.open()}
-    ModelManager{id:models}
     function openSettings(){settingsPopup.open()}
+    function selectAll() {
+        if (selectedIds.length) { selectedIds = []; return }
+        var ids = []
+        for (var i = 0; i < backend.jobModel.count; i++) {
+            var job = backend.jobModel.get(i)
+            if (job.status !== "running") ids.push(job.id)
+        }
+        selectedIds = ids
+    }
     ColumnLayout {
         anchors.fill:parent; anchors.margins:12; spacing:10
         AgentWorkflow {}
         Flow {
             Layout.fillWidth:true;spacing:6
-            TButton { objectName:"queueStartButton";text:backend.state.queueRunning ? qsTranslate("Tingmu", "暂停") : !root.hasPending && root.failedCount>0 ? qsTranslate("Tingmu", "重试失败") : qsTranslate("Tingmu", "开始队列"); primary:!backend.state.queueRunning; enabled:!!backend.state.queueRunning || root.hasPending || root.failedCount>0; onClicked:backend.command(backend.state.queueRunning ? "pauseQueue" : "startQueue",{}) }
-            TButton { objectName:"queueClearCompletedButton";text:qsTranslate("Tingmu", "清除已完成"); quiet:true;enabled:!backend.state.queueRunning; onClicked:backend.command("clearCompleted",{}) }
+            TButton { objectName:"queueStartButton";text:backend.queueState.queueRunning ? qsTranslate("Tingmu", "暂停") : !root.hasPending && root.failedCount>0 ? qsTranslate("Tingmu", "重试失败") : qsTranslate("Tingmu", "开始队列"); primary:!backend.queueState.queueRunning; enabled:!!backend.queueState.queueRunning || root.hasPending || root.failedCount>0; onClicked:backend.command(backend.queueState.queueRunning ? "pauseQueue" : "startQueue",{}) }
+            TButton { objectName:"queueClearCompletedButton";text:qsTranslate("Tingmu", "清除已完成"); quiet:true;enabled:!backend.queueState.queueRunning; onClicked:backend.command("clearCompleted",{}) }
         }
         Flow {
             Layout.fillWidth:true;spacing:6
-            TButton{text:root.selectedIds.length ? qsTranslate("Tingmu", "取消选择") : qsTranslate("Tingmu", "全选");quiet:true;implicitHeight:28;onClicked:root.selectedIds=root.selectedIds.length ? [] : backend.jobs.filter(function(j){return j.status!=="running"}).map(function(j){return j.id})}
-            TButton{objectName:"resetAllJobsButton";text:qsTranslate("Tingmu", "清除识别与讲解");enabled:root.selectedIds.length>0 && !backend.state.queueRunning;implicitHeight:28;onClicked:root.confirmReset("all")}
-            TButton{objectName:"resetTeachingJobsButton";text:qsTranslate("Tingmu", "仅重做讲解");enabled:root.selectedIds.length>0 && !backend.state.queueRunning;implicitHeight:28;onClicked:root.confirmReset("teaching")}
+            TButton{text:root.selectedIds.length ? qsTranslate("Tingmu", "取消选择") : qsTranslate("Tingmu", "全选");quiet:true;implicitHeight:28;onClicked:root.selectAll()}
+            TButton{objectName:"resetAllJobsButton";text:qsTranslate("Tingmu", "清除识别与讲解");enabled:root.selectedIds.length>0 && !backend.queueState.queueRunning;implicitHeight:28;onClicked:root.confirmReset("all")}
+            TButton{objectName:"resetTeachingJobsButton";text:qsTranslate("Tingmu", "仅重做讲解");enabled:root.selectedIds.length>0 && !backend.queueState.queueRunning;implicitHeight:28;onClicked:root.confirmReset("teaching")}
         }
         ListView {
             id:jobs; objectName:"queueList"
-            Layout.fillWidth:true; Layout.fillHeight:true; clip:true; spacing:8; model:backend.jobs
+            Layout.fillWidth:true; Layout.fillHeight:true; clip:true; spacing:8; model:backend.jobModel
             ScrollBar.vertical:ScrollBar{}
             delegate:Rectangle {
-                id: jobCard
+                id: jobCard; objectName: "queueJob:" + modelData.id
                 required property var modelData
                 readonly property bool running: modelData.status === "running"
                 property bool evidenceOpen: false
@@ -51,7 +59,7 @@ Item {
                             color: Theme.muted; font.family: Theme.font; font.pixelSize: 10
                         }
                         Text { textFormat:Text.PlainText; Layout.fillWidth:true; text:modelData.name; color:Theme.text; font.family:Theme.font; font.pixelSize:12; elide:Text.ElideMiddle }
-                        TButton { objectName:"queueRemoveJobButton";iconSource:"close"; quiet:true; implicitWidth:24; implicitHeight:24; enabled:!backend.state.queueRunning && modelData.status!=="running"; tip:qsTranslate("Tingmu", "移出队列"); onClicked:backend.command("removeJob",{id:modelData.id}) }
+                        TButton { objectName:"queueRemoveJobButton";iconSource:"close"; quiet:true; implicitWidth:24; implicitHeight:24; enabled:!backend.queueState.queueRunning && modelData.status!=="running"; tip:qsTranslate("Tingmu", "移出队列"); onClicked:backend.command("removeJob",{id:modelData.id}) }
                     }
                     Text {
                         visible: !!modelData.decision
@@ -107,7 +115,7 @@ Item {
                         Text { textFormat:Text.PlainText; text:S.status(modelData.status); color:modelData.status==="completed" ? Theme.accent : modelData.status==="failed" ? Theme.error : Theme.muted; font.family:Theme.font; font.pixelSize:10 }
                         Text { objectName:"queueJobMessage";textFormat:Text.PlainText; Layout.fillWidth:true; text:qsTranslate("TingmuStatus", modelData.message || ""); color:Theme.muted; font.family:Theme.font; font.pixelSize:11;wrapMode:modelData.status==="failed" ? Text.Wrap : Text.NoWrap; elide:modelData.status==="failed" ? Text.ElideNone : Text.ElideRight }
                     }
-                    TButton{objectName:"requeueJobButton";text:qsTranslate("Tingmu", "重新排队");iconSource:"repeat";quiet:true;implicitHeight:26;visible:modelData.status==="cleared" || modelData.status==="paused";enabled:!backend.state.queueRunning;onClicked:backend.command("retryJob",{id:modelData.id})}
+                    TButton{objectName:"requeueJobButton";text:qsTranslate("Tingmu", "重新排队");iconSource:"repeat";quiet:true;implicitHeight:26;visible:modelData.status==="cleared" || modelData.status==="paused";enabled:!backend.queueState.queueRunning;onClicked:backend.command("retryJob",{id:modelData.id})}
                     ProgressBar {
                         objectName: "queueStageProgressBar"; Layout.fillWidth: true
                         value: modelData.progress || 0
@@ -143,7 +151,7 @@ Item {
                             text: qsTranslate("Tingmu", "配置逐句讲解模型…")
                             onClicked: backend.command("openLessonSettings", {})
                         }
-                        TButton { objectName:"queueRetryJobButton";text:qsTranslate("Tingmu", "重试");iconSource:"repeat";enabled:!backend.state.queueRunning;implicitHeight:30;tip:qsTranslate("Tingmu", "继续处理这个视频，已保存的步骤会复用");onClicked:backend.command("retryJob",{id:modelData.id}) }
+                        TButton { objectName:"queueRetryJobButton";text:qsTranslate("Tingmu", "重试");iconSource:"repeat";enabled:!backend.queueState.queueRunning;implicitHeight:30;tip:qsTranslate("Tingmu", "继续处理这个视频，已保存的步骤会复用");onClicked:backend.command("retryJob",{id:modelData.id}) }
                     }
                 }
             }
@@ -164,7 +172,7 @@ Item {
                 SpeechSettings { Layout.fillWidth:true }
                 Text { textFormat:Text.PlainText; text:qsTranslate("Tingmu", "处理音轨（从 0 开始）"); color:Theme.muted; font.family:Theme.font; font.pixelSize:11 }
                 Field { Layout.fillWidth:true; text:String(backend.settings.audio_track || 0); validator:IntValidator{bottom:0;top:20} onEditingFinished:backend.setting("audio_track",Number(text)) }
-                TButton{text:qsTranslate("Tingmu", "管理全局模型与任务分配");Layout.fillWidth:true;onClicked:models.open()}
+                TButton{text:qsTranslate("Tingmu", "管理全局模型与任务分配");Layout.fillWidth:true;onClicked:backend.requestDialog("models",root,{})}
                 Toggle { text:qsTranslate("Tingmu", "全文文本复核"); checked:backend.settings.review_enabled; onToggled:backend.setting("review_enabled",checked) }
                 Field { Layout.fillWidth:true; visible:backend.settings.review_enabled && !backend.settings.review_profile_id; text:backend.settings.review_model || ""; placeholderText:qsTranslate("Tingmu", "全局默认复核模型 ID"); onEditingFinished:backend.setting("review_model",text) }
                 Text { textFormat:Text.PlainText; visible:!backend.settings.annotation_profile_id; text:qsTranslate("Tingmu", "全局默认批量讲解"); color:Theme.muted; font.family:Theme.font; font.pixelSize:11 }
@@ -185,7 +193,7 @@ Item {
             Toggle{id:requeue;objectName:"requeueAfterReset";text:qsTranslate("Tingmu", "清除后重新加入队列");checked:true}
             RowLayout{Layout.alignment:Qt.AlignRight
                 TButton{text:qsTranslate("Tingmu", "取消");quiet:true;onClicked:resetConfirm.close()}
-                TButton{objectName:"confirmResetJobsButton";text:requeue.checked ? qsTranslate("Tingmu", "清除并重新排队") : qsTranslate("Tingmu", "确认清除");primary:true;enabled:!backend.state.queueRunning;onClicked:{backend.command("resetJobs",{ids:root.selectedIds,mode:root.resetMode,requeue:requeue.checked});root.selectedIds=[];resetConfirm.close()}}
+                TButton{objectName:"confirmResetJobsButton";text:requeue.checked ? qsTranslate("Tingmu", "清除并重新排队") : qsTranslate("Tingmu", "确认清除");primary:true;enabled:!backend.queueState.queueRunning;onClicked:{backend.command("resetJobs",{ids:root.selectedIds,mode:root.resetMode,requeue:requeue.checked});root.selectedIds=[];resetConfirm.close()}}
             }
         }
     }

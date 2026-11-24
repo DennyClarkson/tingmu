@@ -182,9 +182,10 @@ def migrate_portable_paths(store):
                 raise ValueError(f"便携迁移发现重复学习材料，原文件与备份均保留：{backup}")
             writes[target] = changed
         # First validate every SQL uniqueness constraint. No JSON is modified if this fails.
-        with closing(sqlite3.connect(store.db_path, timeout=25)) as db:
-            db.execute("BEGIN IMMEDIATE")
+        with store._connection(immediate=True) as db:
             try:
+                from .drafts import remap_draft_media
+                remap_draft_media(db, lambda path: _remap(path, old, root))
                 tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
                 for table in ("entries", "positions", "conversations", "chat_sessions", "chat_legacy_migrations"):
                     if table not in tables:
@@ -224,14 +225,11 @@ def migrate_portable_paths(store):
                     atomic_json(target, value)
                 for target, document in renders.items():
                     store._render_srt(document, target)
-                db.commit()
             except sqlite3.IntegrityError as error:
-                db.rollback()
                 raise ValueError(f"便携迁移发现学习记录冲突，数据库与备份均保留：{backup}") from error
             except Exception:
                 # Existing source document files are retained until completion. Atomic JSON
                 # replacements + the old manifest make a retry idempotent after interruption.
-                db.rollback()
                 raise
         # The OS lock spans the SQL commit and manifest update, serializing app startups.
         atomic_json(manifest, {"version": 1, "root": str(root),

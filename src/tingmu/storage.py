@@ -1,34 +1,23 @@
 """Thread-safe SQLite study journal and atomic, human-readable document cache."""
 
 from contextlib import contextmanager
-from dataclasses import asdict, fields, replace
+from dataclasses import asdict, fields
 from datetime import datetime, timezone
 import csv
+from functools import cached_property
 import hashlib
 import json
 import os
 from pathlib import Path
-import sqlite3
 import tempfile
-import unicodedata
 import uuid
 
 from .models import AppSettings, Cue, LanguagePair, StudyDocument, Token
+from .database import Database, word_key as word_key
 
 
 def canonical_path(path: str | Path) -> str:
     return str(Path(path).expanduser().resolve())
-
-
-def word_key(text: str, target_language: str) -> str:
-    """Match sentence-initial capitalization while keeping accents, acronyms and mixed case."""
-    word = unicodedata.normalize("NFC", text)
-    if not word or not word[0].isupper() or any(c.isupper() for c in word[1:]):
-        return word
-    first = word[0]
-    if target_language.lower().replace("_", "-").split("-")[0] in {"tr", "az"}:
-        first = {"I": "ı", "İ": "i"}.get(first, first)
-    return unicodedata.normalize("NFC", first.lower() + word[1:])
 
 
 def media_fingerprint(path: str | Path) -> dict:
@@ -59,55 +48,23 @@ class Store:
         self.data_dir = Path(data_dir or data_root()).resolve()
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.db_path = self.data_dir / "study.db"
-        with self._connection() as db:
-            db.execute("PRAGMA journal_mode=WAL")
-            db.executescript("""
-                CREATE TABLE IF NOT EXISTS entries (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    kind TEXT NOT NULL CHECK(kind IN ('word','note')),
-                    media_path TEXT NOT NULL, cue_id TEXT NOT NULL,
-                    start REAL NOT NULL, text TEXT NOT NULL, reading TEXT NOT NULL DEFAULT '',
-                    meaning TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT '',
-                    sentence TEXT NOT NULL, source_language TEXT NOT NULL,
-                    target_language TEXT NOT NULL, created_at TEXT NOT NULL,
-                    UNIQUE(kind, media_path, cue_id, text, source_language, target_language)
-                );
-                CREATE TABLE IF NOT EXISTS positions (
-                    media_path TEXT PRIMARY KEY, milliseconds INTEGER NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS conversations (
-                    media_path TEXT NOT NULL, source_language TEXT NOT NULL,
-                    target_language TEXT NOT NULL, messages TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    PRIMARY KEY(media_path, source_language, target_language)
-                );
-            """)
-            db.execute("BEGIN IMMEDIATE")
-            if not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='word_forms'").fetchone():
-                db.execute("""CREATE TABLE word_forms(target_language TEXT NOT NULL, text TEXT NOT NULL,
-                              word_key TEXT NOT NULL, PRIMARY KEY(target_language,text))""")
-                db.execute("CREATE INDEX word_forms_key ON word_forms(target_language,word_key,text)")
-                forms = db.execute("SELECT DISTINCT target_language,text FROM entries WHERE kind='word'").fetchall()
-                if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='notebook_sources'").fetchone():
-                    forms += db.execute("""SELECT DISTINCT target_language,json_extract(entry_json,'$.text')
-                                           FROM notebook_sources WHERE json_extract(entry_json,'$.kind')='word'""").fetchall()
-                db.executemany("INSERT OR IGNORE INTO word_forms VALUES (?,?,?)",
-                               ((lang, text, word_key(text, lang)) for lang, text in forms))
+        self.database = Database(self.db_path)
         from .portable_paths import migrate_portable_paths
         migrate_portable_paths(self)
 
-    @contextmanager
-    def _connection(self):
-        db = sqlite3.connect(self.db_path, timeout=20)
-        db.row_factory = sqlite3.Row
-        try:
-            with db:
-                yield db
-        finally:
-            db.close()
+    def _connection(self, immediate=False):
+        # Compatibility seam for existing readers and SQL instrumentation.
+        return self.database.connection(immediate=immediate)
+
+    def close(self):
+        self.database.close()
+
+    @cached_property
+    def model_registry(self):
+        from .providers import ModelRegistry
+        return ModelRegistry(self.data_dir)
 
     def load_settings(self) -> AppSettings:
-        from .providers import ModelRegistry
         from .runtime import is_clean_install
 
         settings = AppSettings()
@@ -115,18 +72,16 @@ class Store:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
             if isinstance(data, dict):
-                allowed = {f.name for f in fields(AppSettings)}
+                allowed = {f.name for f in fields(AppSettings) if not f.name.startswith("_")}
                 settings = AppSettings(**{k: v for k, v in data.items() if k in allowed})
         except (OSError, ValueError, TypeError):
             if is_clean_install():
                 settings.text_models_enabled = settings.cloud_text_enabled = False
-        return ModelRegistry(self.data_dir).load_roles(settings)
+        return self.model_registry.load_roles(settings)
 
     def save_settings(self, settings: AppSettings) -> None:
         from .global_models import workspace_preferences
-        from .providers import ModelRegistry
-
-        ModelRegistry(self.data_dir).save_role_changes(settings)
+        self.model_registry.save_role_changes(settings)
         atomic_json(self.data_dir / "settings.json", workspace_preferences(settings))
 
     def _document_path(self, media_path: str, language: LanguagePair) -> Path:
@@ -137,8 +92,7 @@ class Store:
     @contextmanager
     def _material_write(self):
         # Coordinate independent Store instances, including a second app process.
-        with self._connection() as db:
-            db.execute("BEGIN IMMEDIATE")
+        with self._connection(immediate=True):
             yield
 
     def material_paths(self, media_path: str, language: LanguagePair) -> tuple[Path, Path]:
@@ -282,13 +236,8 @@ class Store:
             path.unlink()
             self._recover_material(path)
         else:
-            document.cues = [replace(c, translation="", explanation="", tokens=[]) for c in document.cues]
-            for key in ("annotation_spec", "model_responses", "analysis_batches", "checkpoint_events", "finished_at",
-                        "translation_review", "lesson_status"):
-                document.metadata.pop(key, None)
-            document.metadata.update(stage="reviewed" if document.metadata.get("review_stage") == "ready"
-                                     else "transcribed", completed_ids=[], annotated_count=0, error="",
-                                     reuse_transcript_once=True)
+            from .material_reset import reset_teaching_document
+            document = reset_teaching_document(document)
             self._save_document(document)
         return True
 
@@ -377,6 +326,18 @@ class Store:
             row = db.execute("SELECT milliseconds FROM positions WHERE media_path=?",
                              (canonical_path(media_path),)).fetchone()
         return row[0] if row else 0
+
+    def load_positions(self, media_paths) -> dict[str, int]:
+        """Read one library's positions with a single query, including zero defaults."""
+        positions = dict.fromkeys((canonical_path(path) for path in media_paths), 0)
+        if not positions:
+            return positions
+        with self._connection() as db:
+            rows = db.execute("SELECT media_path,milliseconds FROM positions "
+                              "WHERE media_path IN (SELECT value FROM json_each(?))",
+                              (json.dumps(list(positions)),)).fetchall()
+        positions.update(rows)
+        return positions
 
     def save_conversation(self, media_path: str, language: LanguagePair, messages: list[dict]) -> None:
         """Persist text chat separately from lesson documents; no API credentials."""

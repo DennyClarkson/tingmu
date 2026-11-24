@@ -202,9 +202,12 @@ def test_notebook_draft_debounces_closes_and_recovers_after_restart(quick, qtbot
     layout_path = bridge.store.data_dir / "quick-layout.json"
 
     def persisted_drafts():
-        if not layout_path.exists():
-            return {}
-        return json.loads(layout_path.read_text(encoding="utf-8")).get("preferences", {}).get("notebookDrafts", {})
+        from tingmu.drafts import DraftStorage
+        if layout_path.exists():
+            prefs = json.loads(layout_path.read_text(encoding="utf-8")).get("preferences", {})
+            assert "notebookDrafts" not in prefs
+            assert "noteDrafts" not in prefs
+        return DraftStorage(bridge.store.db_path).load("notebookDrafts")
 
     qtbot.waitUntil(lambda: persisted_drafts().get("yue") == {"text": draft, "revision": revision})
     latest = draft + "退出前最后一句也要保留。\n"

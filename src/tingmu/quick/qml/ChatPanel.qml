@@ -8,8 +8,8 @@ Item {
     property bool showSessions:true
     property bool followTail:true
     property real readingPosition:0
-    readonly property bool stopping:!!backend.state.chatStopping
-    readonly property bool busy:!!backend.state.chatBusy || stopping
+    readonly property bool stopping:!!backend.chatState.chatStopping
+    readonly property bool busy:!!backend.chatState.chatBusy || stopping
     readonly property bool compact:height<480
     property var reasoningExpanded:({})
     function toggleReasoning(id){var next=Object.assign({},reasoningExpanded);next[id]=!next[id];reasoningExpanded=next}
@@ -31,8 +31,6 @@ Item {
         editMessageId=""; input.clear(); followTail=true
     }
     function tail(){if(followTail)Qt.callLater(function(){history.positionViewAtEnd()})}
-    ModelManager{id:models}
-    TeachingPreferences{id:teachingPrefs}
     ColumnLayout {
         anchors.fill:parent;anchors.margins:root.compact ? 8 : 14;spacing:root.compact ? 4 : 12
         RowLayout {
@@ -65,7 +63,7 @@ Item {
                 }
                 ListView {
                     id:history;objectName:"chatHistory"
-                    Layout.fillWidth:true;Layout.fillHeight:true;Layout.minimumHeight:48;clip:true;spacing:24;model:backend.messages
+                    Layout.fillWidth:true;Layout.fillHeight:true;Layout.minimumHeight:48;clip:true;spacing:24;model:backend.messageModel
                     ScrollBar.vertical:ScrollBar{}
                     onMovementStarted:{root.followTail=false;root.readingPosition=contentY}
                     onContentYChanged:if(moving)root.readingPosition=contentY
@@ -75,7 +73,7 @@ Item {
                     onContentHeightChanged:root.tail()
                     onHeightChanged:root.tail()
                     delegate:ColumnLayout{
-                        id:message
+                        id:message;objectName:"chatMessage:" + modelData.id
                         required property var modelData
                         width:history.width;spacing:8
                         RowLayout{
@@ -139,8 +137,8 @@ Item {
                 RowLayout {
                     Layout.fillWidth:true
                     Choice{objectName:"chatModelChoice";implicitHeight:root.compact ? 30 : 36;Layout.fillWidth:true;Layout.minimumWidth:90;optionLabel:(i,value)=>i===0 ? qsTranslate("Tingmu",value) : value;model:[{id:"",label:"默认对话模型"}].concat(backend.modelProfiles || []);textRole:"label";currentIndex:Math.max(0,model.findIndex(function(p){return p.id===backend.settings.companion_profile_id}));onActivated:backend.command("selectModel",{role:"companion",id:model[currentIndex].id})}
-                    TButton{text:qsTranslate("Tingmu", "模型");quiet:true;onClicked:models.open()}
-                    TButton{text:qsTranslate("Tingmu", "重试");quiet:true;enabled:backend.messages.length>0 && !root.busy;onClicked:{root.followTail=true;backend.command("retryChat",{})}}
+                    TButton{text:qsTranslate("Tingmu", "模型");quiet:true;onClicked:backend.requestDialog("models",root,{})}
+                    TButton{text:qsTranslate("Tingmu", "重试");quiet:true;enabled:backend.messageModel.count>0 && !root.busy;onClicked:{root.followTail=true;backend.command("retryChat",{})}}
                     TButton{objectName:"stopChatButton";visible:root.busy;text:root.stopping ? qsTranslate("Tingmu", "停止中") : qsTranslate("Tingmu", "停止");enabled:!root.stopping;onClicked:backend.command("stopChat",{})}
                     TButton{objectName:"sendChatButton";visible:!root.busy;text:qsTranslate("Tingmu", "发送");primary:true;enabled:!root.busy && input.text.trim().length>0;onClicked:root.send()}
                 }
@@ -148,14 +146,14 @@ Item {
                     Layout.fillWidth:true;spacing:8
                     Text{text:qsTranslate("Tingmu", "思考强度");color:Theme.muted;font.family:Theme.font;font.pixelSize:11}
                     Choice{objectName:"chatReasoningChoice";implicitHeight:root.compact ? 30 : 36;ToolTip.visible:hovered;ToolTip.delay:600;ToolTip.text:qsTranslate("Tingmu", "默认沿用模型连接设置。各服务支持的强度不同，不支持时会显示明确错误。");Layout.fillWidth:true;Layout.minimumWidth:90;translateOptions:true;model:["默认 · 沿用模型设置","不使用推理","最低","低","中","高","更高"];property var values:["default","none","minimal","low","medium","high","xhigh"];currentIndex:Math.max(0,values.indexOf(backend.settings.companion_reasoning_effort || "default"));enabled:!root.busy;onActivated:backend.setting("companion_reasoning_effort",values[currentIndex])}
-                    TButton{objectName:"chatTeachingPreferencesButton";text:qsTranslate("Tingmu", "讲解偏好");quiet:true;onClicked:teachingPrefs.open()}
+                    TButton{objectName:"chatTeachingPreferencesButton";text:qsTranslate("Tingmu", "讲解偏好");quiet:true;onClicked:backend.requestDialog("teaching",root,{})}
                 }
-                Text{objectName:"chatToolStatus";Layout.fillWidth:true;visible:!!backend.state.chatToolStatus;text:qsTranslate("TingmuStatus", backend.state.chatToolStatus || "");color:backend.state.chatToolPhase==="error" ? Theme.error : Theme.accent;font.family:Theme.font;font.pixelSize:11;wrapMode:Text.Wrap}
-                Text{Layout.fillWidth:true;visible:!!backend.state.error;text:qsTranslate("TingmuStatus", backend.state.error || "");color:Theme.error;font.family:Theme.font;font.pixelSize:11;wrapMode:Text.Wrap}
+                Text{objectName:"chatToolStatus";Layout.fillWidth:true;visible:!!backend.chatState.chatToolStatus;text:qsTranslate("TingmuStatus", backend.chatState.chatToolStatus || "");color:backend.chatState.chatToolPhase==="error" ? Theme.error : Theme.accent;font.family:Theme.font;font.pixelSize:11;wrapMode:Text.Wrap}
+                Text{Layout.fillWidth:true;visible:!!backend.chatState.error;text:qsTranslate("TingmuStatus", backend.chatState.error || "");color:Theme.error;font.family:Theme.font;font.pixelSize:11;wrapMode:Text.Wrap}
             }
         }
     }
-    SettingPopup{id:settingsPopup;contentItem:ColumnLayout{spacing:12;Text{text:qsTranslate("Tingmu", "对话设置");color:Theme.text;font.family:Theme.font;font.pixelSize:17}TextModelPolicy{Layout.fillWidth:true}TButton{text:qsTranslate("Tingmu", "管理模型连接");onClicked:models.open()}Text{Layout.fillWidth:true;text:qsTranslate("Tingmu", "对话模型接收字幕、收藏和对话文本。外部语音识别可在字幕处理设置中单独启用。");color:Theme.muted;font.family:Theme.font;font.pixelSize:12;wrapMode:Text.Wrap}}}
+    SettingPopup{id:settingsPopup;contentItem:ColumnLayout{spacing:12;Text{text:qsTranslate("Tingmu", "对话设置");color:Theme.text;font.family:Theme.font;font.pixelSize:17}TextModelPolicy{Layout.fillWidth:true}TButton{text:qsTranslate("Tingmu", "管理模型连接");onClicked:backend.requestDialog("models",root,{})}Text{Layout.fillWidth:true;text:qsTranslate("Tingmu", "对话模型接收字幕、收藏和对话文本。外部语音识别可在字幕处理设置中单独启用。");color:Theme.muted;font.family:Theme.font;font.pixelSize:12;wrapMode:Text.Wrap}}}
     AppDialog{width:380;id:renameDialog;title:qsTranslate("Tingmu", "会话名称");anchors.centerIn:parent;modal:true;standardButtons:Dialog.Ok | Dialog.Cancel;background:Rectangle{color:Theme.panel;border.color:Theme.line;radius:8}contentItem:Field{id:sessionTitle;implicitWidth:280;placeholderText:qsTranslate("Tingmu", "输入名称")}onAccepted:if(sessionTitle.text.trim())backend.command("renameChat",{id:backend.activeSessionId,title:sessionTitle.text.trim()})}
     AppDialog{width:380;id:deleteDialog;title:qsTranslate("Tingmu", "删除这个会话？");anchors.centerIn:parent;modal:true;standardButtons:Dialog.Ok | Dialog.Cancel;background:Rectangle{color:Theme.panel;border.color:Theme.line;radius:8}contentItem:Text{text:qsTranslate("Tingmu", "仅删除当前会话，收藏和学习笔记会保留。");color:Theme.text;font.family:Theme.font}onAccepted:backend.command("deleteChat",{id:backend.activeSessionId})}
 }

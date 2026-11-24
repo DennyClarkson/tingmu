@@ -82,18 +82,18 @@ Window {
                 Choice{id:keySource;objectName:"modelKeySource";Layout.fillWidth:true;translateOptions:true;model:["环境变量","输入密钥 · 本机保护","无需密钥 · 本地服务"]}
                 Field{id:envName;objectName:"modelEnvName";Layout.fillWidth:true;visible:keySource.currentIndex===0;placeholderText:["ollama","lmstudio","local_compatible"].includes(root.provider) ? qsTranslate("Tingmu", "本机服务的环境变量名") : "OPENAI_API_KEY"}
                 Field{id:secret;objectName:"modelSecret";Layout.fillWidth:true;visible:keySource.currentIndex===1;echoMode:TextInput.Password;placeholderText:root.profileId ? qsTranslate("Tingmu", "输入新密钥以替换；留空保留原密钥") : qsTranslate("Tingmu", "API 密钥（保存后不再显示）")}
-                Text{Layout.fillWidth:true;visible:!!backend.state.error;text:qsTranslate("TingmuStatus", backend.state.error || "") || "";color:Theme.error;font.family:Theme.font;font.pixelSize:12;wrapMode:Text.Wrap}
+                Text{Layout.fillWidth:true;visible:!!backend.modelState.error;text:qsTranslate("TingmuStatus", backend.modelState.error || "") || "";color:Theme.error;font.family:Theme.font;font.pixelSize:12;wrapMode:Text.Wrap}
                 Text{text:qsTranslate("Tingmu", "模型名称（可先留空，保存后加载列表）");color:Theme.muted;font.family:Theme.font;font.pixelSize:12}
                 Field{id:modelName;objectName:"modelName";Layout.fillWidth:true;placeholderText:qsTranslate("Tingmu", "手动输入模型 ID")}
                 RowLayout {
                     Layout.fillWidth:true
                     Choice{objectName:"discoveredModelChoice";Layout.fillWidth:true;model:root.discoveredChoices;onActivated:modelName.text=currentText}
-                    TButton{text:backend.state.modelBusy ? qsTranslate("Tingmu", "加载中…") : qsTranslate("Tingmu", "加载列表");enabled:!!root.profileId && !backend.state.modelBusy;onClicked:backend.command("discoverModels",{id:root.profileId})}
+                    TButton{text:backend.modelState.modelBusy ? qsTranslate("Tingmu", "加载中…") : qsTranslate("Tingmu", "加载列表");enabled:!!root.profileId && !backend.modelState.modelBusy;onClicked:backend.command("discoverModels",{id:root.profileId})}
                 }
                 Text{Layout.fillWidth:true;text:!root.profileId ? qsTranslate("Tingmu", "先保存连接，再加载模型列表；也可直接手填模型。") : root.discoveredChoices.length ? qsTranslate("Tingmu", "此连接已缓存 ")+root.discoveredChoices.length+qsTranslate("Tingmu", " 个模型；可选择或手动输入模型 ID。") : qsTranslate("Tingmu", "此连接还没有模型列表，可加载列表或直接手填模型。");color:Theme.muted;font.family:Theme.font;font.pixelSize:11;wrapMode:Text.Wrap}
                 RowLayout{
-                    TButton{objectName:"saveModelButton";text:qsTranslate("Tingmu", "保存连接");primary:true;enabled:label.text.trim() && endpoint.text.trim() && maxTokens.acceptableInput && !backend.state.modelBusy;onClicked:{var payload={id:root.profileId,label:label.text.trim(),provider:root.provider,protocol:root.protocol,base_url:endpoint.text.trim(),model:modelName.text.trim(),key_source:["environment","manual","none"][keySource.currentIndex],env_var:envName.text.trim(),max_tokens:Number(maxTokens.text),reasoning_effort:reasoning.values[reasoning.currentIndex]};if(secret.text)payload.apiKey=secret.text;backend.command("saveModel",payload);secret.clear()}}
-                    TButton{text:qsTranslate("Tingmu", "删除连接");enabled:!!root.profileId && !backend.state.modelBusy;onClicked:deleteConfirm.open()}
+                    TButton{objectName:"saveModelButton";text:qsTranslate("Tingmu", "保存连接");primary:true;enabled:label.text.trim() && endpoint.text.trim() && maxTokens.acceptableInput && !backend.modelState.modelBusy;onClicked:{var payload={id:root.profileId,label:label.text.trim(),provider:root.provider,protocol:root.protocol,base_url:endpoint.text.trim(),model:modelName.text.trim(),key_source:["environment","manual","none"][keySource.currentIndex],env_var:envName.text.trim(),max_tokens:Number(maxTokens.text),reasoning_effort:reasoning.values[reasoning.currentIndex]};if(secret.text)payload.apiKey=secret.text;backend.command("saveModel",payload);secret.clear()}}
+                    TButton{text:qsTranslate("Tingmu", "删除连接");enabled:!!root.profileId && !backend.modelState.modelBusy;onClicked:deleteConfirm.open()}
                 }
                 TButton{text:root.advanced ? qsTranslate("Tingmu", "收起高级选项") : qsTranslate("Tingmu", "高级选项");quiet:true;onClicked:root.advanced=!root.advanced}
                 ColumnLayout{visible:root.advanced;Layout.fillWidth:true;spacing:10

@@ -10,6 +10,24 @@ The Agent uses matched source captions without ASR. An unambiguously paired tran
 
 The installation's interface language is stored at the workspace catalog root. Menu, window, and dialog labels can change during playback. Stored study languages, subtitle content, conversations, file names and notes retain their original values.
 
+## State boundaries after the Phase 1 / 2 refactor
+
+`AppSettings.to_dict()` is the public settings wire representation. Runtime role edit baselines survive `dataclasses.replace` but are excluded from preferences, queue identities and persisted requests. Workspace preference saves cannot replay unchanged global assignments. Explicit `ModelRegistry.assign/update_roles` writes merge under the installation lock; legacy direct-field edits use a field-delta adapter.
+
+Unsubmitted notebook and cue drafts live in additive workspace SQLite tables. Legacy layout drafts import transactionally once and retain their complete migration snapshot. Portable migration rewrites only internal media identity prefixes and accepts older databases without the new tables. The document publication journal format is unchanged.
+
+`Bridge.state/messages/jobs` remain compatibility projections. QML consumes independently notified domain state and stable-ID list models. Local errors remain in their owning domain. Dialog requests are trusted UI signals routed to one root host, not LLM actions. Queue notifications run outside its lock; cold library reads and bulk positions run on a worker, with generation checks before UI publication. Workspace transitions wait for the originating reply to be persisted successfully and all required human decisions to finish.
+
+## Refactor boundaries after Phase 3 / 4
+
+`pipeline.prepare_media()` retains its signature, exception types, result and checkpoint formats. Its call-time backend hooks remain replaceable; implementation stages live in `preparation.py` and must not import the facade. Source IDs, original text and acoustic timestamps remain immutable through review, teaching, verification and reset. New `stage_code` fields are additive; old jobs without codes remain readable.
+
+Review, teaching and translation verification use one `ConcurrentBatchScheduler`. Each submitted batch owns an independent worker and client configuration. Transport/rate-limit failures must not enter content repair. Cancellation stops new submissions, drains already submitted work and checkpoints completed results in source order. A checkpoint failure is retained even when the final cumulative retry succeeds. `LlmClient` owns transport and response-format fallback; old private hooks are explicit compatibility adapters, not a reason for new cross-class private calls. Pure backend modules must import without Qt.
+
+`Bridge` remains the QML and legacy-test facade, with finite state/method delegates to composed controllers. `commands.py` is the single source for trusted UI command handlers and error domains. Agent schemas are maintained independently and must never include native-dialog routing or human confirmation slots. Workspace controllers consume public settings snapshots, task methods and domain services; switch summaries use explicit arguments. The old QWidget implementation remains isolated.
+
+`Database` owns all study.db DDL and `PRAGMA user_version` migration. Version-zero databases are upgraded transactionally without deleting their data; newer schema versions are rejected rather than downgraded. Store and its notebook, conversation and draft managers share the transaction owner. Nested writes use savepoints; `Database.session()` permits bounded reuse without retaining idle Windows file handles. Close waits for active leases. Chat session persistence, legacy conversation projection and migration markers commit together. `DraftStorage(path)` and `Store._connection()` remain compatibility entry points. Portable backup may use separate read-only source/backup connections; application controllers must not execute SQL.
+
 ## Continuous playback
 
 Playback ticks expose a numeric position to QML. Track metadata has a separate change signal. The subtitle list updates when the document changes. Controls needing its length use `cueCount`, including both companion panels during a subtitle gap. The active cue uses its prepared display row. Word and sentence status come from indexes refreshed when the active video, language or collection changes. The next progress checkpoint can skip a busy writer, and explicit saves at pause, video change and exit retain the latest position.

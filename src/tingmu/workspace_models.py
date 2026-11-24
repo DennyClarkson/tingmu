@@ -1,6 +1,7 @@
 """Inspect and populate the same local model caches that the ASR worker reads."""
 
 import json
+from dataclasses import dataclass
 import os
 from pathlib import Path
 import re
@@ -133,28 +134,42 @@ def model_inventory(model):
             "repositories": rows}
 
 
-def model_status(model):
+@dataclass(frozen=True)
+class ModelReadiness:
+    """Machine-readable readiness independent of the interface wording."""
+
+    ready: bool
+    code: str
+    message: str
+
+
+def model_readiness(model) -> ModelReadiness:
     try:
         if model.startswith("local:"):
             from .local_whisper import resolve_local_model
             try:
                 resolve_local_model(model)
             except ValueError as exc:
-                return str(exc)
-            return "已就绪 · 使用共享目录中的本地模型"
+                return ModelReadiness(False, "model_missing", str(exc))
+            return ModelReadiness(True, "ready", "已就绪 · 使用共享目录中的本地模型")
         cache, repositories = _assets(model)
         if model in QWEN_MODELS:
             _qwen_python()
         support = _support(model)
         if support and not support.inventory()["complete"]:
-            return "尚未检测到完整的识别模型支持文件"
+            return ModelReadiness(False, "support_missing", "尚未检测到完整的识别模型支持文件")
         if not all(_cached(cache, repo, model) for repo in repositories):
-            return "尚未检测到完整模型"
-        return "已检测到本地模型文件"
+            return ModelReadiness(False, "model_missing", "尚未检测到完整模型")
+        return ModelReadiness(True, "ready", "已检测到本地模型文件")
     except (OSError, KeyError, ValueError):
-        return "尚未检测到完整模型"
+        return ModelReadiness(False, "model_missing", "尚未检测到完整模型")
     except RuntimeError as exc:
-        return str(exc)
+        return ModelReadiness(False, "runtime_missing", str(exc))
+
+
+def model_status(model):
+    """Compatibility display adapter; decisions must use model_readiness()."""
+    return model_readiness(model).message
 
 
 def _download_repo(model, repo, progress, cancelled):

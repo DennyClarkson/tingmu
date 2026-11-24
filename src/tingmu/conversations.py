@@ -6,6 +6,7 @@ import math
 import uuid
 
 from .storage import canonical_path
+from .models import LanguagePair
 
 _PRIVATE_FIELDS = {
     "signature", "thinking_signature", "encrypted_content", "encrypted", "redacted_thinking",
@@ -115,19 +116,7 @@ def _messages(messages):
 class ConversationStore:
     def __init__(self, store):
         self.store = store
-        with store._connection() as db:
-            db.executescript("""
-                CREATE TABLE IF NOT EXISTS chat_sessions (
-                    id TEXT PRIMARY KEY, title TEXT NOT NULL, media_path TEXT NOT NULL,
-                    source_language TEXT NOT NULL, target_language TEXT NOT NULL,
-                    messages TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
-                );
-                CREATE TABLE IF NOT EXISTS chat_legacy_migrations (
-                    media_path TEXT NOT NULL, source_language TEXT NOT NULL,
-                    target_language TEXT NOT NULL, session_id TEXT NOT NULL,
-                    PRIMARY KEY(media_path,source_language,target_language)
-                );
-            """)
+        self.database = store.database
 
     def list_sessions(self, target_language):
         with self.store._connection() as db:
@@ -158,16 +147,35 @@ class ConversationStore:
         result["messages"] = json.loads(result["messages"])
         return result
 
-    def save(self, session_id, messages, title=None):
+    def save(self, session_id, messages, title=None, *, record_legacy_migration=False):
         clean = _messages(messages)
         if title is not None:
             _text(title, "标题", 200)
-        with self.store._connection() as db:
-            cursor = db.execute("UPDATE chat_sessions SET messages=?,title=COALESCE(?,title),updated_at=? "
-                                "WHERE id=?", (json.dumps(clean, ensure_ascii=False), title, _now(), session_id))
-            if not cursor.rowcount:
-                raise ValueError("对话不存在。")
-        return self.load(session_id)
+        with self.database.session():
+            with self.store._connection(immediate=True) as db:
+                cursor = db.execute("UPDATE chat_sessions SET messages=?,title=COALESCE(?,title),updated_at=? "
+                                    "WHERE id=?", (json.dumps(clean, ensure_ascii=False), title, _now(), session_id))
+                if not cursor.rowcount:
+                    raise ValueError("对话不存在。")
+                if record_legacy_migration:
+                    self._record_legacy(db, session_id)
+            return self.load(session_id)
+
+    def _record_legacy(self, db, session_id):
+        session = db.execute("SELECT media_path,source_language,target_language,messages FROM chat_sessions "
+                             "WHERE id=?", (session_id,)).fetchone()
+        if session is None:
+            raise ValueError("对话不存在。")
+        self.store.save_conversation(session[0], LanguagePair(session[1], session[2]), json.loads(session[3]))
+        db.execute("INSERT OR IGNORE INTO chat_legacy_migrations VALUES (?,?,?,?)",
+                   (*session[:3], session_id))
+
+    def save_with_legacy(self, session_id, messages):
+        """Atomically save both views while retaining the positional save hook."""
+        with self.store._connection(immediate=True) as db:
+            result = self.save(session_id, messages)
+            self._record_legacy(db, session_id)
+            return result
 
     def rename(self, session_id, title):
         _text(title, "标题", 200)
@@ -186,8 +194,7 @@ class ConversationStore:
     def migrate_legacy(self, media_path, language):
         path = canonical_path(media_path) if media_path else ""
         identity = (path, language.source, language.target)
-        with self.store._connection() as db:
-            db.execute("BEGIN IMMEDIATE")
+        with self.store._connection(immediate=True) as db:
             prior = db.execute("SELECT session_id FROM chat_legacy_migrations WHERE media_path=? "
                                "AND source_language=? AND target_language=?", identity).fetchone()
             if prior:

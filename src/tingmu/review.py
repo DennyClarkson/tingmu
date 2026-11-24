@@ -9,10 +9,11 @@ from difflib import SequenceMatcher
 import unicodedata
 
 from .agent import (
-    AnnotationValidationError, LearningAgent, PartialBatchResult, _BatchCancelled, _json_loads,
-    add_reference_hints, request_ids, validate_identified_rows,
+    AnnotationValidationError, PartialBatchResult, _BatchCancelled, _json_loads,
+    TextBatchTask, add_reference_hints, request_ids, run_annotation, validate_identified_rows,
 )
 from .language import learning_text
+from .llm_compat import legacy_learning_complete, legacy_learning_request
 from .models import Cue, LanguagePair
 from .timeline import MAX_LINE_WIDTH, display_width, split_display_text
 
@@ -269,7 +270,7 @@ def _document_context(cues: list[Cue], language: LanguagePair, limit: int = 6000
             "omissions": "Some lines and long-line suffixes omitted; do not infer missing dialogue."}
 
 
-class TranscriptReviewer(LearningAgent):
+class TranscriptReviewer(TextBatchTask):
     """Use the shared bounded scheduler with a separate review prompt/schema/metadata."""
 
     def __init__(self, provider: str = "openai", model: str | None = "gpt-6-astra", *, profile=None):
@@ -280,6 +281,14 @@ class TranscriptReviewer(LearningAgent):
         self.review_metadata: dict = {}
         self.context_metadata: dict = {}
         self._review_context: dict = {}
+
+    def _complete(self, system, payload, schema=None):
+        """Legacy class-patch adapter; production completion uses this task's client."""
+        return legacy_learning_complete(self, system, payload, schema)
+
+    def _request(self, path, body=None, *, on_reasoning=None):
+        options = {"on_reasoning": on_reasoning} if on_reasoning is not None else {}
+        return legacy_learning_request(self, path, body, **options)
 
     def _annotate_batch(self, cues, language, cursor, end, stopped, context_texts, context_positions):
         batch = cues[cursor:end]
@@ -356,14 +365,9 @@ class TranscriptReviewer(LearningAgent):
             if checkpoint:
                 checkpoint(completed)
 
-        def report(message):
-            if progress:
-                from .task_progress import Progress
-                progress(Progress(message.replace("语言分析", "全文复核").replace("学习分析", "全文复核"),
-                                  **getattr(message, "details", {})))
-
         try:
-            return super().annotate(cues, language, progress=report, cancelled=cancelled,
-                                    checkpoint=save, context_cues=timeline)
+            return run_annotation(self, cues, language, progress=progress, cancelled=cancelled,
+                                  checkpoint=save, context_cues=timeline,
+                                  stage_label="全文复核", cancellation_label="全文复核")
         finally:
             sync_metadata()

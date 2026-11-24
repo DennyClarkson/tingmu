@@ -9,11 +9,11 @@
 | 修改目标 | 先看这里 | 对应回归 |
 | --- | --- | --- |
 | 启动、切换工作区、切换界面语言 | `quick/main.py`、`quick/workspace_controller.py`、`workspaces.py`、`quick/localization.py`、`quick/i18n/` | `test_qml_workspace.py`、`test_interface_language.py` |
-| 播放、全屏、音轨和显示字幕 | `quick/bridge.py`、`quick/qml/`、`quick/playback_sources.py`、`quick/embedded.py`、`embedded_subtitles.py` | `test_qml_v5.py`、`test_player_sources.py`、`test_embedded_subtitles.py` |
+| 播放、全屏、音轨和显示字幕 | `quick/playback_controller.py`、`quick/bridge.py`、`quick/qml/`、`quick/playback_sources.py`、`quick/embedded.py` | `test_qml_v5.py`、`test_player_sources.py`、`test_embedded_subtitles.py` |
 | 入队、选择字幕来源、失败重试 | `media_inbox.py`、`batch.py`、`subtitle_sources.py`、`pipeline.py` | `test_workflow_queue.py`、`test_subtitle_sources.py`、`test_agent_preparation.py` |
-| 语音识别、原文复核、讲解、译稿核验 | `media.py`、`speech.py`、`external_asr.py`、`review.py`、`agent.py`、`translation_review.py` | `test_external_asr.py`、`test_pipeline_review.py`、`test_agent_concurrency.py` |
+| 语音识别、原文复核、讲解、译稿核验 | `preparation.py`、`review.py`、`agent.py`、`translation_verifier.py`、`batch_scheduler.py`、`llm_client.py` | `test_external_asr.py`、`test_pipeline_review.py`、`test_agent_concurrency.py`、`test_batch_scheduler.py` |
 | 模型与授权、学习对话、受限操作 | `global_models.py`、`providers.py`、`credentials.py`、`companion.py`、`app_actions.py` | `test_global_models.py`、`test_conversations.py`、`test_app_actions_v5.py` |
-| 文档发布、播放时间轴、收藏与笔记 | `storage.py`、`timeline.py`、`lesson_material.py`、`corrections.py`、`notebooks.py` | `test_storage.py`、`test_timeline.py`、`test_word_recollection.py` |
+| 文档发布、播放时间轴、收藏与笔记 | `storage.py`、`database.py`、`timeline.py`、`corrections.py`、`notebooks.py`、`quick/collections_controller.py` | `test_storage.py`、`test_database.py`、`test_word_recollection.py` |
 
 ## 准备一份学习文档
 
@@ -47,3 +47,25 @@
 - **聊天与修订**。模型通过类型化应用操作处理队列、播放、工作区和学习记录。工具按发起时的会话、媒体、语种及选句执行。笔记改写需读取全文并核对修订号。单句修订保留原文、声学时间与其他句子。工具接口不开放任意系统命令或密钥读取。
 
 项目的接口与兼容约定见[集成契约](contracts.md)。启动、回归命令与发布验收入口见[开发入门](development.md)。
+
+## Phase 1 / 2 状态边界重构
+
+工作区偏好通过 `AppSettings.to_dict()` 序列化，安装级角色经缓存的 `Store.model_registry` 读取并通过显式角色入口更新。旧式直接编辑角色字段的调用保留增量适配，`replace()` 不再丢失修改基线。`DraftStorage` 在工作区数据库中保存未提交草稿，布局不再承担笔记正文持久化。
+
+QML 读取 `mediaState`、`queueState`、`chatState`、`downloadState`、`learningState`、`modelState`、`workspaceState`、`applicationState` 与 `notificationState` 的独立信号。Bridge 的旧状态和 list 属性继续作为兼容视图，聊天与队列 ListView 使用稳定 ID 的 `messageModel/jobModel`。Markdown 缓存仅重新解析正文变化的消息。
+
+队列变更与任务完成驱动界面和工作区切换；收件箱复用单线程池。媒体库摘要和批量播放位置在后台读取，以文件 stat、媒体指纹、语言和 `.pending` 状态检查缓存，界面用代次拒绝迟到结果。模型、教学偏好和字幕修订弹窗统一由 Main.qml 管理，并使用发起控件所属窗口。
+
+上述边界已通过 Phase 1 / 2 架构审阅，后续六项修正和 Phase 3 / 4 拆分见下节。原阶段设计与验证见 [Phase 1 / 2 审阅报告](refactor-phase1-2.md)。
+
+## Phase 3 / 4 模块边界（待最终审阅）
+
+`pipeline.prepare_media()` 是公开兼容入口，实际执行 `preparation.py` 的七个显式阶段；`PreparationContext` 冻结请求设置，`PreparationPlan` 保存来源、角色和复用决策。复核、教学、译稿核验适配同一个 `ConcurrentBatchScheduler`，各自提供提示词、校验和合并策略；传输由组合的 `LlmClient` 负责。客户端按请求惰性取得凭据，响应元数据不含凭据。`unicode_words.py` 提供无 Qt 的边界实现。新阶段使用 `stage_code`，旧记录仍有展示兼容回退。
+
+`Bridge(QObject)` 负责 Qt 接口和组合装配。播放、媒体库/收件箱、队列、聊天、收藏、笔记、模型、设置各有领域状态和有限端口。`feature_services.py` 集中绑定及旧成员适配，`features.py` 只保留旧 import；新代码不依赖业务 Mixin。`BackgroundTaskManager` 管理工作线程、取消令牌、完成事件和共享执行池。`DialogPort` 支持替换原生对话框。`commands.py` 同时提供 UI 分发和错误域元信息；可信 UI 路由与 Agent 工具白名单独立。
+
+工作区控制器和 `quick/main.py` 只调用公开端口；文本授权服务与工作区动作移入 quick 层，旧根模块保留兼容导出。工作区切换摘要通过 `_open_session(..., switch_summary=...)` 显式传入，不再动态塞入 Bridge 属性。原始请求的工作区、会话、媒体、语言、修订版本和模型快照仍在任务开始前冻结。
+
+`Store.database` 统一 study.db schema 和版本化迁移；Notebook、Conversation、Draft 复用它。嵌套事务用 savepoint，成组读取可用 `Database.session()` 复用连接，最外层范围结束关闭句柄。聊天新会话、旧投影及迁移标记原子写入，UI 无 SQL。文档 JSON、`.pending` 和便携媒体引用契约保持；旧 QWidget 文件没有变化。
+
+模块依赖图、代码行数、完整兼容清单、失败记录及逐阶段验证见 [Step 0 / Phase 3 / Phase 4 审阅报告](refactor-phase3-4.md)。

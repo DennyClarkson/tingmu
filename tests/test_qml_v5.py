@@ -1,7 +1,7 @@
 """v0.5 regressions exercise actual windows, focus and user controls."""
 import sys
 
-from PySide6.QtCore import QCoreApplication, QMetaObject, QPoint, QPointF, QRectF, Qt, Q_ARG, Q_RETURN_ARG
+from PySide6.QtCore import QObject, QCoreApplication, QMetaObject, QPoint, QPointF, QRectF, Qt, Q_ARG, Q_RETURN_ARG
 from PySide6.QtGui import QWheelEvent
 from PySide6.QtTest import QTest
 
@@ -181,7 +181,9 @@ def test_reasoning_and_preferences_use_shared_settings_in_small_chat(quick, qtbo
     assert choice.mapToScene(QPointF(choice.width(), 0)).x() <= floating.width()
     click(floating, find(panel, "chatTeachingPreferencesButton"))
     qtbot.wait(30)
-    dialog = find(panel, "teachingPreferencesDialog")
+    dialog = find(window, "teachingPreferencesDialog")
+    assert len(window.findChildren(QObject, "teachingPreferencesDialog")) == 1
+    assert dialog.property("parent").window() == floating
     assert dialog.property("opened")
     find(dialog, "teachingPreferencesInput").setProperty("text", "重点比较普通话和粤语，解释语气词，给出生活例句。")
     invoke(find(dialog, "saveTeachingPreferences"), "clicked")

@@ -11,7 +11,7 @@ Rectangle {
     signal settingsRequested()
     implicitHeight: 86
     color: Theme.panel
-    readonly property bool hasMedia: !!backend.state.mediaPath
+    readonly property bool hasMedia: !!backend.mediaState.mediaPath
     readonly property bool wide: width >= 590
     readonly property real position: seek.pressed ? seek.value : backend.playbackPosition
 

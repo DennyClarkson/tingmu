@@ -70,9 +70,9 @@ Item {
         RowLayout{
             Layout.fillWidth:true
             Text{Layout.fillWidth:true;text:root.canOrganize ? root.unorganizedCount+qsTranslate("Tingmu", " 条未整理 · ")+root.selectedIds.length+qsTranslate("Tingmu", " 条已选择") : qsTranslate("Tingmu", "笔记有未保存草稿，请先保存或放弃再整理。");color:Theme.muted;font.family:Theme.font;font.pixelSize:11;wrapMode:Text.Wrap}
-            TButton{objectName:"organizeCollectionsButton";text:backend.state.learningBusy ? qsTranslate("Tingmu", "整理中…") : root.selectedIds.length ? qsTranslate("Tingmu", "整理选中收藏为笔记") : qsTranslate("Tingmu", "整理未整理收藏");primary:true;enabled:root.canOrganize && !backend.state.learningBusy && (root.selectedIds.length>0 || root.unorganizedCount>0);onClicked:root.organize()}
+            TButton{objectName:"organizeCollectionsButton";text:backend.learningState.learningBusy ? qsTranslate("Tingmu", "整理中…") : root.selectedIds.length ? qsTranslate("Tingmu", "整理选中收藏为笔记") : qsTranslate("Tingmu", "整理未整理收藏");primary:true;enabled:root.canOrganize && !backend.learningState.learningBusy && (root.selectedIds.length>0 || root.unorganizedCount>0);onClicked:root.organize()}
         }
-        Text{Layout.fillWidth:true;visible:!!backend.state.error || !!backend.state.learningBusy;text:qsTranslate("TingmuStatus", backend.state.error || "") || qsTranslate("Tingmu", "正在形成学习笔记，完成后可切换到“笔记”阅读。");color:backend.state.error ? Theme.error : Theme.muted;font.family:Theme.font;font.pixelSize:12;wrapMode:Text.Wrap}
+        Text{Layout.fillWidth:true;visible:!!backend.learningState.error || !!backend.learningState.learningBusy;text:qsTranslate("TingmuStatus", backend.learningState.error || "") || qsTranslate("Tingmu", "正在形成学习笔记，完成后可切换到“笔记”阅读。");color:backend.learningState.error ? Theme.error : Theme.muted;font.family:Theme.font;font.pixelSize:12;wrapMode:Text.Wrap}
     }
     AppDialog{
         id:noteDialog;objectName:"collectionNoteDialog";parent:Overlay.overlay;anchors.centerIn:parent;title:qsTranslate("Tingmu", "词句备注");width:Math.min(520,parent ? parent.width-32 : 520);height:Math.min(390,parent ? parent.height-32 : 390);modal:true
@@ -80,7 +80,7 @@ Item {
             spacing:12
             Text{Layout.fillWidth:true;text:root.editingEntry.text || root.editingEntry.sentence || "";textFormat:Text.PlainText;color:Theme.text;font.family:Theme.font;font.pixelSize:17;wrapMode:Text.Wrap}
             ScrollView{Layout.fillWidth:true;Layout.fillHeight:true;clip:true;TextArea{id:entryNote;objectName:"collectionEntryNote";placeholderText:qsTranslate("Tingmu", "记下联想、疑问、母语对比或自己的例句…");color:Theme.text;placeholderTextColor:Theme.muted;font.family:Theme.font;font.pixelSize:14;wrapMode:TextArea.Wrap;selectByMouse:true;background:Rectangle{color:Theme.bg;border.color:Theme.line;radius:6}}}
-            Text{Layout.fillWidth:true;visible:!!backend.state.error;text:qsTranslate("TingmuStatus", backend.state.error || "") || "";color:Theme.error;font.family:Theme.font;font.pixelSize:12;wrapMode:Text.Wrap}
+            Text{Layout.fillWidth:true;visible:!!backend.learningState.error;text:qsTranslate("TingmuStatus", backend.learningState.error || "") || "";color:Theme.error;font.family:Theme.font;font.pixelSize:12;wrapMode:Text.Wrap}
             RowLayout{Layout.alignment:Qt.AlignRight;TButton{text:qsTranslate("Tingmu", "取消");quiet:true;onClicked:noteDialog.close()}TButton{objectName:"saveCollectionEntryNote";text:qsTranslate("Tingmu", "保存备注");primary:true;onClicked:backend.command("updateEntryNote",{id:root.editingEntry.id,note:entryNote.text,revision:root.editingEntry.note_revision || ""})}}
         }
     }

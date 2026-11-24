@@ -10,6 +10,7 @@ import math
 from pathlib import Path
 import re
 import uuid
+from types import MappingProxyType
 
 from .models import Token
 from .providers import RequestCancelled
@@ -90,6 +91,24 @@ SUBTITLE_ACTIONS = frozenset({"read_current_subtitle", "revise_current_subtitle"
 UI_ACTIONS = frozenset(name for name, *_ in _DEFINITIONS[:10]) | SUBTITLE_ACTIONS | WORKSPACE_ACTIONS
 
 
+# Only these explicitly registered learning handlers can run after schema validation.
+LEARNING_ACTION_HANDLERS = MappingProxyType({
+    'list_collections': '_handle_list_collections',
+    'read_notebook': '_handle_read_notebook',
+    'collect_current_word': '_handle_collect_current',
+    'collect_current_sentence': '_handle_collect_current',
+    'organize_notebook': '_handle_organize_notebook',
+    'append_learning_note': '_handle_append_note',
+    'save_notebook': '_handle_save_notebook',
+    'update_learning_note': '_handle_modify_note',
+    'delete_learning_note': '_handle_modify_note',
+    'update_collection': '_handle_collection',
+    'delete_collection': '_handle_collection',
+    'review_collection': '_handle_collection',
+    'practice_words': '_handle_practice',
+})
+
+
 def action_tools():
     return [{"type": "function", "function": {"name": name, "description": description,
              "parameters": {"type": "object", "properties": deepcopy(props), "required": required,
@@ -162,6 +181,9 @@ class AppActionExecutor:
         self._word_prompts = frozenset(word_prompts)
         self._subtitle_revision = ""
         self._schemas = {t["function"]["name"]: t["function"]["parameters"] for t in action_tools()}
+        self._learning_handlers = MappingProxyType({
+            name: getattr(self, method) for name, method in LEARNING_ACTION_HANDLERS.items()
+        })
 
     def _check(self):
         if self.cancelled and self.cancelled():
@@ -224,107 +246,120 @@ class AppActionExecutor:
         return result
 
     def _learning_action(self, name, args, target):
-        context = self.context
-        if name == "list_collections":
-            rows = self.notebooks.snapshot(target).get("collections", [])
-            state = args.get("organized", "all")
-            rows = [r for r in rows if state == "all" or bool(r.get("organized")) == (state == "yes")]
-            query = args.get("query", "").strip().casefold()
-            if query:
-                rows = [r for r in rows if query in " ".join(str(r.get(k, "")) for k in ("text", "sentence", "note", "entry_note")).casefold()]
-            offset, limit = args.get("offset", 0), args.get("limit", 20)
-            page = rows[offset:offset+limit]
-            self._seen_entries.update(r["id"] for r in page)
-            keys = ("id", "text", "reading", "meaning", "sentence", "note", "entry_note", "note_revision", "organized")
-            return {"language": target, "items": [{k: r.get(k) for k in keys} for r in page], "total": len(rows), "offset": offset, "has_more": offset + limit < len(rows), "truncated": offset + limit < len(rows)}
-        if name == "read_notebook":
-            snap = self.notebooks.snapshot(target)
-            text = snap.get("markdown", "")
-            offset, limit = args.get("offset", 0), args.get("limit", 18000)
-            if self._read_revision != snap["revision"]:
-                self._read_revision, self._read_ranges = snap["revision"], []
-            result = {"language": target, "markdown": text[offset:offset+limit], "revision": snap["revision"],
-                      "offset": offset, "total_characters": len(text), "has_more": offset+limit < len(text),
-                      "notes": [{k: n.get(k) for k in ("id", "title", "entry_ids")} for n in snap.get("notes", [])[:100]]}
-            # Stay below CompanionAgent's encoded-result cap before recording
-            # read coverage; an error substituted there must never count as read.
-            while len(json.dumps(result, ensure_ascii=False)) > 30000:
-                if result["notes"]:
-                    result["notes"].pop()
-                elif result["markdown"]:
-                    result["markdown"] = result["markdown"][:len(result["markdown"]) // 2]
-                else:
-                    raise ActionError("笔记读取结果过长，请缩小范围。", "result_too_large")
-            end = min(len(text), offset + len(result["markdown"]))
-            result["end"] = end
-            result["has_more"] = end < len(text)
-            result["notes_truncated"] = len(result["notes"]) < len(snap.get("notes", []))
-            self._read_ranges.append((offset, end))
-            return result
-        if name in ("collect_current_word", "collect_current_sentence"):
-            cue = context.cue
-            if cue is None or not context.media_path:
-                raise ActionError("本次请求没有可收藏的原句。", "missing_context")
-            self._check()
-            if name == "collect_current_word":
-                text = args["text"]
-                if not text.strip() or text not in cue.text:
-                    raise ActionError("收藏文字必须确实来自本次请求的原句。", "scope_mismatch")
-                token = next((t for t in cue.tokens if t.text == text), Token(text))
-                identity = (context.workspace_id, context.session_id, target, context.media_path,
-                            cue.id, cue.text, text)
-                prompt = hashlib.sha256(json.dumps(identity, ensure_ascii=False).encode("utf-8")).hexdigest()
-                confirmed = args.get("confirm_recollection", False) and prompt in self._word_prompts
-                outcome = self.notebooks.collect_word(context.media_path, cue, token, context.language,
-                                                      confirm=confirmed)
-                if outcome == "confirm":
-                    return {"saved": False, "confirmation_required": True, "word_prompt": prompt,
-                            "message": "这个词已整理。请问用户是否要再次收藏并保留本句出处。"}
-                return {"saved": True, "language": target, "organized": False, "collection_status": outcome,
-                        "message": {"collected": "已加入收藏夹。", "pending": "这个词在本句中已经收藏。",
-                                    "pending_source": "这个词已经收藏，已收下本句的新出处。",
-                                    "referenced": "已再次加入待整理收藏，单词本已关联本句出处。"}[outcome]}
-            self.store.save_note(context.media_path, cue, args.get("note", ""), context.language)
-            return {"saved": True, "language": target, "organized": False}
-        if name == "organize_notebook":
-            result = self.notebooks.organize(target, self.tutor, source_language=context.language.source,
-                                             cancelled=self.cancelled, instructions=args.get("instructions", ""), entry_ids=args.get("entry_ids"))
-            return {"saved": True, "language": target, "stats": result.get("stats", {}), "revision": result["revision"]}
-        if name == "append_learning_note":
-            self._check()
-            result = self.notebooks.append_note(target, args.get("title", "伴侣补充"), args["text"], entry_ids=args.get("entry_ids"))
-            return {"saved": True, "language": target, "revision": result["revision"]}
-        if name == "save_notebook":
-            self._require_complete_read(target, args["revision"])
-            self._check()
-            result = self.notebooks.save(target, args["markdown"], args["revision"])
-            return {"saved": True, "revision": result["revision"], "language": target}
-        if name in ("update_learning_note", "delete_learning_note"):
-            self._require_complete_read(target, args["revision"])
-            self._check()
-            if name == "update_learning_note":
-                result = self.notebooks.update_note(target, args["note_id"], args["title"], args["text"], args["revision"])
+        handler = self._learning_handlers.get(name)
+        if handler is None:
+            raise ActionError("未实现的应用操作。", "unknown_action")
+        return handler(name, args, target)
+
+    def _handle_list_collections(self, name, args, target):
+        rows = self.notebooks.snapshot(target).get("collections", [])
+        state = args.get("organized", "all")
+        rows = [r for r in rows if state == "all" or bool(r.get("organized")) == (state == "yes")]
+        query = args.get("query", "").strip().casefold()
+        if query:
+            rows = [r for r in rows if query in " ".join(str(r.get(k, "")) for k in ("text", "sentence", "note", "entry_note")).casefold()]
+        offset, limit = args.get("offset", 0), args.get("limit", 20)
+        page = rows[offset:offset+limit]
+        self._seen_entries.update(r["id"] for r in page)
+        keys = ("id", "text", "reading", "meaning", "sentence", "note", "entry_note", "note_revision", "organized")
+        return {"language": target, "items": [{k: r.get(k) for k in keys} for r in page], "total": len(rows), "offset": offset, "has_more": offset + limit < len(rows), "truncated": offset + limit < len(rows)}
+
+    def _handle_read_notebook(self, name, args, target):
+        snap = self.notebooks.snapshot(target)
+        text = snap.get("markdown", "")
+        offset, limit = args.get("offset", 0), args.get("limit", 18000)
+        if self._read_revision != snap["revision"]:
+            self._read_revision, self._read_ranges = snap["revision"], []
+        result = {"language": target, "markdown": text[offset:offset+limit], "revision": snap["revision"],
+                  "offset": offset, "total_characters": len(text), "has_more": offset+limit < len(text),
+                  "notes": [{k: n.get(k) for k in ("id", "title", "entry_ids")} for n in snap.get("notes", [])[:100]]}
+        # Stay below CompanionAgent's encoded-result cap before recording
+        # read coverage; an error substituted there must never count as read.
+        while len(json.dumps(result, ensure_ascii=False)) > 30000:
+            if result["notes"]:
+                result["notes"].pop()
+            elif result["markdown"]:
+                result["markdown"] = result["markdown"][:len(result["markdown"]) // 2]
             else:
-                result = self.notebooks.delete_note(target, args["note_id"], args["revision"])
-            return {"saved": True, "deleted": name == "delete_learning_note", "revision": result["revision"], "language": target}
-        if name in ("update_collection", "delete_collection", "review_collection"):
-            entry = self._collection(args["entry_id"])
-            self._check()
-            if name == "update_collection":
-                result = self.notebooks.update_entry_note(entry["id"], args["note"], args["revision"], target_language=target)
-                return {"saved": True, "id": entry["id"], "note_revision": result["note_revision"], "language": target}
-            if name == "review_collection":
-                result = self.notebooks.review(entry["id"], args["rating"])
-                return {"saved": True, "id": entry["id"], "rating": args["rating"], "language": target}
-            if entry["id"] not in self._seen_entries:
-                raise ActionError("请先列出并确认要删除的收藏。", "unobserved_target")
-            backup = Path(self.store.data_dir) / "backups" / "agent-actions" / (uuid.uuid4().hex + ".json")
-            backup.parent.mkdir(parents=True, exist_ok=True)
-            backup.write_text(json.dumps({"saved_at": datetime.now(timezone.utc).isoformat(), "entry": entry}, ensure_ascii=False), encoding="utf-8")
-            self._check()
-            self.store.delete_entry(entry["id"])
-            return {"deleted": True, "id": entry["id"], "backup_created": True, "language": target}
-        if name == "practice_words":
-            keys = ("id", "entry_id", "text", "reading", "meaning", "sentence", "note", "question", "answer")
-            return {"language": target, "items": [{k: row.get(k) for k in keys} for row in self.notebooks.practice(target)[:20]]}
-        raise ActionError("未实现的应用操作。", "unknown_action")
+                raise ActionError("笔记读取结果过长，请缩小范围。", "result_too_large")
+        end = min(len(text), offset + len(result["markdown"]))
+        result["end"] = end
+        result["has_more"] = end < len(text)
+        result["notes_truncated"] = len(result["notes"]) < len(snap.get("notes", []))
+        self._read_ranges.append((offset, end))
+        return result
+
+    def _handle_collect_current(self, name, args, target):
+        context = self.context
+        cue = context.cue
+        if cue is None or not context.media_path:
+            raise ActionError("本次请求没有可收藏的原句。", "missing_context")
+        self._check()
+        if name == "collect_current_word":
+            text = args["text"]
+            if not text.strip() or text not in cue.text:
+                raise ActionError("收藏文字必须确实来自本次请求的原句。", "scope_mismatch")
+            token = next((t for t in cue.tokens if t.text == text), Token(text))
+            identity = (context.workspace_id, context.session_id, target, context.media_path,
+                        cue.id, cue.text, text)
+            prompt = hashlib.sha256(json.dumps(identity, ensure_ascii=False).encode("utf-8")).hexdigest()
+            confirmed = args.get("confirm_recollection", False) and prompt in self._word_prompts
+            outcome = self.notebooks.collect_word(context.media_path, cue, token, context.language,
+                                                  confirm=confirmed)
+            if outcome == "confirm":
+                return {"saved": False, "confirmation_required": True, "word_prompt": prompt,
+                        "message": "这个词已整理。请问用户是否要再次收藏并保留本句出处。"}
+            return {"saved": True, "language": target, "organized": False, "collection_status": outcome,
+                    "message": {"collected": "已加入收藏夹。", "pending": "这个词在本句中已经收藏。",
+                                "pending_source": "这个词已经收藏，已收下本句的新出处。",
+                                "referenced": "已再次加入待整理收藏，单词本已关联本句出处。"}[outcome]}
+        self.store.save_note(context.media_path, cue, args.get("note", ""), context.language)
+        return {"saved": True, "language": target, "organized": False}
+
+    def _handle_organize_notebook(self, name, args, target):
+        context = self.context
+        result = self.notebooks.organize(target, self.tutor, source_language=context.language.source,
+                                         cancelled=self.cancelled, instructions=args.get("instructions", ""), entry_ids=args.get("entry_ids"))
+        return {"saved": True, "language": target, "stats": result.get("stats", {}), "revision": result["revision"]}
+
+    def _handle_append_note(self, name, args, target):
+        self._check()
+        result = self.notebooks.append_note(target, args.get("title", "伴侣补充"), args["text"], entry_ids=args.get("entry_ids"))
+        return {"saved": True, "language": target, "revision": result["revision"]}
+
+    def _handle_save_notebook(self, name, args, target):
+        self._require_complete_read(target, args["revision"])
+        self._check()
+        result = self.notebooks.save(target, args["markdown"], args["revision"])
+        return {"saved": True, "revision": result["revision"], "language": target}
+
+    def _handle_modify_note(self, name, args, target):
+        self._require_complete_read(target, args["revision"])
+        self._check()
+        if name == "update_learning_note":
+            result = self.notebooks.update_note(target, args["note_id"], args["title"], args["text"], args["revision"])
+        else:
+            result = self.notebooks.delete_note(target, args["note_id"], args["revision"])
+        return {"saved": True, "deleted": name == "delete_learning_note", "revision": result["revision"], "language": target}
+
+    def _handle_collection(self, name, args, target):
+        entry = self._collection(args["entry_id"])
+        self._check()
+        if name == "update_collection":
+            result = self.notebooks.update_entry_note(entry["id"], args["note"], args["revision"], target_language=target)
+            return {"saved": True, "id": entry["id"], "note_revision": result["note_revision"], "language": target}
+        if name == "review_collection":
+            result = self.notebooks.review(entry["id"], args["rating"])
+            return {"saved": True, "id": entry["id"], "rating": args["rating"], "language": target}
+        if entry["id"] not in self._seen_entries:
+            raise ActionError("请先列出并确认要删除的收藏。", "unobserved_target")
+        backup = Path(self.store.data_dir) / "backups" / "agent-actions" / (uuid.uuid4().hex + ".json")
+        backup.parent.mkdir(parents=True, exist_ok=True)
+        backup.write_text(json.dumps({"saved_at": datetime.now(timezone.utc).isoformat(), "entry": entry}, ensure_ascii=False), encoding="utf-8")
+        self._check()
+        self.store.delete_entry(entry["id"])
+        return {"deleted": True, "id": entry["id"], "backup_created": True, "language": target}
+
+    def _handle_practice(self, name, args, target):
+        keys = ("id", "entry_id", "text", "reading", "meaning", "sentence", "note", "question", "answer")
+        return {"language": target, "items": [{k: row.get(k) for k in keys} for row in self.notebooks.practice(target)[:20]]}

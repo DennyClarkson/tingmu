@@ -95,7 +95,7 @@ ColumnLayout {
         Choice {
             Layout.fillWidth: true
             visible: count > 0
-            model: backend.state.speechModelChoices || []
+            model: backend.workspaceState.speechModelChoices || []
             currentIndex: model.indexOf(backend.settings[root.modelKey])
             displayText: currentIndex < 0 ? qsTranslate("Tingmu", "选择支持转写的模型") : currentText
             onActivated: backend.setting(root.modelKey, currentText)

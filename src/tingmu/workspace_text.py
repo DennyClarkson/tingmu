@@ -1,10 +1,10 @@
 """Reuse the assigned text connections without exposing protected credentials to the Agent."""
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
+from typing import Callable
 import hashlib
 import json
 from urllib.parse import urlsplit
-import uuid
 
 from .agent import provider_status
 from .providers import ModelRegistry, loopback_url
@@ -80,64 +80,84 @@ def enable_global_text(directory, source_settings, target_settings, *, allow_rem
     return _public(rows)
 
 
+def assignments(directory, settings, *, include_disabled=False):
+    """Snapshot assignments through the retained legacy lookup hook."""
+    return _assignments(directory, settings, include_disabled=include_disabled)
+
+
+def public_roles(rows):
+    return _public(rows)
+
+
+def roles_signature(rows):
+    return _digest(rows)
+
+
+def target_text_signature(store, settings):
+    keys = ["cloud_text_enabled", "text_models_enabled", "review_enabled"]
+    for role, (provider, model, _) in _ROLES.items():
+        keys.extend([role + "_profile_id", provider, model])
+    registry = ModelRegistry(store.data_dir)
+    return _digest([[getattr(settings, key) for key in keys], registry._read()])
+
+
+@dataclass(frozen=True)
+class _LegacyTextSetupPorts:
+    """Closed adapter for the historical workspace-controller extension points."""
+
+    bridge: object
+    changed: object
+    store_for: Callable
+    settings_for: Callable
+    save_settings: Callable
+    workspace_public: Callable
+
+
 class TextSetupMixin:
+    """Deprecated import adapter; new controllers compose TextSetupService.
+
+    Only the former controller hooks are adapted. The service uses public
+    settings and chat ports and never reaches into private application state.
+    """
+
     def _text_setup_init(self):
-        self.text_proposal = {}
-        self._text_bindings = ()
+        from .quick.workspace_text import TextSetupService
+
+        ports = _LegacyTextSetupPorts(
+            bridge=self.bridge,
+            changed=self.changed,
+            store_for=lambda workspace_id: self._store(workspace_id),
+            settings_for=lambda workspace_id: self._settings_for(workspace_id),
+            save_settings=lambda workspace_id, settings: self._save_settings(workspace_id, settings),
+            workspace_public=lambda workspace_id: self._workspace_public(workspace_id),
+        )
+        self._legacy_text_setup = TextSetupService(ports)
+
+    @property
+    def text_proposal(self):
+        return self._legacy_text_setup.proposal
+
+    @text_proposal.setter
+    def text_proposal(self, value):
+        self._legacy_text_setup.proposal = value
+
+    @property
+    def _text_bindings(self):
+        return self._legacy_text_setup.bindings
+
+    @_text_bindings.setter
+    def _text_bindings(self, value):
+        self._legacy_text_setup.bindings = value
 
     def _text_setup_pending(self):
-        return self.text_proposal.get("status") == "pending"
+        return self._legacy_text_setup.pending()
 
     def propose_text_models(self, workspace_id, context):
-        destination = self._store(workspace_id)
-        source = self.bridge._settings
-        target = self._settings_for(workspace_id)
-        rows = _assignments(self.bridge.store.data_dir, source, include_disabled=True)
-        if target.text_models_enabled and target.cloud_text_enabled:
-            return {"applied": True, "roles": _public(_assignments(destination.data_dir, target))}
-        public = _public(rows)
-        if not any(not row["local"] for row in rows.values()):
-            applied = enable_global_text(self.bridge.store.data_dir, source, target)
-            if applied:
-                self._save_settings(workspace_id, target)
-            return {"applied": bool(applied), "roles": applied, "requires_human_confirmation": False}
-        self._text_bindings = (_digest(rows), self._target_text_signature(destination, target))
-        self.text_proposal = {"id": uuid.uuid4().hex, "status": "pending", "workspace_id": workspace_id,
-                              "workspace_name": self._workspace_public(workspace_id)["name"],
-                              "origin_session_id": context.session_id, "roles": public}
-        self.changed.emit()
-        return {"applied": False, "requires_human_confirmation": True, "roles": public}
+        return self._legacy_text_setup.propose(workspace_id, context)
+
+    def decide_text_reuse(self, ident, approved):
+        return self._legacy_text_setup.decide(ident, approved)
 
     @staticmethod
     def _target_text_signature(store, settings):
-        keys = ["cloud_text_enabled", "text_models_enabled", "review_enabled"]
-        for role, (provider, model, _) in _ROLES.items():
-            keys.extend([role + "_profile_id", provider, model])
-        registry = ModelRegistry(store.data_dir)
-        return _digest([[getattr(settings, key) for key in keys], registry._read()])
-
-    def decide_text_reuse(self, ident, approved):
-        p = self.text_proposal
-        if p.get("id") != ident or not self._text_setup_pending():
-            return False
-        try:
-            if not approved:
-                p["status"] = "declined"
-                return True
-            if self.bridge._active_session_id != p["origin_session_id"]:
-                raise ValueError("请在提出方案的原会话重新确认。")
-            dest = self._store(p["workspace_id"])
-            settings = self._settings_for(p["workspace_id"])
-            expected, previous = self._text_bindings
-            if previous != self._target_text_signature(dest, settings):
-                raise ValueError("目标工作区的文本连接已变更，请重新选择。")
-            enable_global_text(self.bridge.store.data_dir, self.bridge._settings, settings,
-                                    allow_remote=True, expected_source=expected)
-            self._save_settings(p["workspace_id"], settings)
-            p["status"] = "ready"
-            return True
-        except (ValueError, RuntimeError, OSError) as exc:
-            p.update(status="failed", error=str(exc))
-            return False
-        finally:
-            self.changed.emit()
+        return target_text_signature(store, settings)
