@@ -15,17 +15,27 @@ Rectangle {
     onMessageDataChanged:{observedAt=Date.now();now=observedAt}
     Timer{interval:250;repeat:true;running:root.thinking;onTriggered:root.now=Date.now()}
     implicitHeight:body.implicitHeight+16
-    color:Theme.bg;radius:8;border.color:Theme.line
+    color:Theme.surfaceElevated;radius:Theme.radiusMd;border.color:Theme.line
     ColumnLayout {
         id:body
         anchors.fill:parent;anchors.margins:8;spacing:8
         RowLayout {
             Layout.fillWidth:true;spacing:4
             TButton{objectName:"toggleChatReasoning";Layout.fillWidth:true;quiet:true;implicitHeight:30;text:(root.expanded ? "▾ " : "▸ ")+(root.messageData.reasoning_kind==="summary" ? qsTranslate("Tingmu", "思考摘要") : qsTranslate("Tingmu", "思考过程"))+" · "+root.elapsedSeconds+qsTranslate("Tingmu", " 秒");onClicked:root.toggleRequested()}
-            TButton{objectName:"copyChatReasoning";text:qsTranslate("Tingmu", "复制");quiet:true;implicitHeight:30;onClicked:backend.command("copyText",{text:root.messageData.reasoning_text || ""})}
+            TButton {
+                objectName: "copyChatReasoning"
+                text: reasoningCopied.running ? qsTranslate("Tingmu", "已复制") : qsTranslate("Tingmu", "复制")
+                quiet: true
+                implicitHeight: 30
+                onClicked: {
+                    backend.command("copyText", {text: root.messageData.reasoning_text || ""})
+                    reasoningCopied.restart()
+                }
+                Timer { id: reasoningCopied; interval: 1400 }
+            }
         }
         Text{objectName:"chatReasoningProgress";Layout.fillWidth:true;visible:root.thinking || root.stopping;text:root.stopping ? qsTranslate("Tingmu", "正在停止…等待当前连接结束") : qsTranslate("Tingmu", "思考中…");color:Theme.muted;font.family:Theme.font;font.pixelSize:11;wrapMode:Text.Wrap}
-        ScrollView {
+        AppScrollView {
             id:scroll;objectName:"chatReasoningScroll"
             visible:root.expanded;Layout.fillWidth:true;Layout.preferredHeight:Math.min(220,reasoningText.implicitHeight+8)
             clip:true;contentWidth:availableWidth

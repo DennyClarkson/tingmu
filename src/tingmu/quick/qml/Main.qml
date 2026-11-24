@@ -169,6 +169,7 @@ ApplicationWindow {
     ModelDownloadConsent { onConfirmationRequested: { app.raise(); app.requestActivate() } }
     AppDialog {
         id: activeDownload
+        objectName: "activeModelDownload"
         title: qsTranslate("Tingmu", "模型下载"); anchors.centerIn: parent; width: Math.min(430, app.width - 24)
         contentItem: ColumnLayout {
             DownloadProgress { Layout.fillWidth: true }
@@ -189,12 +190,12 @@ ApplicationWindow {
     Shortcut{sequence:"Ctrl+O";onActivated:backend.command("openFiles",{})}
     Shortcut{sequence:"Ctrl+Shift+O";onActivated:backend.command("openFolder",{})}
     header:Rectangle {
-        height:66;color:Theme.bg
+        height:62;color:Theme.bg
         RowLayout {
             anchors.fill:parent;anchors.leftMargin:app.width<1100 ? 10 : 20;anchors.rightMargin:anchors.leftMargin;spacing:app.width<1100 ? 6 : 14
             RowLayout {
                 spacing:10
-                Rectangle { width:26;height:26;radius:6;color:Theme.accent;Text { textFormat:Text.PlainText;anchors.centerIn:parent;text:qsTranslate("Tingmu", "听");color:Theme.bg;font.family:Theme.font;font.pixelSize:17;font.weight:Font.DemiBold} }
+                Rectangle { width:26;height:26;radius:6;color:Theme.accent;Text { textFormat:Text.PlainText;anchors.centerIn:parent;text:qsTranslate("Tingmu", "听");color:Theme.onAccent;font.family:Theme.font;font.pixelSize:17;font.weight:Font.DemiBold} }
                 Text { visible:app.width>=1100;textFormat:Text.PlainText;text:qsTranslate("Tingmu", "听幕");color:Theme.text;font.family:Theme.font;font.pixelSize:20;font.weight:Font.DemiBold}
             }
             WorkspacePicker {
@@ -217,13 +218,13 @@ ApplicationWindow {
                     Action{text:qsTranslate("Tingmu", "打开视频…    Ctrl+O");onTriggered:backend.command("openFiles",{})}
                     Action{text:qsTranslate("Tingmu", "添加多个视频…");onTriggered:backend.command("addFiles",{})}
                     Action{text:qsTranslate("Tingmu", "打开文件夹…    Ctrl+Shift+O");onTriggered:backend.command("openFolder",{})}
-                    MenuSeparator{}
+                    AppMenuSeparator {}
                     Action{text:qsTranslate("Tingmu", "导入播放字幕…");enabled:!!backend.mediaState.mediaPath;onTriggered:backend.command("importSubtitle",{})}
                     Action{text:backend.settings.preparation_workflow === "subtitle_agent" ? qsTranslate("Tingmu", "选择字幕并加入 Agent 队列…") : backend.cueCount ? qsTranslate("Tingmu", "从字幕替换学习文档…") : qsTranslate("Tingmu", "从字幕建立学习文档…");enabled:!!backend.mediaState.mediaPath;onTriggered:backend.command("importStudySubtitle",{})}
                     Action{text:qsTranslate("Tingmu", "导出字幕…");onTriggered:backend.command("exportSubtitle",{})}
                     Action{text:qsTranslate("Tingmu", "导出")+qsTranslate("TingmuLanguage", backend.lessonModel.language || "")+qsTranslate("Tingmu", "译稿…");enabled:!!backend.mediaState.lessonCounts && backend.mediaState.lessonCounts.total>0 && (backend.mediaState.lessonCounts.verified + (backend.mediaState.lessonCounts.provided || 0))===backend.mediaState.lessonCounts.total;onTriggered:backend.command("exportTranslation",{})}
                     Action{text:qsTranslate("Tingmu", "打开数据文件夹");onTriggered:backend.command("openDataFolder",{})}
-                    MenuSeparator{}
+                    AppMenuSeparator {}
                     Action{objectName:"globalTextModelsAction";text:qsTranslate("Tingmu", "全局文本模型…");onTriggered:app.openDialog("models",app,{})}
                     Action{objectName:"hideToTrayAction";text:qsTranslate("Tingmu", "收起到系统托盘");enabled:desktopTray.available;onTriggered:if(app.flushAllDrafts())desktopTray.hideToTray()}
                     Action{text:qsTranslate("Tingmu", "退出听幕");onTriggered:desktopTray.quitApplication()}
@@ -235,7 +236,7 @@ ApplicationWindow {
                     Action{text:qsTranslate("Tingmu", "下一句");onTriggered:backend.command("nextCue",{})}
                     Action{text:qsTranslate("Tingmu", "重听当前句");onTriggered:backend.command("repeatCue",{})}
                     Action{text:qsTranslate("Tingmu", "保存当前画面");enabled:!!backend.mediaState.mediaPath;onTriggered:backend.command("saveFrame",{})}
-                    MenuSeparator{}
+                    AppMenuSeparator {}
                     Action{text:qsTranslate("Tingmu", "上一个视频");onTriggered:backend.command("previousMedia",{})}
                     Action{text:qsTranslate("Tingmu", "下一个视频");onTriggered:backend.command("nextMedia",{})}
                     Action{text:qsTranslate("Tingmu", "全屏    F");onTriggered:if(playerDock.loadedItem)playerDock.loadedItem.toggleFullscreen()}
@@ -261,31 +262,49 @@ ApplicationWindow {
                             checked: interfaceLanguage.code === "en"; onTriggered: interfaceLanguage.select("en")
                         }
                     }
-                    MenuSeparator{}
+                    AppMenuSeparator {}
                     Action{text:qsTranslate("Tingmu", "学习布局");onTriggered:app.changeView("learn")}
                     Action{text:qsTranslate("Tingmu", "观看布局");onTriggered:app.changeView("watch")}
                     Action{text:qsTranslate("Tingmu", "准备布局");onTriggered:app.changeView("prepare")}
-                    MenuSeparator{}
+                    AppMenuSeparator {}
                     Action{text:qsTranslate("Tingmu", "浮动播放器");checkable:true;checked:playerDock.detached;onTriggered:app.openModule("player")}
                     Action{text:qsTranslate("Tingmu", "浮动学习伴侣");checkable:true;checked:companionDock.detached;onTriggered:app.openModule("companion")}
                     Action{text:qsTranslate("Tingmu", "浮动字幕列表");checkable:true;checked:subtitleDock.detached;onTriggered:app.openModule("subtitles")}
                     Action{text:qsTranslate("Tingmu", "独立聊天窗口");checkable:true;checked:chatDock.detached;onTriggered:app.openModule("chat")}
                     Action{text:qsTranslate("Tingmu", "浮动媒体库");checkable:true;checked:libraryDock.detached;onTriggered:app.openModule("library")}
                     Action{text:qsTranslate("Tingmu", "处理队列");checkable:true;checked:queueDock.detached;onTriggered:app.openModule("queue")}
-                    MenuSeparator{}
+                    AppMenuSeparator {}
                     Action{text:qsTranslate("Tingmu", "恢复默认布局");onTriggered:app.resetWorkspace()}
                 }
                 AppMenu {
                     title:qsTranslate("Tingmu", "帮助")
                     Action{text:qsTranslate("Tingmu", "使用与快捷键");onTriggered:helpDialog.open()}
                     Action{text:qsTranslate("Tingmu", "关于听幕");onTriggered:aboutDialog.open()}
-                    MenuSeparator{}
+                    AppMenuSeparator {}
                     Action{objectName:"developerModeAction";text:qsTranslate("Tingmu", "开发者模式");checkable:true;checked:!!backend.settings.developer_mode;onTriggered:backend.setting("developer_mode",checked)}
-                    MenuItem{objectName:"viewLogsAction";text:qsTranslate("Tingmu", "查看日志");visible:!!backend.settings.developer_mode;onTriggered:developerPanel.open()}
+                    MenuItem {
+                        id: logsItem
+                        objectName: "viewLogsAction"
+                        text: qsTranslate("Tingmu", "查看日志")
+                        visible: !!backend.settings.developer_mode
+                        height: visible ? implicitHeight : 0
+                        leftPadding: 32
+                        contentItem: Text {
+                            text: logsItem.text; font: logsItem.font
+                            color: logsItem.highlighted ? Theme.accent : Theme.text
+                            verticalAlignment: Text.AlignVCenter
+                        }
+                        background: Rectangle { color: logsItem.highlighted ? Theme.selection : Theme.transparent; radius: Theme.radiusSm }
+                        onTriggered: developerPanel.open()
+                    }
                 }
             }
             Item{Layout.fillWidth:true}
-            RowLayout {spacing:2;TButton{text:qsTranslate("Tingmu", "观看");quiet:true;checked:app.viewMode==="watch";onClicked:app.changeView("watch")}TButton{text:qsTranslate("Tingmu", "准备");quiet:true;checked:app.viewMode==="prepare";onClicked:app.changeView("prepare")}TButton{objectName:"learningViewButton";text:qsTranslate("Tingmu", "学习");quiet:true;checked:app.viewMode==="learn";onClicked:app.changeView("learn")}}
+            SegmentBar {
+                TButton { text:qsTranslate("Tingmu", "观看"); quiet:true; checked:app.viewMode==="watch"; onClicked:app.changeView("watch") }
+                TButton { text:qsTranslate("Tingmu", "准备"); quiet:true; checked:app.viewMode==="prepare"; onClicked:app.changeView("prepare") }
+                TButton { objectName:"learningViewButton"; text:qsTranslate("Tingmu", "学习"); quiet:true; checked:app.viewMode==="learn"; onClicked:app.changeView("learn") }
+            }
             Choice{objectName:"themeChoice";Layout.preferredWidth:88;translateOptions:true;model:["森林","纸页","薄雾","石墨"];property var values:["forest","paper","mist","graphite"];currentIndex:Math.max(0,values.indexOf(backend.settings.theme));onActivated:backend.setting("theme",values[currentIndex])}
             TButton{visible:app.width>=980;text:qsTranslate("Tingmu", "对话");quiet:true;onClicked:{chatDock.detached=true;chatDock.save()}}
             TButton{text:app.width>=950 ? qsTranslate("Tingmu", "打开视频") : "";tip:qsTranslate("Tingmu", "打开视频");iconSource:"arrow-up-right";primary:true;onClicked:backend.command("openFiles",{})}
@@ -336,6 +355,7 @@ ApplicationWindow {
     }
     footer:Rectangle {
         height:30;color:Theme.bg
+        Rectangle { anchors.top:parent.top; width:parent.width; height:1; color:Theme.line }
         RowLayout {
             anchors.fill:parent;anchors.leftMargin:20;anchors.rightMargin:20;spacing:9
             Rectangle{width:5;height:5;radius:3;color:backend.notificationState.error ? Theme.error : Theme.accent}
@@ -347,13 +367,13 @@ ApplicationWindow {
         }
     }
     AppDialog {
-        id:helpDialog;title:qsTranslate("Tingmu", "使用听幕");anchors.centerIn:parent;width:470;modal:true;standardButtons:Dialog.Close
-        background:Rectangle{color:Theme.panel;radius:10;border.color:Theme.line}
+        id:helpDialog;objectName:"helpDialog";title:qsTranslate("Tingmu", "使用听幕");anchors.centerIn:parent;width:470;modal:true;standardButtons:Dialog.Close
+
         contentItem:Text { textFormat:Text.PlainText;text:qsTranslate("Tingmu", "1. 添加视频或打开文件夹，点击文件开始播放。\n2. 勾选需要学习的视频，加入处理队列并开始。\n3. 点击字幕定位，点击伴侣里的词语收藏。\n\n拖动模块标题可弹出独立窗口；↙ 放回原位置。\n拖动模块间的细线，调整工作区比例。\n设置分别位于每个模块右上角的齿轮。\n\n空格　播放 / 暂停\n← / →　前后 5 秒\n↑ / ↓　上一句 / 下一句\nF　全屏　　Esc　退出全屏\nCtrl+O　打开视频\nCtrl+Enter　发送对话");color:Theme.text;font.family:Theme.font;font.pixelSize:13;wrapMode:Text.Wrap;lineHeight:1.4}
     }
     AppDialog {
-        id:aboutDialog;title:qsTranslate("Tingmu", "关于听幕");anchors.centerIn:parent;width:390;modal:true;standardButtons:Dialog.Close
-        background:Rectangle{color:Theme.panel;radius:10;border.color:Theme.line}
+        id:aboutDialog;objectName:"aboutDialog";title:qsTranslate("Tingmu", "关于听幕");anchors.centerIn:parent;width:390;modal:true;standardButtons:Dialog.Close
+
         contentItem:ColumnLayout{spacing:14;Text { textFormat:Text.PlainText;text:qsTranslate("Tingmu", "听幕");color:Theme.text;font.family:Theme.font;font.pixelSize:30}Text { textFormat:Text.PlainText;Layout.fillWidth:true;text:qsTranslate("Tingmu", "在故事里，听懂另一种语言。\n\n本地播放与识别，逐句阅读与收藏。\n文本模型的复核和解释仍需对照原声。");color:Theme.muted;font.family:Theme.font;font.pixelSize:13;wrapMode:Text.Wrap;lineHeight:1.4}Text { textFormat:Text.PlainText;text:"VERSION " + (backend.applicationState.version || "3");color:Theme.accent;font.family:Theme.mono;font.pixelSize:11}}
     }
 }

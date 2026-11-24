@@ -2,7 +2,7 @@ import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import "Style.js" as S
-ScrollView {
+AppScrollView {
     id: root
     property bool displayImported: true
     readonly property bool shown: visible && !!Window.window && Window.window.visible
@@ -53,7 +53,8 @@ ScrollView {
     function stateLabel(status, armed) {
         return armed ? qsTranslate("Tingmu", "再次点击确认") : status === "pending" ? qsTranslate("Tingmu", "已收藏") : status === "organized" ? qsTranslate("Tingmu", "已整理") : ""
     }
-    function stateColor(status) {
+    function stateColor(status, armed) {
+        if (armed) return Theme.warning
         return status === "organized" ? Theme.organizedWord : Theme.accent
     }
     onWordContextChanged: { clearConfirmation(); collectionMessage = "" }
@@ -96,27 +97,24 @@ ScrollView {
         width: root.availableWidth
         spacing: root.compact ? 8 : 10
         Item { Layout.preferredHeight: 1 }
-        RowLayout {
-            Layout.fillWidth:true
-            Text { textFormat:Text.PlainText; Layout.fillWidth:true; elide:Text.ElideRight
+        Text { textFormat:Text.PlainText; Layout.fillWidth:true; Layout.minimumWidth:0; elide:Text.ElideRight
                 text: root.cue.text ? S.time(root.cue.start*1000) + "  /  " + ((root.track === "embedded" ? qsTranslate("TingmuStatus", root.cue.trackName || "") : root.cue.trackName) || root.cue.speaker || qsTranslate("Tingmu", "当前句")) : root.emptyTitle
                 color:Theme.accent; font.family:Theme.font; font.pixelSize:11 }
-            TButton { objectName:"correctCompanionSubtitle"; text:qsTranslate("Tingmu", "纠正此句"); quiet:true; implicitHeight:28
-                visible:root.track==="learning"; onClicked:backend.requestDialog("correction",root,{cueId:root.cue.id}) }
-        }
         TextEdit {
             id:sourceText;objectName:"selectableCueText"
             onSelectedTextChanged:root.clearConfirmation()
             Accessible.name:qsTranslate("Tingmu", "当前字幕原文")
             Accessible.description:qsTranslate("Tingmu", "用鼠标选择原文，再点击收藏选中文字；也可直接收藏整句。")
-            Layout.fillWidth:true
+            Layout.fillWidth:true; Layout.minimumWidth:0
             text:root.cue.text || root.emptyMessage
             textFormat:TextEdit.PlainText;readOnly:true;selectByMouse:root.interactive;persistentSelection:true
             color:Theme.text;font.family:Theme.font;font.pixelSize:root.textSize
             wrapMode:TextEdit.Wrap;selectionColor:Theme.selection;selectedTextColor:Theme.text
         }
         Flow {
-            Layout.fillWidth:true;spacing:6;visible:!!root.cue.id
+            Layout.fillWidth:true;Layout.minimumWidth:0;spacing:4;visible:!!root.cue.id
+            TButton { objectName:"correctCompanionSubtitle"; text:qsTranslate("Tingmu", "纠正此句"); quiet:true; implicitHeight:28
+                visible:root.track==="learning"; onClicked:backend.requestDialog("correction",root,{cueId:root.cue.id}) }
             TButton {
                 objectName:"saveSelectionButton"; focusPolicy:Qt.TabFocus
                 property var pressedWord: null
@@ -125,7 +123,17 @@ ScrollView {
                 text:statusLabel || qsTranslate("Tingmu", "收藏选中文字"); quiet:true; implicitHeight:28
                 tip:qsTranslate("Tingmu", "收藏所选原文"); Accessible.name:qsTranslate("Tingmu", "收藏选中文字 ") + statusLabel
                 visible:root.interactive && root.track==="learning"; enabled:sourceText.selectedText.length>0
-                labelColor: statusLabel ? root.stateColor(collectionState) : Theme.text
+                labelColor: !statusLabel ? Theme.text : root.stateColor(collectionState, root.isArmed(sourceText.selectedText, -1))
+                checked: !!statusLabel
+                background: Rectangle {
+                    radius: Theme.radiusSm
+                    color: parent.down ? Theme.pressed : parent.hovered ? Theme.hover
+                         : root.isArmed(sourceText.selectedText, -1) ? Theme.warningSoft
+                         : parent.collectionState === "organized" ? Theme.organizedSoft
+                         : parent.collectionState === "pending" ? Theme.accentSoft : Theme.transparent
+                    border.width: parent.visualFocus ? 2 : 0
+                    border.color: Theme.accent
+                }
                 onPressed:pressedWord=root.captureWord(sourceText.selectedText, -1)
                 onCanceled:pressedWord=null
                 onClicked:{root.collectWord(pressedWord, root.captureWord(sourceText.selectedText, -1));pressedWord=null}
@@ -144,31 +152,60 @@ ScrollView {
         ColumnLayout {
             id:sentenceFeedbackSlot;Layout.fillWidth:true;visible:!!root.collectionMessage && !root.tokenFeedback
         }
-        LessonPreparation { showWhenReady:false }
         ColumnLayout {
-            Layout.fillWidth: true; spacing: 4
+            Layout.fillWidth: true; Layout.minimumWidth: 0; spacing: 4
             visible: root.showTranslation && !!root.cue.translation
-            Text { text: qsTranslate("TingmuLanguage", backend.lessonModel.language || "") + (root.cue.translationProvided ? qsTranslate("Tingmu", "译文 · 来自字幕") : root.cue.translationVerified ? qsTranslate("Tingmu", "译文 · 已复核") : qsTranslate("Tingmu", "译文 · 待复核")); color: Theme.muted; font.family: Theme.font; font.pixelSize: 11 }
+            Text { Layout.fillWidth: true; wrapMode:Text.Wrap; text: qsTranslate("TingmuLanguage", backend.lessonModel.language || "") + (root.cue.translationProvided ? qsTranslate("Tingmu", "译文 · 来自字幕") : root.cue.translationVerified ? qsTranslate("Tingmu", "译文 · 已复核") : qsTranslate("Tingmu", "译文 · 待复核")); color: Theme.muted; font.family: Theme.font; font.pixelSize: 11 }
             Text { objectName:"companionTranslation"; textFormat:Text.PlainText; Layout.fillWidth: true; text: root.cue.translation || ""; color: Theme.text; font.family: Theme.font; font.pixelSize: root.compact ? Math.max(12,root.textSize-5) : 14; wrapMode: Text.Wrap }
         }
-        ColumnLayout {
-            Layout.fillWidth: true; spacing: 4
+        Rectangle {
+            Layout.fillWidth: true
+            Layout.minimumWidth: 0
             visible: root.showExplanation && !!root.cue.explanation
-            Text { text:qsTranslate("Tingmu", "逐句讲解"); color: Theme.accent; font.family: Theme.font; font.pixelSize: 11 }
-            Text { objectName:"companionExplanation"; textFormat:Text.PlainText; Layout.fillWidth: true; text: root.cue.explanation || ""; color: Theme.text; font.family: Theme.font; font.pixelSize: root.compact ? Math.max(12,root.textSize-6) : 13; wrapMode: Text.Wrap; lineHeight:1.15 }
+            implicitHeight: annotation.implicitHeight + 16
+            color: Theme.accentSoft
+            radius: Theme.radiusSm
+            ColumnLayout {
+                id: annotation
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.top: parent.top
+                anchors.margins: 8
+                spacing: 4
+                Text {
+                    text: qsTranslate("Tingmu", "逐句讲解")
+                    color: Theme.accent
+                    font.family: Theme.font
+                    font.pixelSize: 11
+                    font.weight: Font.DemiBold
+                }
+                Text {
+                    objectName: "companionExplanation"
+                    Layout.fillWidth: true
+                    Layout.minimumWidth: 0
+                    text: root.cue.explanation || ""
+                    textFormat: Text.PlainText
+                    wrapMode: Text.Wrap
+                    color: Theme.text
+                    font.family: Theme.font
+                    font.pixelSize: root.compact ? Math.max(12, root.textSize - 6) : 13
+                    lineHeight: 1.2
+                }
+            }
         }
         Text { textFormat:Text.PlainText;
             Layout.fillWidth: true
+            objectName: "companionReading"
             visible: root.showReading && !!root.cue.reading
             text: root.cue.reading || ""
             color: Theme.accent; font.family: Theme.font; font.pixelSize: Math.max(12,root.textSize-7); wrapMode: Text.Wrap
         }
         Flow {
-            Layout.fillWidth: true; spacing: 6
+            Layout.fillWidth: true; Layout.minimumWidth: 0; spacing: 6
             visible: root.interactive && !!root.cue.tokens && root.cue.tokens.length > 0
             Repeater {
                 model: root.interactive ? root.cue.tokens || [] : []
-                delegate: Button {
+                delegate: TButton {
                     id: tokenCard
                     required property var modelData
                     required property int index
@@ -176,17 +213,20 @@ ScrollView {
                     property var pressedWord: null
                     readonly property string collectionState: root.wordStates[modelData.text] || "unsaved"
                     readonly property string statusLabel: root.stateLabel(collectionState, root.isArmed(modelData.text, index))
-                    readonly property color ink: root.stateColor(collectionState)
-                    width: Math.min(root.availableWidth,Math.max(48,wordMeasure.advanceWidth+18,statusMeasure.advanceWidth+18,root.showReading ? readingMeasure.advanceWidth+18 : 0))
+                    readonly property bool confirming: root.isArmed(modelData.text, index)
+                    readonly property color ink: root.stateColor(collectionState, confirming)
+                    width: Math.min(root.availableWidth,Math.max(48,wordMeasure.advanceWidth+18,statusMeasure.advanceWidth+32,root.showReading ? readingMeasure.advanceWidth+18 : 0))
                     height: tokenColumn.implicitHeight + 14; padding:7; hoverEnabled:true
                     Accessible.name:modelData.text + (statusLabel ? "，" + statusLabel : qsTranslate("Tingmu", "，收藏词语"))
-                    Accessible.description:tokenCard.ToolTip.text
+                    Accessible.description:wordTip.text
                     background:Rectangle {
-                        radius:5
-                        color:tokenCard.collectionState === "unsaved" ? (tokenCard.hovered ? Theme.hover : Theme.raised)
-                            : Qt.tint(Theme.panel, Qt.rgba(tokenCard.ink.r, tokenCard.ink.g, tokenCard.ink.b, tokenCard.hovered ? 0.18 : 0.13))
-                        border.width:tokenCard.visualFocus ? 2 : tokenCard.collectionState === "unsaved" ? 0 : 1
-                        border.color:tokenCard.ink
+                        radius: Theme.radiusSm
+                        color: tokenCard.down ? Theme.pressed : tokenCard.hovered ? Theme.hover
+                             : tokenCard.confirming ? Theme.warningSoft : tokenCard.collectionState === "organized"
+                             ? Theme.organizedSoft : tokenCard.collectionState === "pending" ? Theme.accentSoft : Theme.raised
+                        border.width: tokenCard.visualFocus ? 2 : 1
+                        border.color: tokenCard.visualFocus || tokenCard.hovered ? Theme.accent
+                                    : tokenCard.collectionState === "unsaved" ? Theme.line : tokenCard.ink
                     }
                     TextMetrics{id:wordMeasure;text:tokenCard.modelData.text || "";font.family:Theme.font;font.pixelSize:16}
                     TextMetrics{id:readingMeasure;text:tokenCard.modelData.reading || "";font.family:Theme.font;font.pixelSize:10}
@@ -195,17 +235,25 @@ ScrollView {
                         id: tokenColumn; spacing:3
                         Text { textFormat:Text.PlainText; width:parent.width;horizontalAlignment:Text.AlignHCenter;wrapMode:Text.WrapAnywhere; text: tokenCard.modelData.text || ""; color: tokenCard.collectionState === "unsaved" ? Theme.text : tokenCard.ink; font.family: Theme.font; font.pixelSize: 16 }
                         Text { textFormat:Text.PlainText; visible: root.showReading && text.length>0; width:parent.width;horizontalAlignment:Text.AlignHCenter;wrapMode:Text.WrapAnywhere; text: tokenCard.modelData.reading || ""; color: Theme.accent; font.family: Theme.font; font.pixelSize: 10 }
-                        Text { text:tokenCard.statusLabel; visible:!!text; width:parent.width;horizontalAlignment:Text.AlignHCenter;color:tokenCard.ink;font.family:Theme.font;font.pixelSize:10 }
+                        StatusBadge {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            visible: !!tokenCard.statusLabel
+                            width: Math.min(parent.width, implicitWidth)
+                            text: tokenCard.statusLabel
+                            tone: tokenCard.confirming ? "warning" : tokenCard.collectionState === "organized" ? "organized" : "accent"
+                        }
                     }
-                    HoverHandler { cursorShape:Qt.PointingHandCursor }
                     onPressed:pressedWord=root.captureWord(modelData.text, index)
                     onCanceled:pressedWord=null
                     onClicked:{root.collectWord(pressedWord, root.captureWord(modelData.text, index));pressedWord=null}
-                    ToolTip.visible: hovered
-                    ToolTip.delay: 600
-                    ToolTip.text: (modelData.meaning ? modelData.meaning + "\n" : "")
-                        + (collectionState === "organized" ? qsTranslate("Tingmu", "已整理，再次收藏可关联本句出处")
-                            : collectionState === "pending" ? qsTranslate("Tingmu", "已收藏，待整理") : qsTranslate("Tingmu", "点击收藏词语"))
+                    AppToolTip {
+                        id: wordTip
+                        visible: tokenCard.hovered
+                        delay: 600
+                        text: (tokenCard.modelData.meaning ? tokenCard.modelData.meaning + "\n" : "")
+                        + (tokenCard.collectionState === "organized" ? qsTranslate("Tingmu", "已整理，再次收藏可关联本句出处")
+                            : tokenCard.collectionState === "pending" ? qsTranslate("Tingmu", "已收藏，待整理") : qsTranslate("Tingmu", "点击收藏词语"))
+                    }
                 }
             }
         }
@@ -219,6 +267,7 @@ ScrollView {
             }
         }
         Text { textFormat:Text.PlainText; visible: !!root.cue.uncertain && !root.compact; Layout.fillWidth: true; text: qsTranslate("Tingmu", "文本复核仍有疑点，可对照原声确认。"); color: Theme.muted; font.family: Theme.font; font.pixelSize: 10; wrapMode: Text.Wrap }
+        LessonPreparation { Layout.minimumWidth: 0; showWhenReady: false }
         Item { Layout.preferredHeight: 8 }
     }
 }

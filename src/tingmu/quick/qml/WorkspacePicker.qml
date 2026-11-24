@@ -49,9 +49,9 @@ Button {
                 id: list; objectName: "workspacePickerList"
                 model: picker.info.items; Layout.fillWidth: true
                 Layout.preferredHeight: Math.min(contentHeight, 230); clip: true
-                ScrollBar.vertical: ScrollBar {}
+                ScrollBar.vertical: AppScrollBar {}
                 delegate: WorkspaceRow {
-                    width: list.width; currentWorkspace: modelData.id === picker.info.id
+                    width: Math.max(0,list.width-10); currentWorkspace: modelData.id === picker.info.id
                     onClicked: {
                         if (modelData.id === picker.info.id || workspaces.action("switch", {id: modelData.id})) menu.close()
                     }

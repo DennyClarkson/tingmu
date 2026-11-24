@@ -97,7 +97,7 @@ AppDialog {
         wrapMode: Text.Wrap; textFormat: Text.PlainText
     }
     component SectionTitle: Text {
-        Layout.fillWidth: true; color: Theme.text; font.family: Theme.font; font.pixelSize: 16
+        Layout.fillWidth: true; color: Theme.text; font.family: Theme.serif; font.pixelSize: 19
         font.weight: Font.DemiBold; textFormat: Text.PlainText
     }
     contentItem: ColumnLayout {
@@ -105,14 +105,15 @@ AppDialog {
         RowLayout {
             Layout.fillHeight: true; Layout.fillWidth: true; spacing: 20
             ColumnLayout {
-                Layout.preferredWidth: 176; Layout.fillHeight: true; spacing: 8
+                Layout.preferredWidth: 182; Layout.minimumWidth: 162; Layout.fillHeight: true; spacing: 8
                 SectionTitle { text: qsTranslate("Tingmu", "我的工作区") }
                 ListView {
                     Layout.fillWidth: true; Layout.fillHeight: true
                     clip: true; spacing: 4
+                    ScrollBar.vertical: AppScrollBar {}
                     model: root.current.items
                     delegate: WorkspaceRow {
-                        width: ListView.view.width
+                        width: Math.max(0, ListView.view.width - 9)
                         currentWorkspace: modelData.id === root.current.id && !root.creating
                         onClicked: {
                             if (modelData.id === root.current.id) root.activatePage()
@@ -130,14 +131,15 @@ AppDialog {
             ColumnLayout {
                 Layout.fillWidth: true; Layout.fillHeight: true; spacing: 12
                 SectionTitle { text: root.creating ? qsTranslate("Tingmu", "新建学习工作区") : (root.current.id === "default" ? qsTranslate("Tingmu", root.current.name) : root.current.name) }
-                RowLayout {
+                SegmentBar {
                     visible: !root.creating
-                    TButton { text: qsTranslate("Tingmu", "语言与文件"); checked: root.section === "general"; onClicked: root.section = "general" }
-                    TButton { objectName: "workspaceModelsTab"; text: qsTranslate("Tingmu", "语音识别"); checked: root.section === "models"; onClicked: root.section = "models" }
-                    TButton { objectName: "workspaceTextTab"; text: qsTranslate("Tingmu", "文本模型与 API"); checked: root.section === "text"; onClicked: root.section = "text" }
+                    TButton { text: qsTranslate("Tingmu", "语言与文件"); quiet:true; checked: root.section === "general"; onClicked: root.section = "general" }
+                    TButton { objectName: "workspaceModelsTab"; text: qsTranslate("Tingmu", "语音识别"); quiet:true; checked: root.section === "models"; onClicked: root.section = "models" }
+                    TButton { objectName: "workspaceTextTab"; text: qsTranslate("Tingmu", "文本模型与 API"); quiet:true; checked: root.section === "text"; onClicked: root.section = "text" }
                 }
-                ScrollView {
+                AppScrollView {
                     id: scroll
+                    rightPadding: 10
                     Layout.fillWidth: true; Layout.fillHeight: true; clip: true; contentWidth: availableWidth
                     ColumnLayout {
                         width: scroll.availableWidth; spacing: 12

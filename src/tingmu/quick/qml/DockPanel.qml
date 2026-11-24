@@ -2,7 +2,7 @@ import QtQuick
 import QtQuick.Window
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
-import "Style.js" as S
+import "Icons.js" as Icons
 Item {
     id: dock
     property string title: ""
@@ -49,16 +49,18 @@ Item {
         onParentChanged:if(dock.moduleId==="player"){Qt.callLater(function(){backend.refreshVideo()});videoSceneSettled.restart()}
         anchors.fill: parent
         color: Theme.panel
-        radius: 8
+        radius: Theme.radiusMd
         clip: true
         border.color: Theme.line
         ColumnLayout {
             anchors.fill: parent
             spacing: 0
             Item {
-                Layout.fillWidth: true; Layout.preferredHeight: 44
+                Layout.fillWidth: true; Layout.preferredHeight: 40
                 MouseArea {
+                    id: titleDrag
                     anchors.fill: parent
+                    hoverEnabled: true
                     property real pressX: 0
                     property real pressY: 0
                     property bool moved:false
@@ -77,12 +79,23 @@ Item {
                     onDoubleClicked: dock.detach()
                 }
                 RowLayout {
-                    anchors.fill: parent; anchors.leftMargin: 14; anchors.rightMargin: 8
+                    anchors.fill: parent; anchors.leftMargin: 8; anchors.rightMargin: 6
                     spacing: 5
-                    Text { textFormat:Text.PlainText; text: dock.title; color: Theme.text; font.family: Theme.font; font.pixelSize: 13; font.weight: Font.DemiBold }
-                    Text { textFormat:Text.PlainText; text: dock.subtitle; color: Theme.muted; font.family: Theme.font; font.pixelSize: 10; elide: Text.ElideRight; Layout.fillWidth: true }
-                    TButton { iconSource: "settings"; quiet: true; tip: qsTranslate("Tingmu", "此模块设置"); objectName: dock.moduleId + "Settings"; onClicked: { if (loader.item && loader.item.openSettings) loader.item.openSettings(); dock.settingsRequested() } }
-                    TButton { iconSource: dock.detached ? "arrow-down-left" : "arrow-up-right"; quiet: true; tip: dock.detached ? qsTranslate("Tingmu", "放回工作区") : qsTranslate("Tingmu", "浮动窗口 · 也可拖动标题"); objectName: dock.moduleId + "Detach"; onClicked: dock.detach() }
+                    Image {
+                        Layout.preferredWidth: 12; Layout.preferredHeight: 16
+                        source: Icons.source("grip", titleDrag.containsMouse ? Theme.accent : Theme.muted)
+                        sourceSize.width: 18; sourceSize.height: 18; fillMode: Image.PreserveAspectFit
+                    }
+                    Text { Layout.minimumWidth: 0; elide: Text.ElideRight; textFormat:Text.PlainText; text: dock.title; color: Theme.text; font.family: Theme.font; font.pixelSize: 13; font.weight: Font.DemiBold }
+                    StatusBadge {
+                        visible: !!dock.subtitle
+                        text: dock.subtitle
+                        Layout.minimumWidth: 0
+                        Layout.maximumWidth: Math.min(180, parent.width * 0.35)
+                    }
+                    Item { Layout.fillWidth: true }
+                    TButton { iconSource: "settings"; quiet: true; implicitWidth: Theme.compactHeight; implicitHeight: Theme.compactHeight; tip: qsTranslate("Tingmu", "此模块设置"); objectName: dock.moduleId + "Settings"; onClicked: { if (loader.item && loader.item.openSettings) loader.item.openSettings(); dock.settingsRequested() } }
+                    TButton { iconSource: dock.detached ? "arrow-down-left" : "arrow-up-right"; quiet: true; implicitWidth: Theme.compactHeight; implicitHeight: Theme.compactHeight; tip: dock.detached ? qsTranslate("Tingmu", "放回工作区") : qsTranslate("Tingmu", "浮动窗口 · 也可拖动标题"); objectName: dock.moduleId + "Detach"; onClicked: dock.detach() }
                 }
             }
             Rectangle { Layout.fillWidth: true; height: 1; color: Theme.line }

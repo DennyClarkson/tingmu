@@ -24,25 +24,29 @@ Item {
         RowLayout{
             Layout.fillWidth:true
             Choice{id:statusFilter;objectName:"collectionStatusFilter";Layout.preferredWidth:150;translateOptions:true;model:["全部收藏","未整理","已整理"]}
-            Field{id:search;Layout.fillWidth:true;placeholderText:qsTranslate("Tingmu", "查找词句或备注")}
+            Field{id:search;clearable:true;Layout.fillWidth:true;placeholderText:qsTranslate("Tingmu", "查找词句或备注")}
             TButton{text:root.selectedIds.length ? qsTranslate("Tingmu", "取消选择") : qsTranslate("Tingmu", "全选");quiet:true;onClicked:root.selectedIds=root.selectedIds.length ? [] : root.visibleEntries.map(function(e){return e.id})}
         }
         ListView{
             id:inbox;objectName:"collectionList"
             Layout.fillWidth:true;Layout.fillHeight:true;model:root.visibleEntries;clip:true;spacing:10
-            ScrollBar.vertical:ScrollBar{}
+            ScrollBar.vertical:AppScrollBar {}
             delegate:Rectangle{
                 id:card
                 required property var modelData
                 property bool showSources:false
-                width:inbox.width;height:body.implicitHeight+28;radius:8;color:Theme.panel;border.color:Theme.line
+                width:Math.max(0,inbox.width-10);height:body.implicitHeight+28;radius:8;color:Theme.panel;border.color:Theme.line
                 ColumnLayout{
                     id:body;anchors.left:parent.left;anchors.right:parent.right;anchors.top:parent.top;anchors.margins:14;spacing:8
                     RowLayout{
                         Layout.fillWidth:true
                         Toggle{checked:root.selectedIds.indexOf(card.modelData.id)>=0;onToggled:root.select(card.modelData.id,checked)}
                         Text{Layout.fillWidth:true;text:card.modelData.text || card.modelData.sentence || qsTranslate("Tingmu", "收藏句子");textFormat:Text.PlainText;color:Theme.text;font.family:Theme.font;font.pixelSize:18;wrapMode:Text.Wrap}
-                        Text{objectName:"collectionOrganizedBadge";text:card.modelData.organized ? qsTranslate("Tingmu", "已整理") : qsTranslate("Tingmu", "未整理");color:card.modelData.organized ? Theme.organizedWord : Theme.accent;font.family:Theme.font;font.pixelSize:11}
+                        StatusBadge {
+                            objectName: "collectionOrganizedBadge"
+                            text: card.modelData.organized ? qsTranslate("Tingmu", "已整理") : qsTranslate("Tingmu", "未整理")
+                            tone: card.modelData.organized ? "organized" : "accent"
+                        }
                     }
                     Text{Layout.fillWidth:true;visible:!!card.modelData.reading;text:card.modelData.reading || "";textFormat:Text.PlainText;color:Theme.accent;font.family:Theme.latin;font.pixelSize:14;wrapMode:Text.Wrap}
                     Text{Layout.fillWidth:true;visible:!!(card.modelData.meaning || card.modelData.note);text:card.modelData.meaning || card.modelData.note || "";textFormat:Text.PlainText;color:Theme.text;font.family:Theme.font;font.pixelSize:13;wrapMode:Text.Wrap}
@@ -52,6 +56,12 @@ Item {
                         TButton{text:qsTranslate("Tingmu", "回到原句");quiet:true;implicitHeight:28;onClicked:root.openSource("tingmu://entry/"+card.modelData.id)}
                         TButton{visible:(card.modelData.word_sources || []).length>1;text:card.showSources ? qsTranslate("Tingmu", "收起出处") : qsTranslate("Tingmu", "查看 ")+(card.modelData.word_sources || []).length+qsTranslate("Tingmu", " 处来源");quiet:true;implicitHeight:28;onClicked:card.showSources=!card.showSources}
                         TButton{objectName:"editCollectionNoteButton";text:card.modelData.entry_note ? qsTranslate("Tingmu", "修改备注") : qsTranslate("Tingmu", "添加备注");quiet:true;implicitHeight:28;onClicked:root.editNote(card.modelData)}
+                        TButton {
+                            objectName: "deleteCollectionEntry_" + card.modelData.id
+                            iconSource: "trash"; tip: qsTranslate("Tingmu", "删除收藏")
+                            quiet: true; danger: true; implicitHeight: Theme.compactHeight
+                            onClicked: deleteConfirm.request(card.modelData)
+                        }
                     }
                     Repeater{
                         model:card.showSources ? card.modelData.word_sources || [] : []
@@ -74,12 +84,39 @@ Item {
         }
         Text{Layout.fillWidth:true;visible:!!backend.learningState.error || !!backend.learningState.learningBusy;text:qsTranslate("TingmuStatus", backend.learningState.error || "") || qsTranslate("Tingmu", "正在形成学习笔记，完成后可切换到“笔记”阅读。");color:backend.learningState.error ? Theme.error : Theme.muted;font.family:Theme.font;font.pixelSize:12;wrapMode:Text.Wrap}
     }
+    AppDialog {
+        id: deleteConfirm
+        objectName: "deleteCollectionConfirmation"
+        property var entryId: null
+        property string entryText: ""
+        function request(entry) {
+            entryId = entry.id
+            entryText = entry.text || entry.sentence || ""
+            open()
+        }
+        parent: Overlay.overlay; anchors.centerIn: parent
+        width: Math.min(400, parent ? parent.width - 32 : 400)
+        title: qsTranslate("Tingmu", "删除这一条收藏？")
+        modal: true
+        standardButtons: Dialog.Cancel | Dialog.Ok
+        acceptText: qsTranslate("Tingmu", "删除")
+        destructiveAccept: true
+        contentItem: Text {
+            text: deleteConfirm.entryText; textFormat: Text.PlainText; wrapMode: Text.Wrap
+            maximumLineCount: 5; elide: Text.ElideRight; font.family: Theme.font; color: Theme.text
+        }
+        onAccepted: {
+            if (entryId !== null) backend.command("deleteEntry", {id: entryId})
+            entryId = null
+        }
+        onRejected: entryId = null
+    }
     AppDialog{
         id:noteDialog;objectName:"collectionNoteDialog";parent:Overlay.overlay;anchors.centerIn:parent;title:qsTranslate("Tingmu", "词句备注");width:Math.min(520,parent ? parent.width-32 : 520);height:Math.min(390,parent ? parent.height-32 : 390);modal:true
         contentItem:ColumnLayout{
             spacing:12
             Text{Layout.fillWidth:true;text:root.editingEntry.text || root.editingEntry.sentence || "";textFormat:Text.PlainText;color:Theme.text;font.family:Theme.font;font.pixelSize:17;wrapMode:Text.Wrap}
-            ScrollView{Layout.fillWidth:true;Layout.fillHeight:true;clip:true;TextArea{id:entryNote;objectName:"collectionEntryNote";placeholderText:qsTranslate("Tingmu", "记下联想、疑问、母语对比或自己的例句…");color:Theme.text;placeholderTextColor:Theme.muted;font.family:Theme.font;font.pixelSize:14;wrapMode:TextArea.Wrap;selectByMouse:true;background:Rectangle{color:Theme.bg;border.color:Theme.line;radius:6}}}
+            AppTextArea{id:entryNote;Layout.fillWidth:true;Layout.fillHeight:true;objectName:"collectionEntryNote";placeholderText:qsTranslate("Tingmu", "记下联想、疑问、母语对比或自己的例句…")}
             Text{Layout.fillWidth:true;visible:!!backend.learningState.error;text:qsTranslate("TingmuStatus", backend.learningState.error || "") || "";color:Theme.error;font.family:Theme.font;font.pixelSize:12;wrapMode:Text.Wrap}
             RowLayout{Layout.alignment:Qt.AlignRight;TButton{text:qsTranslate("Tingmu", "取消");quiet:true;onClicked:noteDialog.close()}TButton{objectName:"saveCollectionEntryNote";text:qsTranslate("Tingmu", "保存备注");primary:true;onClicked:backend.command("updateEntryNote",{id:root.editingEntry.id,note:entryNote.text,revision:root.editingEntry.note_revision || ""})}}
         }

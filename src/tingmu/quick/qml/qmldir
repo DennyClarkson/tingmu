@@ -1,1 +1,10 @@
 singleton Theme 1.0 Theme.qml
+AppScrollBar 1.0 AppScrollBar.qml
+AppProgressBar 1.0 AppProgressBar.qml
+AppToolTip 1.0 AppToolTip.qml
+AppMenuSeparator 1.0 AppMenuSeparator.qml
+AppTextArea 1.0 AppTextArea.qml
+StatusBadge 1.0 StatusBadge.qml
+AppScrollView 1.0 AppScrollView.qml
+SegmentBar 1.0 SegmentBar.qml
+NavButton 1.0 NavButton.qml

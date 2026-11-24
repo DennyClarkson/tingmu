@@ -14,7 +14,7 @@ ColumnLayout {
         wrapMode: Text.WrapAnywhere; textFormat: Text.PlainText
         color: Theme.text; font.family: Theme.font; font.pixelSize: 12
     }
-    ProgressBar {
+    AppProgressBar {
         objectName: "downloadProgressBar"; Layout.fillWidth: true
         indeterminate: root.total <= 0; value: root.total > 0 ? root.sample.completed / root.total : 0
     }

@@ -3,7 +3,7 @@ import QtQuick.Window
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 import QtMultimedia
-import "Style.js" as S
+import "Icons.js" as Icons
 import "CaptionStyles.js" as Styles
 Item {
     id:root
@@ -49,7 +49,7 @@ Item {
     function closeSettings(){settingsPopup.close()}
     function focusPlayback(){if(fullscreen)fullVideoHost.forceActiveFocus();else root.forceActiveFocus()}
     function toggleFullscreen(){ fullscreen=!fullscreen; if(fullscreen){fullWindow.showFullScreen();showControls()}else fullWindow.hide();focusPlayback();Qt.callLater(function(){root.focusPlayback();backend.refreshVideo()}) }
-    onFullscreenChanged:{fullscreenGeometryReady=false;sceneSettled.restart();Qt.callLater(function(){backend.refreshVideo()})}
+    onFullscreenChanged:{singleClick.stop();fullscreenGeometryReady=false;sceneSettled.restart();Qt.callLater(function(){backend.refreshVideo()})}
     function showControls(){ controlsVisible=true; hideControls.restart() }
     onPlayingChanged:if(fullscreen)showControls()
     function typing(win){var item=win ? win.activeFocusItem : null;return !!item && (item.hasOwnProperty("echoMode") || item.hasOwnProperty("readOnly") || item.hasOwnProperty("popup") || item.hasOwnProperty("currentIndex") || item.hasOwnProperty("highlighted"))}
@@ -73,6 +73,12 @@ Item {
     }
     Timer { id:hideControls; interval:root.hideDelay*1000; onTriggered:if(root.autoHide && backend.playbackDetails.playing && !barHover.hovered && !overlayDrag.pressed && !resizeGrip.pressed && !settingsPopup.opened)root.controlsVisible=false }
     Timer {
+        id: singleClick
+        property string mediaPath
+        interval: Qt.styleHints.mouseDoubleClickInterval
+        onTriggered: if (mediaPath && mediaPath === backend.mediaState.mediaPath) backend.command("playPause", {})
+    }
+    Timer {
         id:sceneSettled
         interval:120
         onTriggered:{
@@ -86,12 +92,50 @@ Item {
             id:normalVideoHost
             Layout.fillWidth:true; Layout.fillHeight:true
             Rectangle { anchors.fill:parent; color:Theme.video }
-            Column {
-                anchors.centerIn:parent; spacing:16; visible:!backend.mediaState.mediaPath
-                Text { textFormat:Text.PlainText; anchors.horizontalCenter:parent.horizontalCenter; text:qsTranslate("Tingmu", "听 幕"); color:Theme.captionText; font.family:Theme.font; font.pixelSize:36; font.weight:Font.Light }
-                TButton { anchors.horizontalCenter:parent.horizontalCenter; text:qsTranslate("Tingmu", "打开视频"); iconSource:"arrow-up-right"; primary:true; onClicked:backend.command("openFiles",{}) }
+            Rectangle {
+                anchors.fill: parent
+                visible: !backend.mediaState.mediaPath
+                z: 2
+                color: Theme.bg
+                DropArea {
+                    anchors.fill: parent
+                    onDropped: function(drop) {
+                        if (!drop.hasUrls) return
+                        backend.command("addPaths", {paths: drop.urls.map(url => url.toString())})
+                        drop.acceptProposedAction()
+                    }
+                }
+                ColumnLayout {
+                    anchors.centerIn: parent
+                    width: Math.max(0, parent.width - 24)
+                    spacing: 10
+                    Text {
+                        Layout.fillWidth: true
+                        text: qsTranslate("Tingmu", "听幕放映室")
+                        color: Theme.text
+                        font.family: Theme.serif
+                        font.pixelSize: 30
+                        horizontalAlignment: Text.AlignHCenter
+                    }
+                    Text {
+                        Layout.fillWidth: true
+                        text: qsTranslate("Tingmu", "将视频拖到这里即可加入媒体库")
+                        color: Theme.muted
+                        font.family: Theme.font
+                        font.pixelSize: 12
+                        horizontalAlignment: Text.AlignHCenter
+                        wrapMode: Text.Wrap
+                    }
+                    TButton {
+                        objectName: "emptyPlayerOpenButton"
+                        Layout.alignment: Qt.AlignHCenter
+                        text: qsTranslate("Tingmu", "打开视频")
+                        iconSource: "folder"
+                        primary: true
+                        onClicked: backend.command("openFiles", {})
+                    }
+                }
             }
-            MouseArea { anchors.fill:parent; onDoubleClicked:root.toggleFullscreen(); onClicked:backend.command("playPause",{}) }
         }
         PlayerControls { Layout.fillWidth:true; settings:root; onFullscreenRequested:root.toggleFullscreen(); onSettingsRequested:root.openSettings() }
     }
@@ -102,6 +146,19 @@ Item {
         anchors.fill:parent
         fillMode:root.aspectMode===1 ? VideoOutput.PreserveAspectCrop : root.aspectMode===2 ? VideoOutput.Stretch : VideoOutput.PreserveAspectFit
         clip:true
+        MouseArea {
+            anchors.fill: parent
+            enabled: !!backend.mediaState.mediaPath || root.fullscreen
+            hoverEnabled: root.fullscreen
+            cursorShape: root.fullscreen && !root.controlsVisible ? Qt.BlankCursor : Qt.ArrowCursor
+            onPositionChanged: if (root.fullscreen) root.showControls()
+            onClicked: {
+                root.focusPlayback()
+                singleClick.mediaPath = backend.mediaState.mediaPath || ""
+                singleClick.restart()
+            }
+            onDoubleClicked: { singleClick.stop(); root.toggleFullscreen() }
+        }
         Item {
             id:bitmapViewport
             x:captions.x;y:captions.y;width:captions.width;height:captions.height;clip:true
@@ -169,20 +226,16 @@ Item {
         PlaybackShortcuts{player:root;active:root.fullscreen}
         Item {
             id:fullVideoHost;objectName:"fullscreenVideoArea";anchors.fill:parent;anchors.bottomMargin:root.reserveBar ? transport.height : 0
-            MouseArea {
-                anchors.fill:parent;hoverEnabled:true
-                cursorShape:root.controlsVisible ? Qt.ArrowCursor : Qt.BlankCursor
-                onPositionChanged:root.showControls()
-                onClicked:backend.command("playPause",{})
-                onDoubleClicked:root.toggleFullscreen()
-            }
         }
         Rectangle {
-            anchors.top:parent.top; width:parent.width; height:90
+            anchors.top:parent.top; width:parent.width; height:fullscreenHeader.implicitHeight+24
             visible:root.controlsVisible
-            gradient:Gradient { GradientStop{position:0;color:Theme.scrim} GradientStop{position:1;color:Theme.transparent} }
+            color: Theme.scrim
+            Rectangle { anchors.bottom:parent.bottom; width:parent.width; height:1; color:Theme.line }
             RowLayout {
-                anchors.left:parent.left; anchors.right:parent.right; anchors.top:parent.top; anchors.margins:24
+                id:fullscreenHeader
+                anchors.left:parent.left; anchors.right:parent.right; anchors.verticalCenter:parent.verticalCenter
+                anchors.leftMargin:20; anchors.rightMargin:20; spacing:8
                 Text { textFormat:Text.PlainText; Layout.fillWidth:true; text:backend.mediaState.mediaName || qsTranslate("Tingmu", "听幕"); color:Theme.text; font.family:Theme.font; font.pixelSize:16; elide:Text.ElideMiddle }
                 TButton { text:root.overlayVisible ? qsTranslate("Tingmu", "隐藏伴侣") : qsTranslate("Tingmu", "显示伴侣"); onClicked:{root.overlayVisible=!root.overlayVisible;root.saveOverlay()} }
                 TButton { text:qsTranslate("Tingmu", "退出全屏  Esc"); onClicked:root.toggleFullscreen() }
@@ -233,13 +286,18 @@ Item {
                 onPressed:function(mouse){origin=mapToGlobal(mouse.x,mouse.y);initialWidth=overlay.width;initialHeight=overlay.height;root.showControls()}
                 onPositionChanged:function(mouse){if(pressed){var p=mapToGlobal(mouse.x,mouse.y);overlay.width=Math.max(280,Math.min(fullWindow.width-overlay.x,initialWidth+p.x-origin.x));overlay.height=Math.max(180,Math.min(fullVideoHost.height-overlay.y,initialHeight+p.y-origin.y))}}
                 onReleased:root.saveOverlay()
-                Text { textFormat:Text.PlainText; anchors.centerIn:parent; text:"◢"; color:Theme.muted; font.pixelSize:13 }
+                Image {
+                    anchors.centerIn: parent
+                    width: 18; height: 18
+                    sourceSize.width: 24; sourceSize.height: 24
+                    source: Icons.source("resize", resizeGrip.pressed ? Theme.accent : Theme.muted)
+                }
             }
         }
         Rectangle {
             id:transport;objectName:"fullscreenTransport"
             anchors.bottom:parent.bottom; width:parent.width; height:fullControls.implicitHeight+8; visible:root.controlsVisible
-            color:Theme.panel
+            color:Theme.surfaceElevated
             PlayerControls { id:fullControls;anchors.centerIn:parent;width:Math.min(parent.width,1160);settings:root;fullscreen:true;onFullscreenRequested:root.toggleFullscreen();onSettingsRequested:root.openSettings() }
             HoverHandler { id:barHover;onHoveredChanged:root.showControls() }
         }
@@ -262,8 +320,9 @@ Item {
                 Text { Layout.fillWidth:true;text:qsTranslate("Tingmu", "播放器设置");color:Theme.text;font.family:Theme.font;font.pixelSize:18;font.bold:true }
                 TButton { iconSource:"close";tip:qsTranslate("Tingmu", "关闭设置");quiet:true;onClicked:settingsPopup.close() }
             }
-            RowLayout {
-                Layout.fillWidth:true;spacing:4
+            GridLayout {
+                Layout.fillWidth:true; columns:settingsPopup.availableWidth<380 ? 3 : 5
+                columnSpacing:4; rowSpacing:4
                 Repeater {
                     model:[qsTranslate("Tingmu", "控制栏"),qsTranslate("Tingmu", "声音"),qsTranslate("Tingmu", "字幕"),qsTranslate("Tingmu", "样式"),qsTranslate("Tingmu", "伴侣")]
                     delegate:TButton {
@@ -277,7 +336,7 @@ Item {
                 }
             }
             Rectangle { Layout.fillWidth:true;height:1;color:Theme.line }
-            ScrollView {
+            AppScrollView {
                 id:settingsScroll
                 Layout.fillWidth:true;Layout.fillHeight:true;clip:true;contentWidth:availableWidth
                 ColumnLayout {

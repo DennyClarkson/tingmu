@@ -66,7 +66,7 @@ Item {
                     visible: captionRoot.appearance.shadow > 0
                     x: mainText.x + captionRoot.appearance.shadow
                     y: mainText.y + captionRoot.appearance.shadow
-                    color: "#a0000000"
+                    color: Theme.captionShadow
                 }
                 Repeater {
                     model: captionRoot.appearance.outline > 0 ? 8 : 0

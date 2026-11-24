@@ -52,35 +52,53 @@ Item {
     property bool showExplanation: true
     function openSettings() { settingsPopup.open() }
     ColumnLayout {
-        anchors.fill: parent; anchors.margins: 16; spacing: 12
-        RowLayout {
+        id: panelLayout
+        anchors.fill: parent
+        anchors.margins: root.width < 360 ? 10 : 16
+        spacing: root.width < 360 ? 6 : 10
+        GridLayout {
+            id: header
             Layout.fillWidth: true
-            TButton { text: qsTranslate("Tingmu", "当前句"); checked: root.page===0; quiet: true; onClicked: root.page=0 }
-            TButton { text: qsTranslate("Tingmu", "收藏  ") + backend.entryCount; checked: root.page===1; quiet: true; onClicked: root.page=1 }
-            Item { Layout.fillWidth: true }
-            TButton { text:qsTranslate("Tingmu", "来源");quiet:true;enabled:!!backend.activeCue.id;onClicked:sourceDetails.open() }
-            TButton { iconSource: "repeat"; tip: qsTranslate("Tingmu", "重听此句"); quiet: true; enabled: !!backend.activeCue.id; onClicked: backend.command("repeatCue",{}) }
+            Layout.minimumWidth: 0
+            columns: panelLayout.width >= tabs.implicitWidth + sourceActions.implicitWidth + columnSpacing ? 2 : 1
+            columnSpacing: 4
+            rowSpacing: 2
+            RowLayout {
+                id: tabs
+                Layout.fillWidth: true
+                spacing: 2
+                TButton { objectName: "currentCueTab"; text: qsTranslate("Tingmu", "当前句"); checked: root.page===0; quiet: true; onClicked: root.page=0 }
+                TButton { objectName: "collectedCuesTab"; text: qsTranslate("Tingmu", "收藏  ") + backend.entryCount; checked: root.page===1; quiet: true; onClicked: root.page=1 }
+                Item { Layout.fillWidth: true }
+            }
+            RowLayout {
+                id: sourceActions
+                Layout.alignment: header.columns === 2 ? Qt.AlignRight : Qt.AlignLeft
+                spacing: 2
+                TButton { objectName: "cueSourceButton"; text:qsTranslate("Tingmu", "来源"); quiet:true; enabled:!!backend.activeCue.id; onClicked:sourceDetails.open() }
+                TButton { objectName: "repeatCompanionCue"; iconSource: "repeat"; tip: qsTranslate("Tingmu", "重听此句"); quiet: true; enabled: !!backend.activeCue.id; onClicked: backend.command("repeatCue",{}) }
+            }
         }
         CompanionContent {
             displayImported:!root.workspace || !root.workspace.preference("player") || root.workspace.preference("player").displayImported!==false
             onLearningRequested:if(root.workspace)root.workspace.changeView("learn")
-            Layout.fillWidth:true;Layout.fillHeight:true;visible:root.page===0
+            Layout.fillWidth:true;Layout.minimumWidth:0;Layout.fillHeight:true;visible:root.page===0
             showReading:root.showReading;showTranslation:root.showTranslation;showExplanation:root.showExplanation
         }
         ListView {
             Layout.fillWidth: true; Layout.fillHeight: true; visible: root.page===1
             clip: true; spacing: 8; model: visible ? backend.entries : []
-            ScrollBar.vertical: ScrollBar {}
+            ScrollBar.vertical: AppScrollBar {}
             delegate: Rectangle {
                 required property var modelData
-                width: ListView.view.width; height: entryColumn.implicitHeight+20
+                width: Math.max(0,ListView.view.width-10); height: entryColumn.implicitHeight+20
                 color: Theme.raised; radius: 5
                 ColumnLayout {
                     id: entryColumn; anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top; anchors.margins: 10; spacing: 5
                     RowLayout {
                         Layout.fillWidth: true
                         Text { textFormat:Text.PlainText; Layout.fillWidth: true; text: modelData.text || modelData.sentence || qsTranslate("Tingmu", "笔记"); color: Theme.text; font.family: Theme.font; font.pixelSize: 15; wrapMode: Text.Wrap }
-                        TButton { iconSource: "close"; quiet: true; tip: qsTranslate("Tingmu", "删除收藏"); onClicked: backend.command("deleteEntry",{id:modelData.id}) }
+                        TButton { iconSource: "close"; quiet: true; danger: true; tip: qsTranslate("Tingmu", "删除收藏"); onClicked: backend.command("deleteEntry",{id:modelData.id}) }
                     }
                     Text { textFormat:Text.PlainText; Layout.fillWidth: true; text: modelData.reading || ""; visible: text.length>0; color: Theme.accent; font.family: Theme.font; font.pixelSize: 11; wrapMode: Text.Wrap }
                     Text { textFormat:Text.PlainText; Layout.fillWidth: true; text: modelData.note || modelData.meaning || ""; color: Theme.muted; font.family: Theme.font; font.pixelSize: 12; wrapMode: Text.Wrap }
@@ -90,8 +108,8 @@ Item {
             Text { textFormat:Text.PlainText; anchors.centerIn: parent; visible: parent.count===0; text: qsTranslate("Tingmu", "点击句中的词语，留下第一条收藏。"); color: Theme.muted; font.family: Theme.font; font.pixelSize: 12; width: parent.width-20; wrapMode: Text.Wrap; horizontalAlignment: Text.AlignHCenter }
         }
         RowLayout {
-            Layout.fillWidth: true; visible: root.page===0
-            Field { id: note; objectName:"cueNoteDraftInput"; Layout.fillWidth: true; placeholderText: qsTranslate("Tingmu", "记下这一句…"); enabled: !!backend.activeCue.id; onAccepted: saveNote.clicked();onTextEdited:root.editDraft(text) }
+            Layout.fillWidth: true; Layout.minimumWidth: 0; visible: root.page===0
+            Field { id: note; objectName:"cueNoteDraftInput"; Layout.fillWidth: true; Layout.minimumWidth: 0; placeholderText: qsTranslate("Tingmu", "记下这一句…"); enabled: !!backend.activeCue.id; onAccepted: saveNote.clicked();onTextEdited:root.editDraft(text) }
             TButton { id: saveNote; objectName:"saveCueNoteButton"; text: qsTranslate("Tingmu", "收藏"); enabled: !!backend.activeCue.id; onClicked: root.collectNote() }
         }
         RowLayout { visible: root.page===1; TButton { text: qsTranslate("Tingmu", "导出笔记"); onClicked: backend.command("exportNotes",{}) } TButton { text: qsTranslate("Tingmu", "学习复盘"); enabled: backend.entryCount>0; onClicked: backend.command("summarizeNotes",{}) } }
@@ -120,14 +138,14 @@ Item {
         }
     }
     AppDialog {
-        id:sourceDetails;title:qsTranslate("Tingmu", "字幕来源");modal:false
+        id:sourceDetails;objectName:"subtitleSourceDialog";title:qsTranslate("Tingmu", "字幕来源");modal:false
         parent:Overlay.overlay
         anchors.centerIn:parent
         width:Math.min(480,Overlay.overlay ? Overlay.overlay.width-40 : 480)
         height:Math.min(480,Overlay.overlay ? Overlay.overlay.height-60 : 480)
         standardButtons:Dialog.Close
-        background:Rectangle{color:Theme.panel;radius:8;border.color:Theme.line}
-        contentItem:ScrollView {
+
+        contentItem:AppScrollView {
             id:sourceScroll
             clip:true;contentWidth:availableWidth
             ColumnLayout {

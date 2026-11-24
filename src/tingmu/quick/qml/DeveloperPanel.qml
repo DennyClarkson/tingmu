@@ -62,7 +62,7 @@ Window {
         anchors.fill:parent;anchors.margins:18;spacing:12
         RowLayout {
             Layout.fillWidth:true;spacing:8
-            Text { textFormat:Text.PlainText;text:qsTranslate("Tingmu", "开发者模式");color:Theme.text;font.family:Theme.font;font.pixelSize:19;font.weight:Font.DemiBold }
+            Text { textFormat:Text.PlainText;text:qsTranslate("Tingmu", "开发者模式");color:Theme.text;font.family:Theme.serif;font.pixelSize:22 }
             Text { textFormat:Text.PlainText;text:(backend.diagnostics || {}).logLevel || "";color:Theme.accent;font.family:Theme.mono;font.pixelSize:11 }
             Item { Layout.fillWidth:true }
             TButton { objectName:"refreshDiagnostics";text:qsTranslate("Tingmu", "刷新");onClicked:backend.command("refreshDiagnostics",{}) }
@@ -70,63 +70,80 @@ Window {
             TButton { objectName:"openLogFolder";text:qsTranslate("Tingmu", "日志文件夹");onClicked:backend.command("openLogFolder",{}) }
         }
         RowLayout {
-            Layout.fillWidth:true;spacing:4
-            TButton { text:qsTranslate("Tingmu", "运行信息");quiet:true;checked:root.page===0;onClicked:root.page=0 }
-            TButton { text:qsTranslate("Tingmu", "日志  ") + (backend.logs || []).length;quiet:true;checked:root.page===1;onClicked:root.page=1 }
-            Item { Layout.fillWidth:true }
-            Text { textFormat:Text.PlainText;text:qsTranslate("Tingmu", "每 2 秒更新");color:Theme.muted;font.family:Theme.font;font.pixelSize:10 }
-        }
-        Rectangle {
-            Layout.fillWidth:true;Layout.fillHeight:true;visible:root.page===0
-            color:Theme.panel;radius:7;border.color:Theme.line
-            ScrollView {
-                anchors.fill:parent;anchors.margins:14
-                clip:true;contentWidth:availableWidth
-                TextArea {
-                    objectName:"developerDiagnostics"
-                    text:root.describeDiagnostics()
-                    textFormat:TextEdit.PlainText
-                    readOnly:true;selectByMouse:true;wrapMode:TextEdit.Wrap
-                    color:Theme.text;font.family:Theme.mono;font.pixelSize:12
-                    background:null
+            Layout.fillWidth: true; Layout.fillHeight: true; spacing: 14
+            ColumnLayout {
+                Layout.preferredWidth: root.width < 780 ? 122 : 156
+                Layout.fillHeight: true; spacing: 6
+                NavButton {
+                    Layout.fillWidth: true
+                    text: qsTranslate("Tingmu", "运行信息")
+                    checked: root.page === 0; onClicked: root.page = 0
+                }
+                NavButton {
+                    Layout.fillWidth: true
+                    text: qsTranslate("Tingmu", "日志  ") + (backend.logs || []).length
+                    checked: root.page === 1; onClicked: root.page = 1
+                }
+                Item { Layout.fillHeight: true }
+                Text {
+                    Layout.fillWidth: true
+                    text: qsTranslate("Tingmu", "每 2 秒更新")
+                    color: Theme.muted; font.family: Theme.font; font.pixelSize: 11; wrapMode: Text.Wrap
                 }
             }
-        }
-        ColumnLayout {
-            Layout.fillWidth:true;Layout.fillHeight:true;visible:root.page===1;spacing:10
-            RowLayout {
-                Layout.fillWidth:true;spacing:8
-                Choice { id:levelFilter;implicitWidth:116;translateOptions:true;model:["全部","INFO","WARNING","ERROR","DEBUG"] }
-                Field { id:search;Layout.fillWidth:true;placeholderText:qsTranslate("Tingmu", "搜索事件、消息或详情") }
-                Toggle { text:qsTranslate("Tingmu", "跟随最新");checked:root.follow;onToggled:{root.follow=checked;if(checked)logList.positionViewAtEnd()} }
-            }
-            ListView {
-                id:logList;objectName:"developerLogList"
-                Layout.fillWidth:true;Layout.fillHeight:true
-                clip:true;spacing:7;model:root.visibleLogs
-                ScrollBar.vertical:ScrollBar{}
-                onCountChanged:if(root.follow)Qt.callLater(function(){logList.positionViewAtEnd()})
-                delegate:Rectangle {
-                    id:entry
-                    required property var modelData
-                    property bool expanded:false
-                    width:logList.width;height:entryContent.implicitHeight+20
-                    color:Theme.panel;radius:6;border.color:Theme.line
-                    ColumnLayout {
-                        id:entryContent
-                        anchors.left:parent.left;anchors.right:parent.right;anchors.top:parent.top;anchors.margins:10;spacing:7
-                        RowLayout {
-                            Layout.fillWidth:true;spacing:9
-                            Text { textFormat:Text.PlainText;text:entry.modelData.time || "";color:Theme.muted;font.family:Theme.mono;font.pixelSize:10 }
-                            Text { textFormat:Text.PlainText;text:entry.modelData.level || "";color:text==="ERROR" || text==="CRITICAL" ? Theme.error : text==="WARNING" || text==="WARN" ? Theme.warning : Theme.accent;font.family:Theme.mono;font.pixelSize:10 }
-                            Text { textFormat:Text.PlainText;Layout.fillWidth:true;text:entry.modelData.event || "";color:Theme.muted;font.family:Theme.mono;font.pixelSize:10;elide:Text.ElideRight }
-                            TButton { visible:!!entry.modelData.details;text:entry.expanded ? qsTranslate("Tingmu", "收起") : qsTranslate("Tingmu", "详情");quiet:true;implicitHeight:24;onClicked:entry.expanded=!entry.expanded }
-                        }
-                        TextEdit { Layout.fillWidth:true;text:qsTranslate("TingmuStatus", entry.modelData.message || "");textFormat:TextEdit.PlainText;readOnly:true;selectByMouse:true;wrapMode:TextEdit.Wrap;color:Theme.text;font.family:Theme.mono;font.pixelSize:12 }
-                        TextEdit { Layout.fillWidth:true;visible:entry.expanded;text:entry.modelData.details || "";textFormat:TextEdit.PlainText;readOnly:true;selectByMouse:true;wrapMode:TextEdit.Wrap;color:Theme.muted;font.family:Theme.mono;font.pixelSize:11 }
+            Rectangle { Layout.fillHeight:true; implicitWidth:1; color:Theme.line }
+            Rectangle {
+                Layout.fillWidth:true;Layout.fillHeight:true;visible:root.page===0
+                color:Theme.panel;radius:7;border.color:Theme.line
+                AppScrollView {
+                    anchors.fill:parent;anchors.margins:14
+                    clip:true;contentWidth:availableWidth
+                    TextArea {
+                        objectName:"developerDiagnostics"
+                        text:root.describeDiagnostics()
+                        textFormat:TextEdit.PlainText
+                        readOnly:true;selectByMouse:true;wrapMode:TextEdit.Wrap
+                        color:Theme.text;font.family:Theme.mono;font.pixelSize:12
+                        background:null
                     }
                 }
-                Text { textFormat:Text.PlainText;anchors.centerIn:parent;visible:logList.count===0;text:search.text || levelFilter.currentIndex>0 ? qsTranslate("Tingmu", "没有符合条件的日志") : qsTranslate("Tingmu", "暂无日志");color:Theme.muted;font.family:Theme.font;font.pixelSize:12 }
+            }
+            ColumnLayout {
+                Layout.fillWidth:true;Layout.fillHeight:true;visible:root.page===1;spacing:10
+                RowLayout {
+                    Layout.fillWidth:true;spacing:8
+                    Choice { id:levelFilter;implicitWidth:116;translateOptions:true;model:["全部","INFO","WARNING","ERROR","DEBUG"] }
+                    Field { id:search;clearable:true;Layout.fillWidth:true;placeholderText:qsTranslate("Tingmu", "搜索事件、消息或详情") }
+                    Toggle { text:qsTranslate("Tingmu", "跟随最新");checked:root.follow;onToggled:{root.follow=checked;if(checked)logList.positionViewAtEnd()} }
+                }
+                ListView {
+                    id:logList;objectName:"developerLogList"
+                    Layout.fillWidth:true;Layout.fillHeight:true
+                    clip:true;spacing:7;model:root.visibleLogs
+                    ScrollBar.vertical:AppScrollBar {}
+                    onCountChanged:if(root.follow)Qt.callLater(function(){logList.positionViewAtEnd()})
+                    delegate:Rectangle {
+                        id:entry
+                        required property var modelData
+                        property bool expanded:false
+                        width:Math.max(0,logList.width-10);height:entryContent.implicitHeight+20
+                        color:Theme.panel;radius:6;border.color:Theme.line
+                        ColumnLayout {
+                            id:entryContent
+                            anchors.left:parent.left;anchors.right:parent.right;anchors.top:parent.top;anchors.margins:10;spacing:7
+                            RowLayout {
+                                Layout.fillWidth:true;spacing:9
+                                Text { textFormat:Text.PlainText;text:entry.modelData.time || "";color:Theme.muted;font.family:Theme.mono;font.pixelSize:10 }
+                                Text { textFormat:Text.PlainText;text:entry.modelData.level || "";color:text==="ERROR" || text==="CRITICAL" ? Theme.error : text==="WARNING" || text==="WARN" ? Theme.warning : Theme.accent;font.family:Theme.mono;font.pixelSize:10 }
+                                Text { textFormat:Text.PlainText;Layout.fillWidth:true;text:entry.modelData.event || "";color:Theme.muted;font.family:Theme.mono;font.pixelSize:10;elide:Text.ElideRight }
+                                TButton { visible:!!entry.modelData.details;text:entry.expanded ? qsTranslate("Tingmu", "收起") : qsTranslate("Tingmu", "详情");quiet:true;implicitHeight:24;onClicked:entry.expanded=!entry.expanded }
+                            }
+                            TextEdit { Layout.fillWidth:true;text:qsTranslate("TingmuStatus", entry.modelData.message || "");textFormat:TextEdit.PlainText;readOnly:true;selectByMouse:true;wrapMode:TextEdit.Wrap;color:Theme.text;font.family:Theme.mono;font.pixelSize:12 }
+                            TextEdit { Layout.fillWidth:true;visible:entry.expanded;text:entry.modelData.details || "";textFormat:TextEdit.PlainText;readOnly:true;selectByMouse:true;wrapMode:TextEdit.Wrap;color:Theme.muted;font.family:Theme.mono;font.pixelSize:11 }
+                        }
+                    }
+                    Text { textFormat:Text.PlainText;anchors.centerIn:parent;visible:logList.count===0;text:search.text || levelFilter.currentIndex>0 ? qsTranslate("Tingmu", "没有符合条件的日志") : qsTranslate("Tingmu", "暂无日志");color:Theme.muted;font.family:Theme.font;font.pixelSize:12 }
+                }
             }
         }
         Text { textFormat:Text.PlainText;Layout.fillWidth:true;text:qsTranslate("Tingmu", "运行日志保存在本机。导出诊断包含环境、任务状态与日志；不包含字幕或对话正文。");color:Theme.muted;font.family:Theme.font;font.pixelSize:10;wrapMode:Text.Wrap }

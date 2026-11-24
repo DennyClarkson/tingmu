@@ -5,40 +5,87 @@ import "Style.js" as S
 Item {
     id:root
     property bool follow:true
+    readonly property string query: search.text.trim().toLowerCase()
+    readonly property string activeId: backend.activeCue.id || ""
     function openSettings(){settingsPopup.open()}
-    Connections { target:backend; function onActiveIndexChanged(){ if(root.follow && !search.text && backend.activeIndex>=0) list.positionViewAtIndex(backend.activeIndex,ListView.Center) } }
+    function followActiveCue() {
+        if (follow && !query && backend.activeIndex >= 0)
+            list.positionViewAtIndex(backend.activeIndex, ListView.Center)
+    }
+    onQueryChanged: if (!query) Qt.callLater(followActiveCue)
+    onFollowChanged: if (follow) followActiveCue()
+    Connections { target: backend; function onActiveCueChanged() { root.followActiveCue() } }
     ColumnLayout {
         anchors.fill:parent; anchors.margins:12; spacing:10
-        RowLayout {
-            Layout.fillWidth:true
-            Field { id:search; Layout.fillWidth:true; placeholderText:qsTranslate("Tingmu", "搜索字幕 · ") + backend.cueCount + qsTranslate("Tingmu", " 句") }
+        GridLayout {
+            Layout.fillWidth:true; columns:root.width<270 ? 2 : 3
+            Field {
+                id:search; objectName:"subtitleSearch"; clearable:true
+                Layout.fillWidth:true; Layout.columnSpan:root.width<270 ? 2 : 1
+                placeholderText:root.width<400 ? qsTranslate("Tingmu", "搜索字幕")
+                    : qsTranslate("Tingmu", "搜索字幕 · ") + backend.cueCount + qsTranslate("Tingmu", " 句")
+            }
             TButton { text:qsTranslate("Tingmu", "跟随"); checked:root.follow; quiet:true; onClicked:root.follow=!root.follow }
-            TButton { text:backend.settings.preparation_workflow === "subtitle_agent" ? qsTranslate("Tingmu", "字幕 Agent…") : backend.cueCount ? qsTranslate("Tingmu", "替换文档…") : qsTranslate("Tingmu", "从字幕建文档"); tip:backend.settings.preparation_workflow === "subtitle_agent" ? qsTranslate("Tingmu", "选择字幕并加入 Agent 队列…") : qsTranslate("Tingmu", "使用字幕建立或替换此视频的学习文档"); quiet:true; enabled:!!backend.mediaState.mediaPath; onClicked:backend.command("importStudySubtitle",{}) }
+            TButton {
+                objectName:"importStudySubtitles"
+                readonly property string actionLabel: backend.settings.preparation_workflow === "subtitle_agent"
+                    ? qsTranslate("Tingmu", "字幕 Agent…") : backend.cueCount ? qsTranslate("Tingmu", "替换文档…") : qsTranslate("Tingmu", "从字幕建文档")
+                text: root.width<400 ? "" : actionLabel
+                iconSource: root.width<400 ? "folder" : ""
+                Accessible.name: actionLabel
+                tip: backend.settings.preparation_workflow === "subtitle_agent" ? qsTranslate("Tingmu", "选择字幕并加入 Agent 队列…") : qsTranslate("Tingmu", "使用字幕建立或替换此视频的学习文档")
+                quiet:true; enabled:!!backend.mediaState.mediaPath
+                onClicked:backend.command("importStudySubtitle",{})
+            }
         }
         ListView {
             id:list; objectName:"subtitleList"
             Layout.fillWidth:true; Layout.fillHeight:true; clip:true; spacing:3
-            model:backend.cues; cacheBuffer:500
-            ScrollBar.vertical:ScrollBar{}
+            model: !root.query ? backend.cues : backend.cues.filter(cue =>
+                [cue.text, cue.translation, cue.reading].some(value => value && value.toLowerCase().includes(root.query)))
+            cacheBuffer:500
+            ScrollBar.vertical:AppScrollBar { id:scrollBar }
             delegate:Rectangle {
                 id:cueRow
                 required property var modelData
                 required property int index
-                property bool matches:!search.text || modelData.text.indexOf(search.text)>=0 || (modelData.translation || "").indexOf(search.text)>=0
-                width:list.width; height:matches ? Math.max(42,subtitleText.implicitHeight+20) : 0; visible:matches; radius:4
-                color:index===backend.activeIndex ? Theme.selection : subtitleMouse.containsMouse ? Theme.hover : "transparent"
-                Rectangle { width:2; anchors.left:parent.left; anchors.top:parent.top; anchors.bottom:parent.bottom; anchors.margins:6; color:Theme.accent; visible:cueRow.index===backend.activeIndex }
+                readonly property bool active: modelData.id === root.activeId
+                width:Math.max(0,list.width-scrollBar.width); height:Math.max(42,subtitleText.implicitHeight+20); radius:4
+                color:active ? Theme.selection : subtitleMouse.containsMouse ? Theme.hover : Theme.transparent
+                Rectangle { width:2; anchors.left:parent.left; anchors.top:parent.top; anchors.bottom:parent.bottom; anchors.margins:6; color:Theme.accent; visible:cueRow.active }
                 RowLayout {
                     z:1
-                    anchors.fill:parent; anchors.leftMargin:12; anchors.rightMargin:10; spacing:14
-                    Text { textFormat:Text.PlainText; text:S.time(cueRow.modelData.start*1000); color:cueRow.index===backend.activeIndex ? Theme.accent : Theme.muted; font.family:Theme.mono; font.pixelSize:11; Layout.preferredWidth:58 }
+                    anchors.fill:parent; anchors.leftMargin:12; anchors.rightMargin:6; spacing:root.width<400 ? 7 : 14
+                    Text { textFormat:Text.PlainText; text:S.time(cueRow.modelData.start*1000); color:cueRow.active ? Theme.accent : Theme.muted; font.family:Theme.mono; font.pixelSize:11; Layout.preferredWidth:root.width<400 ? implicitWidth : 58 }
                     Text { textFormat:Text.PlainText; id:subtitleText; Layout.fillWidth:true; text:(cueRow.modelData.speaker ? cueRow.modelData.speaker+"  " : "") + cueRow.modelData.text; color:Theme.text; font.family:Theme.font; font.pixelSize:14; wrapMode:Text.Wrap }
-                    TButton { objectName:"correctSubtitleRow"; text:qsTranslate("Tingmu", "纠正"); quiet:true; visible:cueRow.index===backend.activeIndex || rowHover.hovered; tip:qsTranslate("Tingmu", "纠正此句"); onClicked:backend.requestDialog("correction",root,{cueId:cueRow.modelData.id}) }
+                    TButton { objectName:"correctSubtitleRow"; text:qsTranslate("Tingmu", "纠正"); quiet:true; visible:cueRow.active || rowHover.hovered; tip:qsTranslate("Tingmu", "纠正此句"); onClicked:backend.requestDialog("correction",root,{cueId:cueRow.modelData.id}) }
                 }
                 HoverHandler { id:rowHover }
                 MouseArea { id:subtitleMouse; anchors.fill:parent; hoverEnabled:true; cursorShape:Qt.PointingHandCursor; onClicked:backend.command("seek",{position:cueRow.modelData.start*1000}); onDoubleClicked:backend.command("repeatCue",{}) }
             }
-            Text { textFormat:Text.PlainText; anchors.centerIn:parent; visible:list.count===0; text:qsTranslate("Tingmu", "字幕准备好后，会在这里跟随播放。"); color:Theme.muted; font.family:Theme.font; font.pixelSize:12 }
+            ColumnLayout {
+                anchors.centerIn: parent
+                visible: list.count === 0
+                width: Math.max(0, list.width - 12)
+                Text {
+                    objectName: "subtitleEmptyMessage"
+                    Layout.fillWidth: true
+                    wrapMode: Text.Wrap
+                    horizontalAlignment: Text.AlignHCenter
+                    text: root.query ? qsTranslate("Tingmu", "没有匹配的字幕") : qsTranslate("Tingmu", "字幕准备好后，会在这里跟随播放。")
+                    color: Theme.muted
+                    font.family: Theme.font
+                    font.pixelSize: 12
+                }
+                TButton {
+                    objectName: "clearSubtitleSearch"
+                    Layout.alignment: Qt.AlignHCenter
+                    visible: !!root.query
+                    text: qsTranslate("Tingmu", "清除搜索")
+                    quiet: true
+                    onClicked: search.clear()
+                }
+            }
         }
     }
     SettingPopup {

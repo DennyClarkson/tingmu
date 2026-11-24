@@ -47,7 +47,7 @@ AppDialog {
     }
     contentItem: ColumnLayout {
         spacing: 10
-        ScrollView {
+        AppScrollView {
             id: scroll
             Layout.fillWidth: true
             Layout.fillHeight: true
@@ -59,19 +59,14 @@ AppDialog {
                 Text { color: Theme.accent; font.family: Theme.font; text: S.time((editor.captured.start || 0)*1000) + qsTranslate("Tingmu", "  /  已选字幕") }
                 Text { Layout.fillWidth: true; text: editor.captured.text || ""; textFormat: Text.PlainText; wrapMode: Text.Wrap; color: Theme.text; font.family: Theme.font; font.pixelSize: 18 }
                 Label { text: qsTranslate("Tingmu", "你确认的说法或意思"); font.family: Theme.font; color: Theme.text }
-                TextArea {
+                AppTextArea {
                     id: guidance
                     objectName: "subtitleCorrectionGuidance"
                     Layout.fillWidth: true
-                    Layout.preferredHeight: Math.max(88, implicitHeight)
+                    Layout.preferredHeight: 96
                     placeholderText: qsTranslate("Tingmu", "例如：这里说的是「落車」，意思是下车，请一起改正字幕和讲解。")
                     wrapMode: TextEdit.Wrap
                     readOnly: editor.waiting || editor.saved
-                    selectByMouse: true
-                    color: Theme.text
-                    placeholderTextColor: Theme.muted
-                    font.family: Theme.font
-                    background: Rectangle { color: Theme.bg; border.color: guidance.activeFocus ? Theme.accent : Theme.line; radius: 5 }
                 }
                 Text {
                     Layout.fillWidth: true
