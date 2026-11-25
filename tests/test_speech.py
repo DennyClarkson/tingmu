@@ -34,7 +34,8 @@ def test_repetitive_background_preserves_clock_and_foreground(tmp_path):
     assert foreground_gain > .85
 
 
-def test_source_separation_consumes_selected_slice_and_discards_temps(tmp_path, monkeypatch):
+@pytest.mark.parametrize("keep_original", [False, True])
+def test_source_separation_consumes_selected_slice_and_discards_temps(tmp_path, monkeypatch, keep_original):
     source = tmp_path / "media.mkv"
     source.write_bytes(b"private media")
     monkeypatch.setattr(media, "_cache_root", lambda: tmp_path)
@@ -50,15 +51,20 @@ def test_source_separation_consumes_selected_slice_and_discards_temps(tmp_path, 
         assert source.read_bytes() == b"mix only"
         dest.write_bytes(b"voice only")
     def convert(cmd, cancelled):
-        assert Path(cmd[cmd.index("-i") + 1]).read_bytes() == b"voice only"
-        pcm_file(Path(cmd[-1]), [0] * 16000)
+        original = Path(cmd[-1]).name == "original.wav"
+        assert Path(cmd[cmd.index("-i") + 1]).read_bytes() == (b"mix only" if original else b"voice only")
+        pcm_file(Path(cmd[-1]), [100 if original else 0] * 16000)
     monkeypatch.setattr(media, "_extract_pcm", extract)
     monkeypatch.setattr(media, "_executable", lambda name: name)
     monkeypatch.setattr(speech, "isolate_vocals", separate)
     monkeypatch.setattr(media, "_run", convert)
     metadata = {}
-    with media.prepared_audio(source, audio_track=1, start=30, duration=1, metadata_out=metadata) as path:
+    original = {} if keep_original else None
+    with media.prepared_audio(source, audio_track=1, start=30, duration=1, metadata_out=metadata,
+                              original_out=original) as path:
         assert path.is_file()
+        if keep_original:
+            assert original["path"].read_bytes() != path.read_bytes()
         assert calls == [(source, 1, 30, 1, {"channels": 2, "rate": 44100, "fmt": "s16le"})]
     assert metadata == {"bgm_method": "spleeter-2stems-fp16"}
     assert not path.parent.exists()

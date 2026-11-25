@@ -26,6 +26,29 @@ def visual(window, name):
     raise AssertionError(name)
 
 
+def test_study_import_keeps_raw_ass_but_only_annotates_dialogue(quick, tmp_path, qtbot):
+    import pysubs2
+
+    _, bridge, _, _ = quick
+    movie = str(tmp_path / "lesson.mkv")
+    bridge.media_path = movie
+    path = tmp_path / "lesson.ass"
+    subtitles = pysubs2.SSAFile()
+    raw = r"{\i1}我哋返屋企。{\i0}\N我们回家吧。"
+    subtitles.events.extend([pysubs2.SSAEvent(start=1000, end=3000, text=raw),
+                             pysubs2.SSAEvent(start=3100, end=4000, text=r"{\move(0,0,5,4)}中環站")])
+    subtitles.save(path)
+    bridge.command("importStudySubtitle", {"path": str(path)})
+    qtbot.waitUntil(lambda: bridge.store.load_document(movie, bridge._settings.language) is not None, timeout=10000)
+    doc = bridge.store.load_document(movie, bridge._settings.language)
+    row, = doc.cues
+    assert (row.text, row.original_text, row.translation) == ("我哋返屋企。", raw, "我们回家吧。")
+    assert doc.metadata["raw_display_text"] == {row.id: row.text}
+    assert doc.metadata["provided_translations"] == {row.id: row.translation}
+    assert "".join(t.text for t in row.tokens) == row.text
+    assert doc.metadata["subtitle_import"]["events"][row.id]["event_index"] == 0
+
+
 def test_external_captions_coexist_and_survive_media_switch(quick, tmp_path, qtbot):
     _, bridge, engine, window = quick
     media = str(bridge.store.data_dir / "media/film.mkv")

@@ -94,7 +94,9 @@ def test_speaker_event_inside_word_does_not_split_and_first_char_stays_in_clause
     assert [c.text for c in _whisper_turn_cues(cue, words, [], 0)] == ["你出發？", "我等你。"]
     cue = Cue("w", 0, 3, "你好")
     words = [SimpleNamespace(word="你", start=1.0, end=1.5), SimpleNamespace(word="好", start=2.0, end=2.5)]
-    assert _whisper_turn_cues(cue, words, [1.7], 0) == [cue]
+    assert [(c.text, c.start, c.end) for c in _whisper_turn_cues(cue, words, [1.7], 0)] == [
+        ("你好", 1.0, 2.5)
+    ]
 
 
 def test_true_long_pause_separates_unpunctuated_sentences():
@@ -137,11 +139,13 @@ def test_plateau_with_one_stretched_unit_preserves_outer_anchors():
 
 
 @pytest.mark.parametrize("filtered", [False, True])
-def test_recognition_and_alignment_keep_same_selected_clock(filtered, tmp_path, monkeypatch):
+@pytest.mark.parametrize("turns", [False, True])
+@pytest.mark.parametrize("model", ["qwen3-asr-1.7b", "small", "large-v3", "large-v3-turbo", "local:test"])
+def test_recognition_and_alignment_keep_same_selected_clock(filtered, turns, model, tmp_path, monkeypatch):
     from contextlib import contextmanager
     from pathlib import Path
 
-    from tingmu import media
+    from tingmu import local_whisper, media, speech
 
     monkeypatch.setattr(media, "_cache_root", lambda: tmp_path)
     monkeypatch.setattr(media, "_qwen_python", lambda: Path("qwen-python"))
@@ -150,6 +154,15 @@ def test_recognition_and_alignment_keep_same_selected_clock(filtered, tmp_path, 
     expected_mix = tmp_path / "mix.wav"
     expected_vocals = tmp_path / "vocals.wav"
     extractions = []
+    turn_inputs = []
+    monkeypatch.setattr(local_whisper, "resolve_local_model", lambda reference: tmp_path / "test-model")
+    monkeypatch.setattr(speech, "speech_model_status", lambda cache: {"speaker": "pyannote"})
+
+    def detect(audio, *args):
+        turn_inputs.append(audio)
+        return [4.2]
+
+    monkeypatch.setattr(speech, "detect_speaker_changes", detect)
 
     @contextmanager
     def prepare(source, **kwargs):
@@ -166,6 +179,9 @@ def test_recognition_and_alignment_keep_same_selected_clock(filtered, tmp_path, 
         assert Path(request["audio"]) == (expected_vocals if filtered else expected_mix)
         assert Path(request["alignment_audio"]) == expected_mix
         assert request["alignment_input"] == "original_track"
+        assert request["speaker_changes"] == ([4.2] if turns else [])
+        if model.startswith("local:"):
+            assert Path(request["model"]) == tmp_path / "test-model"
         Path(request["result"]).write_text("[]", encoding="utf8")
         return True, ""
 
@@ -174,11 +190,142 @@ def test_recognition_and_alignment_keep_same_selected_clock(filtered, tmp_path, 
     monkeypatch.setattr(media, "_run_worker", worker)
     media.transcribe(
         tmp_path / "media",
-        model="qwen3-asr-1.7b",
+        model=model,
         audio_track=2,
         start=70,
         duration=12,
         suppress_bgm=filtered,
+        speaker_turns=turns,
         allow_model_downloads=True,
     )
     assert extractions == ([(2, 70, 12)] if filtered else [])
+    assert turn_inputs == ([expected_mix] if turns else [])
+
+
+@pytest.mark.parametrize("vad", [True, False])
+def test_filtered_whisper_uses_original_quiet_evidence_and_audits_unplaced_words(tmp_path, monkeypatch, vad):
+    import json
+    import sys
+    from pathlib import Path
+    from tingmu import media
+
+    if vad:
+        (tmp_path / "silero_vad_v6.onnx").touch()
+    monkeypatch.setattr(
+        media, "distribution", lambda name: SimpleNamespace(locate_file=lambda location: tmp_path)
+    )
+    monkeypatch.setattr(media, "is_clean_install", lambda: False)
+    monkeypatch.setitem(sys.modules, "ctranslate2", SimpleNamespace())
+    original = np.zeros(10 * 16000, dtype=np.float32)
+    original[5 * 16000 : 8 * 16000] = 0.10
+    rendered = np.full_like(original, 0.04)
+    monkeypatch.setattr(media, "_read_pcm_audio", lambda path: original if path == "original" else rendered)
+
+    def seg(a, b, text, words, prob=0.2):
+        return SimpleNamespace(
+            start=a,
+            end=b,
+            text=text,
+            words=words,
+            avg_logprob=-1 if prob > 0.5 else -0.2,
+            no_speech_prob=prob,
+            compression_ratio=1.1,
+        )
+
+    def word(a, b, text):
+        return SimpleNamespace(start=a, end=b, word=text, probability=0.7)
+
+    class Model:
+        supported_languages = ["en"]
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def transcribe(self, audio, **kwargs):
+            assert audio is rendered and kwargs["word_timestamps"] and kwargs["vad_filter"] == vad
+            segments = [
+                seg(0, 3, "hahahaha", [word(0, 3, "hahahaha")], 0.95),
+                seg(5, 5, " Hi!", [word(5.2, 5.4, " Hi!")]),
+                seg(float("nan"), 6, "lost", []),
+                seg(6.1, 9.8, "Really?", [word(6.35, 6.75, "Really?")]),
+                seg(7, 7.5, "hello", [word(None, 7.4, "hello")]),
+            ]
+            return segments, SimpleNamespace(language="en", duration=10.0)
+
+    monkeypatch.setitem(sys.modules, "faster_whisper", SimpleNamespace(WhisperModel=Model))
+    request = dict(
+        audio="vocals",
+        alignment_audio="original",
+        model="small",
+        language="en",
+        device="cpu",
+        model_cache=str(tmp_path),
+        result=str(tmp_path / "out.json"),
+        raw_output=str(tmp_path / "audit.json"),
+        start=90,
+        source="test",
+    )
+    config = tmp_path / "request.json"
+    config.write_text(json.dumps(request))
+    assert media._asr_worker(config) == 0
+    audit = json.loads(Path(request["raw_output"]).read_text("utf8"))
+    cues = json.loads(Path(request["result"]).read_text("utf8"))
+    assert audit["quiet_intervals"] == [[90, 95], [98, 100]]
+    first, orphan, unplaced, long, malformed = audit["segments"]
+    assert first["disposition"] == ("published" if vad else "no_vad_quiet_low_confidence")
+    assert first["words"][0]["text"] == "hahahaha" and first["repeated_text"]
+    assert orphan["segment_bounds_basis"] == "word_span" and orphan["start"] == orphan["end"] == 95.0
+    assert (
+        unplaced["disposition"] == "unplaced_segment"
+        and unplaced["start"] is None
+        and unplaced["text"] == "lost"
+    )
+    assert malformed["alignment_error"] == "invalid_word_times"
+    assert [(c["original_text"], c["start"], c["end"]) for c in cues if c["text"] in {"Hi!", "Really?"}] == [
+        (" Hi!", 95.2, 95.4),
+        ("Really?", 96.35, 96.75),
+    ]
+    assert long["start"] == 96.1 and long["end"] == 99.8
+    assert next(c for c in cues if c["text"] == "hello")["uncertain"]
+
+
+@pytest.mark.parametrize("model", ["small", "qwen3-asr-1.7b"])
+def test_original_absolute_quiet_intervals_merge_at_window_edges(model):
+    from tingmu.media import _transcription_metadata
+
+    meta = _transcription_metadata(
+        {
+            "model": model,
+            "device": "cpu",
+            "asr_quiet_intervals": [[301.0, 302.0], [302.0, 302.4], [307.11, 309.0]],
+        }
+    )
+    assert meta["asr_quiet_intervals"] == [[301.0, 302.4], [307.11, 309.0]]
+
+
+def test_whisper_keeps_short_unpunctuated_name_with_following_vocative():
+    words = [
+        SimpleNamespace(word=x, start=a, end=b)
+        for x, a, b in [("蘇", 1, 1.3), ("格", 3.3, 3.4), ("蘭，", 3.4, 3.55), (" 你好。", 4, 4.4)]
+    ]
+    cue = Cue("id", 0.0, 5.0, "蘇格蘭， 你好。")
+    assert [c.text for c in _whisper_turn_cues(cue, words, [], 0, pauses=[(1.5, 3.2)])] == [
+        "蘇格蘭，",
+        "你好。",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("quiet", "weak", "expected_skip"), [(0.0, True, False), (1.0, False, False), (0.95, True, True)]
+)
+def test_repeated_words_need_both_acoustic_and_model_evidence_to_suppress(quiet, weak, expected_skip):
+    from tingmu.whisper_segments import quality_evidence
+
+    evidence = {
+        "text": "yes yes yes yes",
+        "avg_logprob": -1.1 if weak else -0.1,
+        "no_speech_prob": 0.2,
+        "compression_ratio": 1.0,
+    }
+    skip, uncertain, _ = quality_evidence(evidence, (0.0, 1.0), [(0.0, quiet)], "", False)
+    assert skip is expected_skip and uncertain

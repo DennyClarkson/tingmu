@@ -46,12 +46,12 @@ def prepare_media(media_path: Path, settings: AppSettings, store: Store,
                   subtitle_path: Path | None = None, start: float = 0,
                   duration: float | None = None, progress=None, cancelled=None,
                   force_asr: bool = False, audio_permission=None, allow_model_downloads: bool = False,
-                  reuse_existing_transcript: bool = False) -> StudyDocument:
+                  reuse_existing_transcript: bool = False, *, log_event=None) -> StudyDocument:
     ctx = preparation.PreparationContext(
         media_path=media_path, settings=deepcopy(settings), store=store, ports=_ports(),
         subtitle_path=subtitle_path, start=start, duration=duration, progress=progress,
         cancelled=cancelled, force_asr=force_asr, audio_permission=audio_permission,
-        allow_model_downloads=allow_model_downloads, reuse_existing_transcript=reuse_existing_transcript,
+        allow_model_downloads=allow_model_downloads, reuse_existing_transcript=reuse_existing_transcript, log_event=log_event,
     )
     preparation.plan_preparation(ctx)
     preparation.resolve_models(ctx)

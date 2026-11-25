@@ -1031,12 +1031,15 @@ class Bridge(QObject):
 
         def work(progress, cancelled):
             from tingmu.agent import annotate_local
-            from tingmu.media import load_subtitles
-            cues = load_subtitles(Path(path))
+            from tingmu.preparation import apply_quality_gate
+            from tingmu.subtitle_sources import load_learning_subtitles
+            metadata = {"subtitle_path": canonical_path(path), "stage": "transcribed"}
+            cues = load_learning_subtitles(Path(path), language, cancelled=cancelled, metadata_out=metadata)
             if not cues:
                 raise ValueError("字幕文件中没有有效内容")
-            doc = StudyDocument(media, language, annotate_local(cues, language),
-                                metadata={"subtitle_path": canonical_path(path), "stage": "transcribed"})
+            doc = StudyDocument(media, language, cues, metadata=metadata)
+            apply_quality_gate(doc, self.store, source_kind="sidecar", log_event=self.log.event)
+            doc.cues = annotate_local(doc.cues, language)
             self.store.save_document(doc, replace_existing=True)
             return doc
 

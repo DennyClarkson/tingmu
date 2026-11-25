@@ -39,12 +39,14 @@ def pcm_windows(count, size, energy, rate=16000):
     """Prefer the middle of a pause in the last six seconds of each model window."""
     import numpy as np
 
+    if size < 1:
+        raise ValueError("PCM window size must be positive")
     begin = 0
     while count - begin > size:
-        lower = begin + size - 6 * rate
+        lower = begin + size - min(6 * rate, size // 4)
         upper = begin + size
         # Leave enough audio for a final model invocation, including decoder tails.
-        upper = min(upper, count - 4 * rate)
+        upper = min(upper, count - min(4 * rate, size // 4))
         first, last = lower // (rate // 50), upper // (rate // 50)
         band = energy[first:last]
         pauses = quiet_intervals(band)
@@ -284,9 +286,8 @@ def repair_times(times, weights, duration, pauses, limits=()):
     return spans, affected | clipped, reports
 
 
-_SENTENCE_END = re.compile(r"""[。！？!?；;…]|\.(?:[”’"'）)]*\s|[”’"'）)]*$)""")
-_CLAUSE = re.compile(r"[,，、：:]")
-_PARTICLE = re.compile(r"[呀啊啦喇囉咯啫嘛㗎喎噃吖咋]$")
+_SENTENCE_END = re.compile(r"""[。！？!?；;…؟۔।॥።]|\.(?:[”’"'）)]*\s|[”’"'）)]*$)""")
+_CLAUSE = re.compile(r"[,，、：:،؛]")
 
 
 def sentence_breaks(text, ends, separators, spans, turns, pauses):
@@ -295,15 +296,7 @@ def sentence_breaks(text, ends, separators, spans, turns, pauses):
     if n < 2:
         return {n}
     ends_sentence = {i for i in range(1, n) if _SENTENCE_END.search(separators[i - 1])}
-    clauses = {
-        i
-        for i in range(1, n)
-        if _CLAUSE.search(separators[i - 1])
-        or (
-            _PARTICLE.search(text[: ends[i - 1]].rstrip())
-            and not _PARTICLE.fullmatch(text[ends[i - 1] :].lstrip()[:1])
-        )
-    }
+    clauses = {i for i in range(1, n) if _CLAUSE.search(separators[i - 1])}
     gaps = [0.0] + [max(0.0, spans[i][0] - spans[i - 1][1]) for i in range(1, n)]
     centers = [0.0] + [(spans[i][0] + spans[i - 1][1]) / 2 for i in range(1, n)]
     cuts = set(ends_sentence)
@@ -356,3 +349,27 @@ def sentence_breaks(text, ends, separators, spans, turns, pauses):
         if i not in clauses and (short_left or short_right) and gaps[i] < 1.8:
             cuts.remove(i)
     return cuts | {n}
+
+
+def alignment_text_ranges(text, tokens):
+    """Map cleaned aligner symbols back to their untouched Unicode spelling."""
+    import unicodedata
+
+    kept = [
+        (i, char)
+        for i, char in enumerate(text)
+        if char == "'" or unicodedata.category(char).startswith(("L", "N"))
+    ]
+    normalized = "".join(char for _, char in kept)
+    locations, cursor = [], 0
+    for item in tokens:
+        token = "".join(
+            char for char in item if char == "'" or unicodedata.category(char).startswith(("L", "N"))
+        )
+        if not token or not normalized.startswith(token, cursor):
+            raise ValueError("Qwen 时间对齐文本与原始转写不一致，无法安全生成字幕。")
+        locations.append((kept[cursor][0], kept[cursor + len(token) - 1][0] + 1))
+        cursor += len(token)
+    if cursor != len(normalized):
+        raise ValueError("Qwen 时间对齐遗漏了原始转写字符，无法安全生成字幕。")
+    return locations

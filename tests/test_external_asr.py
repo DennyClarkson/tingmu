@@ -102,6 +102,91 @@ def test_chunks_preserve_samples_and_timeline(tmp_path, monkeypatch):
     assert received == pcm
 
 
+@pytest.mark.parametrize("backend", ["local_api", "external"])
+def test_api_chunk_cut_uses_only_original_for_timing_and_only_prepared_for_upload(tmp_path, monkeypatch, backend):
+    import io
+    import numpy as np
+
+    rate = 16000
+    source = tmp_path / "original.wav"
+    payload = tmp_path / "foreground.wav"
+    mix = np.full(rate * 12, 11000, dtype="<i2")
+    mix[int(6.8*rate):int(7.4*rate)] = 0
+    mix[int(7.85*rate):int(7.90*rate)] = 0  # An isolated 50 ms dip is not a pause.
+    masked = np.full_like(mix, 2500)
+    for path, samples in [(source, mix), (payload, masked)]:
+        with wave.open(str(path), "wb") as writer:
+            writer.setparams((1, 2, rate, 0, "NONE", "not compressed"))
+            writer.writeframes(samples.tobytes())
+
+    @contextmanager
+    def prepare(_path, **kwargs):
+        assert kwargs["suppress_bgm"] and not kwargs["cancelled"]()
+        kwargs["original_out"]["path"] = source
+        yield payload
+
+    received = []
+    def post(_endpoint, _key, _fields, audio):
+        assert len(audio) <= external_asr.MAX_WAV_BYTES
+        with wave.open(io.BytesIO(audio)) as reader:
+            received.append(reader.readframes(reader.getnframes()))
+        return {"segments": [{"start": 0., "end": .2, "text": " Hi! ", "speaker": "A"},
+                             {"start": .2, "end": .4, "text": " ", "speaker": "A"}]}
+
+    monkeypatch.setattr(media, "prepared_audio", prepare)
+    monkeypatch.setattr(external_asr, "_post", post)
+    monkeypatch.setattr(external_asr, "MAX_WAV_BYTES", 44 + rate * 2 * 8)
+    settings = AppSettings(asr_backend=backend, asr_endpoint="https://example.invalid/v1/audio/transcriptions",
+                           allow_audio_upload=backend == "external", asr_key_env="", local_asr_key_env="",
+                           local_asr_response_format="diarized_json", asr_response_format="diarized_json",
+                           suppress_bgm=True)
+    metadata = {}
+    rows = external_asr.transcribe_external(source, settings, tmp_path, start=100, metadata_out=metadata)
+    assert len(received) == len(rows) == 2 and b"".join(received) == masked.tobytes()
+    assert 7.0 <= len(received[0]) / (2 * rate) <= 7.2
+    assert [r.speaker for r in rows] == ["1·A", "2·A"]
+    assert (rows[1].start, rows[1].original_text) == (100 + len(received[0]) / (2 * rate), " Hi! ")
+    assert metadata["asr_segment_sources"][rows[1].id] == {
+        "chunk": 2, "segment_index": 0, "offset": rows[1].start, "reported_start": 0., "reported_end": .2}
+    assert metadata["asr_quiet_intervals"] == [[106.8, 107.4]]
+    assert len(metadata["asr_blank_segments"]) == 2
+
+
+def test_wav_chunk_tail_and_truncated_data(tmp_path, monkeypatch):
+    path = tmp_path / "tail.wav"
+    with wave.open(str(path), "wb") as writer:
+        writer.setparams((1, 2, 16000, 0, "NONE", "not compressed"))
+        writer.writeframes(bytes(16001*2))
+    monkeypatch.setattr(external_asr, "MAX_WAV_BYTES", 32044)
+    chunks = list(external_asr._wav_chunks(path))
+    assert len(chunks) == 2 and sum(len(wav)-44 for _, _, wav, _ in chunks) == 32002
+    assert all(44 < len(wav) <= 32044 for _, _, wav, _ in chunks)
+    path.write_bytes(path.read_bytes()[:-1])
+    with pytest.raises(ProviderError, match="不完整"):
+        list(external_asr._wav_chunks(path))
+
+
+def test_audio_permission_revoked_stops_following_uploads(tmp_path, monkeypatch):
+    source = tmp_path / "track.wav"
+    with wave.open(str(source), "wb") as writer:
+        writer.setparams((1, 2, 16000, 0, "NONE", "not compressed"))
+        writer.writeframes(bytes(3*32000))
+
+    @contextmanager
+    def prepare(*args, **kwargs):
+        yield source
+
+    posts = []
+    monkeypatch.setattr(media, "prepared_audio", prepare)
+    monkeypatch.setattr(external_asr, "CHUNK_SECONDS", 1)
+    monkeypatch.setattr(external_asr, "_post", lambda *args: posts.append(True) or {"segments": []})
+    settings = AppSettings(asr_backend="external", asr_endpoint="https://example.invalid/v1/audio/transcriptions",
+                           allow_audio_upload=True, asr_key_env="")
+    with pytest.raises(ProviderError, match="允许"):
+        external_asr.transcribe_external(source, settings, tmp_path, permission=lambda: not posts)
+    assert posts == [True]
+
+
 def test_local_api_without_remote_permission_or_proxy(tmp_path, monkeypatch, server):
     endpoint, posts = server
     monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:1")

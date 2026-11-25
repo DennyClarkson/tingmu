@@ -4,7 +4,7 @@ from dataclasses import dataclass, fields, replace
 from typing import Any, Callable
 import math
 
-from tingmu.models import AppSettings, MAX_LLM_CONCURRENCY
+from tingmu.models import AppSettings, MAX_LLM_CONCURRENCY, SEGMENTATION_MODES
 from tingmu.locale_catalog import display_language
 from tingmu.workspaces import language_code
 from .localization import ui_text
@@ -57,7 +57,9 @@ class SettingsController:
             return
         self.ports.set_state(domain=setting_domain(name), error="")
         try:
-            before = getattr(self.ports.settings(), name)
+            current = self.ports.settings()
+            updated = replace(current)
+            before = getattr(updated, name)
             if name == "audio_output_id":
                 self.ports.set_audio_output(str(value))
                 return
@@ -104,9 +106,7 @@ class SettingsController:
 
                 value = validate_speech_setting(name, value)
                 if name in ("asr_backend", "asr_endpoint") and value != before:
-                    self.ports.settings().allow_audio_upload = False
-                if name in ("asr_backend", "asr_endpoint", "local_asr_endpoint") and value != before:
-                    self.ports.set_state(speechModelChoices=[])
+                    updated.allow_audio_upload = False
             limits = {
                 "subtitle_min_ms": (0, 10000),
                 "subtitle_gap_ms": (0, 1500),
@@ -122,6 +122,8 @@ class SettingsController:
                 raise ValueError("请选择可用主题")
             if name == "preparation_workflow" and value not in ("classic", "subtitle_agent"):
                 raise ValueError("请选择可用的字幕处理流程")
+            if name == "segmentation_mode" and value not in SEGMENTATION_MODES:
+                raise ValueError("请选择可用的分句方式")
             if name == "companion_reasoning_effort" and value not in (
                 "default",
                 "none",
@@ -136,8 +138,13 @@ class SettingsController:
                 not value.strip() or len(value) > 200
             ):
                 raise ValueError("请输入有效的模型 ID")
-            setattr(self.ports.settings(), name, value)
-            self.ports.store.save_settings(self.ports.settings())
+            setattr(updated, name, value)
+            self.ports.store.save_settings(updated)
+            # Publish only after saving. Existing owners of the workspace settings
+            # also need the new endpoint, its consent state and refreshed model roles.
+            vars(current).update(vars(updated))
+            if name in ("asr_backend", "asr_endpoint", "local_asr_endpoint") and value != before:
+                self.ports.set_state(speechModelChoices=[])
             if name == "auto_prepare_media" and value:
                 self.ports.resume_inbox()
             self.ports.settingsChanged.emit()
@@ -158,7 +165,7 @@ class SettingsController:
                 self.ports.set_document(self.ports.document())
             elif name == "subtitle_offset_ms":
                 self.ports.sync_cue(self.ports.player_position())
-        except (ValueError, TypeError) as exc:
+        except (ValueError, TypeError, OSError) as exc:
             self.ports.error(exc, domain=setting_domain(name))
 
     def set_languages(self, source, target):

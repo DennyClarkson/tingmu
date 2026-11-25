@@ -343,3 +343,11 @@ class ReviewSchedulerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+
+def test_full_document_prompt_uses_only_projected_dialogue():
+    cue = Cue("source", 0, 2, "Where are you?", original_text=r"{\an8}Where are you?\N你在哪？")
+    text = _document_context([cue], LanguagePair("zh-CN", "en"))["text"]
+    assert "Where are you?" in text
+    assert "你在哪" not in text and r"\an8" not in text

@@ -263,7 +263,7 @@ def _validate_review_rows(rows, cues, language, *, enforce_split_duration=True):
 
 def _document_context(cues: list[Cue], language: LanguagePair, limit: int = 60000):
     """Literal context only: no extra paid summary call or invented name glossary."""
-    lines = [f"{i + 1}: {learning_text(c.original_text or c.text, language)}" for i, c in enumerate(cues)]
+    lines = [f"{i + 1}: {learning_text(c.text, language)}" for i, c in enumerate(cues)]
     full = "\n".join(lines)
     if len(full) <= limit:
         return {"mode": "full_transcript", "total_cues": len(cues), "text": full}
@@ -283,6 +283,7 @@ class TranscriptReviewer(TextBatchTask):
 
     def __init__(self, provider: str = "openai", model: str | None = "gpt-6-astra", *, profile=None):
         super().__init__(provider, model or "gpt-6-astra", profile=profile)
+        self.preserve_text = True  # Neighbor context uses the projected dialogue from acquisition.
         self.chunk_size = 40
         self.split_invalid_batches = True
         self.max_completion_tokens = profile.get("max_tokens", 10000) if profile else 10000

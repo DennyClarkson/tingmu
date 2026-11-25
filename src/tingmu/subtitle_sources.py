@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from bisect import bisect_left, bisect_right
 from collections import Counter, defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import hashlib
 import html
 import json
@@ -22,7 +22,7 @@ from .models import Cue, LanguagePair
 from .storage import media_fingerprint
 
 
-VERSION = 1
+VERSION = 2
 MAX_BYTES = 4 * 1024 * 1024
 MAX_EVENTS = 18000
 MAX_INPUTS = 12
@@ -30,7 +30,16 @@ MAX_STREAMS = 128
 TEXT_CODECS = {"subrip", "srt", "ass", "ssa", "webvtt", "mov_text", "text", "microdvd"}
 EPISODE = re.compile(r"(?<![\da-z])(?:s(\d{1,3})[ ._-]*e(\d{1,3})|(\d{1,2})x(\d{1,3}))(?!\d)", re.I)
 AUXILIARY = re.compile(r"\b(?:forced|signs?|songs?|commentary|lyrics|karaoke|partial|trailer)\b|强制|強制|注释|註釋|仅外语|僅外語", re.I)
-NON_DIALOGUE = re.compile(r"\b(?:signs?|credits?|title|typeset|karaoke|op|ed|song|lyrics)\b|特效|片头|片尾|片頭|字幕组|字幕組", re.I)
+NON_DIALOGUE = re.compile(r"\b(?:signs?|credits?|titles?|typeset|karaoke|op|ed|songs?|lyrics|sfx|sound effects?)\b|特效|片头|片尾|片頭|字幕组|字幕組|招牌|标牌|標牌|音效|歌詞|歌词", re.I)
+SIGN_PREFIX = re.compile(r"^(?:\[(?:sign|on[- ]screen text|title card|sfx|lyrics)\]|"
+                         r"(?:on[- ]screen text|sign(?: reads)?|title card|sfx|sound effect|lyrics|"
+                         r"招牌|标牌|標牌|画面文字|畫面文字|音效)\s*[:：])", re.I)
+SIGN_CLASS = re.compile(r"<c\.(?:signs?|credits?|sfx|lyrics)(?:[.\s>])", re.I)
+SOUND_LABEL = re.compile(r"[\[【(（][^\]】)）\n]{0,80}(?:\b(?:music|applause|sighs?|laughs?|laughing|laughter|"
+                         r"gasps?|whispers?|coughs?|slams?|ringing|footsteps|sfx)\b|音乐|音樂|掌声|掌聲|笑声|笑聲|叹气|嘆氣|脚步|腳步|铃声|鈴聲)"
+                         r"[^\]】)）\n]{0,40}[\]】)）]", re.I)
+LANG_TAG = re.compile(r"<lang\s+([\w-]+)\s*>", re.I)
+LANG_SPAN = re.compile(r"<lang\s+[\w-]+\s*>(.*?)</lang>", re.I)
 CJK = re.compile(r"[\u3400-\u9fff\uf900-\ufaff]")
 KANA = re.compile(r"[ぁ-ヿ]")
 HANGUL = re.compile(r"[가-힣]")
@@ -46,10 +55,21 @@ WORDS = {lang: set(words.split()) for lang, words in {
     "it": "io tu noi voi loro il lo gli una sono sei che per non grazie ciao buongiorno perché come questa questo",
     "pt": "eu você nós vocês ele ela os as um uma é são não sim obrigado obrigada olá bom dia com por para meu minha",
     "ru": "я ты вы он она мы они это что как для нет да спасибо привет здесь почему где",
+    "uk": "привіт дякую будь ласка це так ні чому який де ти він вона вони ми",
+    "ar": "مرحبا مرحباً شكرا شكراً أين نعم أنا نحن أنت ماذا لماذا كيف ليس هنا",
+    "fa": "سلام ممنون کجا چرا چگونه من تو شما هستم نیست بله",
+    "hi": "नमस्ते धन्यवाद क्या कहाँ क्यों मैं तुम आप हैं नहीं यहाँ",
+    "nl": "ik jij wij jullie het een dank dankjewel bedankt waarom waar wat goedemorgen niet",
+    "sv": "jag du vi ni tack hej varför var vad inte här godmorgon",
 }.items()}
 LANG_ALIASES = {"eng": "en", "zho": "zh", "chi": "zh", "cmn": "zh", "jpn": "ja", "kor": "ko",
                 "spa": "es", "fra": "fr", "fre": "fr", "deu": "de", "ger": "de", "ita": "it",
                 "por": "pt", "rus": "ru", "cantonese": "yue", "zh-hk": "yue"}
+SHARED_SCRIPTS = {
+    "ARABIC": {"ar", "fa", "ur", "ps", "sd", "ug", "ckb"},
+    "CYRILLIC": {"ru", "uk", "be", "bg", "mk", "sr", "kk", "ky", "mn", "tg"},
+    "DEVANAGARI": {"hi", "mr", "ne", "sa"}, "ETHIOPIC": {"am", "ti"},
+}
 
 
 @dataclass
@@ -57,6 +77,7 @@ class SubtitlePlan:
     source_cues: list[Cue]
     reference_cues: list[Cue]
     metadata: dict
+    import_source: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -64,6 +85,7 @@ class _Track:
     record: dict
     source: list[Cue] = field(default_factory=list)
     reference: list[Cue] = field(default_factory=list)
+    event_sources: dict = field(default_factory=dict)
 
 
 def _lang(code):
@@ -167,6 +189,11 @@ def _identify(line, languages):
         if "ja" in languages and not re.search(r"[你们們这這吗嗎的了个個说說么麼]", line):
             return ""
         return "zh"
+    for script, code in (("THAI", "th"), ("GREEK", "el"), ("HEBREW", "he"), ("ARMENIAN", "hy"),
+                         ("GEORGIAN", "ka"), ("BENGALI", "bn"), ("TAMIL", "ta"), ("TELUGU", "te"),
+                         ("KANNADA", "kn"), ("MALAYALAM", "ml"), ("GUJARATI", "gu"), ("KHMER", "km")):
+        if code in languages and any(unicodedata.name(c, "").startswith(script + " ") for c in line if c.isalpha()):
+            return code
     words = set(TOKENS.findall(line.replace("’", "'").casefold()))
     scores = {lang: len(words & lexicon) for lang, lexicon in WORDS.items()}
     best = max(scores.values())
@@ -174,25 +201,57 @@ def _identify(line, languages):
     return winners[0] if best and len(winners) == 1 else ""
 
 
-def _parts(event):
+def _parts(event, raw_text, languages):
+    from .locale_catalog import resolve_language
+
     if (event.is_comment or event.is_drawing or event.end <= event.start or event.start < 0
-            or NON_DIALOGUE.search(event.style.replace("_", " ")) or re.search(r"\\(?:pos|move|clip)\(", event.text)):
+            or NON_DIALOGUE.search(event.style.replace("_", " ")) or NON_DIALOGUE.search(event.effect)):
         return []
+    if re.search(r"\{[^}]*\\(?:k[fo]?|K)\d", event.text):
+        return []  # Timed karaoke syllables.
+    if re.search(r"\{[^}]*\\(?:pos|move|i?clip)\(", event.text, re.I):
+        dialogue = event.plaintext.strip()
+        spoken = (event.name.strip() or re.search(r"dialog(?:ue)?|对白|對白", event.style, re.I)
+                  or re.search(r"[?？!！]$", dialogue)
+                  or (re.search(r"[.。…]$", dialogue) and not dialogue.isupper()
+                      and (_identify(dialogue, languages) in WORDS or YUE.search(dialogue)
+                           or re.search(r"[我你您他她]", dialogue))))
+        if not spoken:
+            return []
     lines = []
-    for raw in event.plaintext.splitlines():
+    raw_lines = raw_text.replace(r"\n", r"\N").split(r"\N")
+    style_language = _lang(resolve_language(event.style))
+    lanes = []
+    for n, display in enumerate(event.plaintext.splitlines()):
+        raw_line = raw_lines[n] if n < len(raw_lines) else ""
+        spans = list(LANG_SPAN.finditer(raw_line))
+        if len(spans) > 1 and not LANG_SPAN.sub("", raw_line).strip(" \t|｜/"):
+            lanes.extend((re.sub(r"<[^>]*>", "", span[1]), span[0]) for span in spans)
+        else:
+            lanes.append((display, raw_line))
+    for raw, raw_line in lanes:
         line = html.unescape(raw).strip()
-        if not line or re.fullmatch(r"(?:\[[^\]]*\]|【[^】]*】|\([^)]*\)|[♪♫\s])+[.!?]?", line):
+        if not line or line.startswith(("♪", "♫", "♬")) or SIGN_PREFIX.match(line) or SIGN_CLASS.match(raw_line):
+            continue
+        declared = set(LANG_TAG.findall(raw_line))
+        hint = _lang(declared.pop()) if len(declared) == 1 else style_language if style_language in languages else ""
+        label = re.match(r"^\[([\w-]+)\]\s*(.+)$", line)
+        if label and _lang(label[1]) in languages:
+            hint, line = _lang(label[1]), label[2]
+        line = SOUND_LABEL.sub("", line).strip()
+        if re.fullmatch(r"[-–—\s]*(?:\[[^\]]*\]|【[^】]*】|\([^)]*\)|（[^）]*）)[.!?]?[\s-]*", line):
             continue
         if not any(c.isalnum() for c in line):
             continue
         # Preserve punctuation in ordinary dialogue. Only split a separator if
         # both sides carry independent evidence for different languages.
-        chunks = re.split(r"\s*[|｜]\s*|\s+/\s+", line)
+        chunks = re.split(r"\s*[|｜]\s*|\s+/\s+|(?<=[.!?。！？])\s+", line)
         if len(chunks) > 1:
-            codes = [_identify(chunk, set()) for chunk in chunks]
-            if any(not code for code in codes) or len(set(codes)) < 2:
+            codes = [_identify(chunk, languages) for chunk in chunks]
+            explicit = re.search(r"[|｜]|\s/\s", line)
+            if len(set(codes)) < 2 or (not explicit and any(not code for code in codes)):
                 chunks = [line]
-        lines.extend(part.strip() for part in chunks if part.strip())
+        lines.extend((part.strip(), hint) for part in chunks if part.strip())
     return lines
 
 
@@ -211,7 +270,7 @@ def _sufficient(cues, duration):
     return True
 
 
-def align_references(cues: list[Cue], references: list[Cue]) -> dict[str, str]:
+def _reference_matches(cues: list[Cue], references: list[Cue]) -> dict[str, Cue]:
     """Attach only unambiguous reciprocal one-to-one subtitle timing matches."""
     refs = sorted(references, key=lambda cue: cue.start)
     starts = [r.start for r in refs]
@@ -233,7 +292,11 @@ def align_references(cues: list[Cue], references: list[Cue]) -> dict[str, str]:
                 uses[idx] += 1
         if len(matches) == 1:
             possible[cue.id] = matches[0]
-    return {key: refs[idx].text for key, idx in possible.items() if uses[idx] == 1}
+    return {key: refs[idx] for key, idx in possible.items() if uses[idx] == 1}
+
+
+def align_references(cues: list[Cue], references: list[Cue]) -> dict[str, str]:
+    return {key: ref.text for key, ref in _reference_matches(cues, references).items()}
 
 
 def align_reference_hints(cues: list[Cue], references: list[Cue]) -> dict[str, str]:
@@ -264,51 +327,67 @@ def align_reference_hints(cues: list[Cue], references: list[Cue]) -> dict[str, s
     return hints
 
 
-def _analyze(data, fmt, track, language, duration, stop):
+@dataclass
+class _DialogueEvent:
+    index: int
+    event: pysubs2.SSAEvent
+    raw: str
+    display: str
+    by_language: dict[str, list[str]]
+    unresolved: bool
+
+    def evidence(self):
+        return {"event_index": self.index, "start_ms": self.event.start, "end_ms": self.event.end,
+                "raw_text": self.raw, "style": self.event.style, "speaker": self.event.name.strip()}
+
+
+def _parsed_events(data, fmt):
     if len(data) > MAX_BYTES:
         raise ValueError("字幕文件超过读取上限")
     decoded = _decode(data)
     events = pysubs2.SSAFile.from_string(decoded, format_=fmt)
     if len(events) > MAX_EVENTS:
         raise ValueError("字幕条目超过读取上限")
-    if fmt == "vtt" and re.search(r"<v[.\s]", decoded, re.I):
-        tagged = pysubs2.SSAFile.from_string(decoded, format_="vtt", keep_html_tags=True)
+    tagged = events
+    if fmt in {"vtt", "srt"} and "<" in decoded:
+        tagged = pysubs2.SSAFile.from_string(decoded, format_=fmt, keep_html_tags=True)
         for event, raw in zip(events, tagged):
             # A cue with multiple voice tags has no single speaker.
-            if len(re.findall(r"<v[.\s]", raw.text, re.I)) == 1:
-                voice = re.fullmatch(r"\s*<v(?:\.[^\s>]+)*\s+([^>]+)>[^<]*(?:</v>)?\s*", raw.text, re.I)
-                if voice:
-                    event.name = html.unescape(voice[1].strip())
+            voices = re.findall(r"<v(?:\.[^\s>]+)*\s+([^>]+)>", raw.text, re.I)
+            if len(voices) == 1:
+                event.name = html.unescape(voices[0].strip())
+    return events, tagged
+
+
+def _dialogue_events(events, tagged, language, stop):
     target, known = _lang(language.target), _lang(language.source)
     rows = []
     lanes = defaultdict(Counter)
     for index, event in enumerate(events):
         if index % 128 == 0:
             stop.is_set()
-        lines = _parts(event)
+        lines = _parts(event, tagged[index].text, {target, known})
         if not lines:
             continue
-        if len(lines) > 24 or any(len(line) > 4096 for line in lines):
+        if len(lines) > 24 or any(len(line) > 4096 for line, _ in lines):
             raise ValueError("字幕行过长")
         parts = []
-        for i, line in enumerate(lines):
+        for i, (line, hint) in enumerate(lines):
             lane = (event.style, len(lines), i)
             identified = _identify(line, {target, known})
+            if not identified and hint:
+                identified = hint
+            if not identified and len(lines) > 1:
+                # Resolve a distinct script lane only within the requested pair.
+                # Arabic and Persian, for example, still require lexical or tagged evidence.
+                scripts = {unicodedata.name(c, "").partition(" ")[0] for c in line if c.isalpha()}
+                if len(scripts) == 1:
+                    candidates = SHARED_SCRIPTS.get(scripts.pop(), set()) & {target, known}
+                    if len(candidates) == 1:
+                        identified = candidates.pop()
             lanes[lane][identified] += 1
             parts.append((line, lane, identified))
         rows.append((index, event, parts))
-    record = track.record
-    record.update(events=len(rows), sha256=hashlib.sha256(data).hexdigest())
-    if not rows:
-        record["reason"] = "未找到可读取的对白"
-        return
-    if not duration:
-        record["reason"] = "无法核对媒体时长"
-        return
-    if max(event.end for _, event, _ in rows) / 1000 > duration + max(1.5, min(10, duration * .025)):
-        record["reason"] = "字幕时间超出视频，可能为不同剪辑"
-        return
-    missing = 0
     for index, event, parts in rows:
         if index % 128 == 0:
             stop.is_set()
@@ -333,19 +412,39 @@ def _analyze(data, fmt, track, language, duration, stop):
                 text[code].append(line)
             else:
                 unresolved = True
-        if unresolved or any(code not in {target, known} for code in text):
-            missing += 1
+        yield _DialogueEvent(index, event, tagged[index].text, "\n".join(line for line, _, _ in parts),
+                             dict(text), unresolved or any(code not in {target, known} for code in text))
+
+
+def _analyze(data, fmt, track, language, duration, stop):
+    rows = list(_dialogue_events(*_parsed_events(data, fmt), language, stop))
+    record = track.record
+    record.update(events=len(rows), sha256=hashlib.sha256(data).hexdigest())
+    if not rows:
+        record["reason"] = "未找到可读取的对白"
+        return
+    if not duration:
+        record["reason"] = "无法核对媒体时长"
+        return
+    if max(row.event.end for row in rows) / 1000 > duration + max(1.5, min(10, duration * .025)):
+        record["reason"] = "字幕时间超出视频，可能为不同剪辑"
+        return
+    missing = sum(row.unresolved for row in rows)
+    target, known = _lang(language.target), _lang(language.source)
+    for row in rows:
+        event, text = row.event, row.by_language
         start, end = event.start / 1000, event.end / 1000
         for code, output in ((target, track.source), (known, track.reference)):
             if code not in text or (output is track.reference and known == target):
                 continue
             content = "\n".join(text[code])
             identity = f"{record['id']}:{record['sha256']}:{code}"
-            cue = Cue(_cue_id(identity, index, start, end), start, end, content,
+            cue = Cue(_cue_id(identity, row.index, start, end), start, end, content,
                       speaker=event.name.strip())
             if output is track.source and known != target and known in text:
                 cue.translation = "\n".join(text[known])
             output.append(cue)
+            track.event_sources[cue.id] = row.evidence()
     track.source.sort(key=lambda c: (c.start, c.end))
     track.reference.sort(key=lambda c: (c.start, c.end))
     record.update(source_count=len(track.source), reference_count=len(track.reference), uncertain_events=missing)
@@ -379,6 +478,165 @@ def _read_sidecar(path):
     if len(data) > MAX_BYTES:
         raise ValueError("字幕文件超过读取上限")
     return data
+
+
+def load_learning_subtitles(path, language, *, cancelled=None, metadata_out=None):
+    """Project dialogue from an explicitly selected classic sidecar, retaining raw event evidence."""
+    path = Path(path).expanduser().resolve()
+    fmt = path.suffix[1:].lower()
+    if path.suffix.lower() not in SUBTITLE_EXTENSIONS:
+        raise ValueError("请导入文本字幕 SRT、VTT、ASS 或 SSA；图片字幕需要先做 OCR。")
+    data = _read_sidecar(path)
+    stop = _Stop(cancelled)
+    stop.is_set()
+    events, tagged = _parsed_events(data, fmt)
+    rows = list(_dialogue_events(events, tagged, language, stop))
+    cues, origins = _classic_projection(rows, language, lambda row: _cue_id(
+        str(path), row.index, row.event.start / 1000, row.event.end / 1000))
+    if metadata_out is not None:
+        metadata_out.update(subtitle_import={"kind": "sidecar", "path": str(path), "format": fmt,
+                            "sha256": hashlib.sha256(data).hexdigest(), "events": origins,
+                            "filtered_event_count": len(events) - len(rows)},
+                            provided_translations={cue.id: cue.translation for cue in cues if cue.translation})
+    return cues
+
+
+def _wrapped_target(row, target):
+    """Allow a lowercase continuation of an unfinished line in the same script."""
+    if set(row.by_language) != {target} or LANG_TAG.search(row.raw) or re.search(r"[|｜]|\s/\s", row.raw):
+        return False
+    lines = row.display.splitlines()
+    scripts = [{unicodedata.name(c, "").split(" ")[0] for c in line if c.isalpha()} for line in lines]
+    return (len(lines) > 1 and all(s == scripts[0] for s in scripts) and all(not re.search(r"[.!?。！？]$", a)
+            and b[:1].islower() for a, b in zip(lines, lines[1:])))
+
+
+def _classic_projection(rows, language, make_id):
+    target, known = _lang(language.target), _lang(language.source)
+    # Different ASS styles or adjacent SRT events may put the two lanes in
+    # separate records with the same interval. Never pair concurrent speakers.
+    intervals = defaultdict(list)
+    for row in rows:
+        intervals[row.event.start, row.event.end].append(row)
+    linked = {}
+    consumed = set()
+    if target != known:
+        for group in intervals.values():
+            if len(group) < 2:
+                continue
+            sources = [r for r in group if not r.unresolved and set(r.by_language) == {target}]
+            translations = [r for r in group if not r.unresolved and set(r.by_language) == {known}]
+            if len(group) == 2 and len(sources) == len(translations) == 1:
+                linked[sources[0].index] = translations[0]
+                consumed.add(translations[0].index)
+            elif sources and translations:
+                # Several speakers or alternative translations share a clock.
+                # Keep all evidenced target rows, without an invented pairing.
+                if any(not row.by_language for row in group):
+                    raise ValueError("无法确定双语字幕中的学习语言对白，请重新导入单语原文或使用字幕 Agent。")
+                consumed.update(row.index for row in group if target not in row.by_language)
+    cues, events = [], {}
+    for row in rows:
+        if row.index in consumed:
+            continue
+        start, end = row.event.start / 1000, row.event.end / 1000
+        text, translation = row.display, ""
+        if target != known and not row.unresolved and set(row.by_language) == {target, known}:
+            text, translation = "\n".join(row.by_language[target]), "\n".join(row.by_language[known])
+        elif target != known and row.unresolved and re.search(r"\n|[|｜]|\s/\s", row.display):
+            if not _wrapped_target(row, target):
+                if target not in row.by_language:
+                    raise ValueError("无法确定双语字幕中的学习语言对白，请重新导入单语原文或使用字幕 Agent。")
+                text = "\n".join(row.by_language[target])
+        other = linked.get(row.index)
+        if other:
+            translation = other.display
+        cue = Cue(make_id(row), start, end, text, original_text=row.raw,
+                  translation=translation, speaker=row.event.name.strip())
+        cues.append(cue)
+        events[cue.id] = row.evidence()
+        if other:
+            events[cue.id]["translation_event"] = other.evidence()
+    return sorted(cues, key=lambda cue: (cue.start, cue.end)), events
+
+
+def project_legacy_import(document, *, protected_ids=(), cancelled=None):
+    """Recover a legacy import on explicit preparation, using only verified original events."""
+    meta = document.metadata
+    spec = meta.get("transcript_spec", {})
+    location = meta.get("subtitle_path") or spec.get("subtitle")
+    if not location or "subtitle_import" in meta or "pre_llm_audit" in meta or meta.get("subtitle_plan"):
+        return
+    path = Path(location)
+    fmt = path.suffix[1:].lower()
+    if fmt not in {"srt", "vtt", "ssa", "ass"}:
+        return
+    stop = _Stop(cancelled)
+    stop.is_set()
+    old = document.cues
+    origins = {i: cue for i, cue in enumerate(old)}
+    verified = False
+    fingerprint = spec.get("subtitle_fingerprint")
+    if path.is_file() and (not fingerprint or media_fingerprint(path) == fingerprint):
+        try:
+            events, tagged = _parsed_events(_read_sidecar(path), fmt)
+        except (OSError, ValueError, pysubs2.exceptions.Pysubs2Error):
+            events = []
+        # The old importer retained ASS overrides or VTT voice tags. Check
+        # actual event text and times even when size and mtime still match.
+        active = sorted((i for i, e in enumerate(events) if not e.is_comment and e.plaintext.strip() and e.end > e.start),
+                        key=lambda i: (events[i].start, events[i].end))
+        if len(active) == len(old) and all(
+            (events[i].start, events[i].end) == (round(c.start * 1000), round(c.end * 1000))
+            and c.original_text in {events[i].text, tagged[i].text} for i, c in zip(active, old)
+        ):
+            origins = dict(zip(active, old))
+            verified = True
+    if not verified:
+        # Recover from immutable saved content, never from a changed sidecar.
+        tagged = [pysubs2.SSAEvent(start=round(c.start * 1000), end=round(c.end * 1000),
+                  text=c.original_text.replace("\n", r"\N"), name=c.speaker) for c in old]
+        events = [replace(e, text=re.sub(r"</?(?:lang|v|c|b|i|u|s)(?:[.\s][^>]*)?>", "", e.text, flags=re.I))
+                  for e in tagged]
+    rows = list(_dialogue_events(events, tagged, document.language, stop))
+    corrections = meta.get("cue_corrections", {})
+    problem = "旧字幕含有无法安全分离的对白或已关联的字幕条目，请重新导入学习字幕。"
+    for row in rows:
+        if (row.unresolved and origins[row.index].id not in corrections
+                and re.search(r"\n|[|｜]|\s/\s", row.display)):
+            raise ValueError(problem)
+    cues, evidence = _classic_projection(rows, document.language, lambda row: origins[row.index].id)
+    kept = {c.id: c for c in cues}
+    protected = set(protected_ids) | set(corrections) | set(meta.get("provided_translations", {}))
+    provided = dict(meta.get("provided_translations", {}))
+    projected = []
+    for c in old:
+        match = kept.get(c.id)
+        if not match:
+            if c.id in protected or c.translation or c.explanation or c.segmented_texts:
+                raise ValueError(problem)
+            continue
+        if c.id in corrections:
+            projected.append(c)
+            continue
+        if c.explanation or c.segmented_texts or c.id in meta.get("review_completed_ids", ()):
+            if c.text != match.text and (re.search(r"\n|\\N|\{\\|<lang\b", c.text) or (match.translation and match.translation in c.text)):
+                raise ValueError(problem)
+            projected.append(c)
+        else:
+            projected.append(replace(c, text=match.text, speaker=c.speaker or match.speaker,
+                                     tokens=c.tokens if match.text == c.text else [], translation=c.translation or match.translation))
+        if match.translation and (not c.translation or c.translation == match.translation):
+            provided[c.id] = match.translation
+    if not verified:
+        # Indices reconstructed from a stored slice are not source file indices.
+        for item in evidence.values():
+            for record in [item, *([item["translation_event"]] if "translation_event" in item else [])]:
+                record["saved_cue_index"] = record.pop("event_index")
+    document.cues = projected
+    meta.update(subtitle_import={"kind": "sidecar", "path": str(path), "format": fmt, "events": evidence,
+                "evidence": "matched_file" if verified else "saved_raw_events"},
+                provided_translations=provided, raw_display_text={c.id: c.text for c in projected})
 
 
 def _scan_track(track, read, language, duration, stop):
@@ -500,14 +758,16 @@ def plan_subtitle_sources(media_path: Path, language: LanguagePair, subtitle_pat
     if source and source.reference:
         ref = source
     refs = ref.reference if ref else []
+    matches = {}
     if sources and refs:
-        pairs = align_references(sources, refs)
-        if ref is not source and len(pairs) < .70 * len(refs):
+        matches = _reference_matches(sources, refs)
+        if ref is not source and len(matches) < .70 * len(refs):
             notes.append("两份字幕的时间未充分对应，已跳过译文")
-            refs, ref = [], None
+            refs, ref, matches = [], None, {}
         else:
             for cue in sources:
-                cue.translation = cue.translation or pairs.get(cue.id, "")
+                if not cue.translation and cue.id in matches:
+                    cue.translation = matches[cue.id].text
     translated_count = sum(bool(c.translation) for c in sources)
     decision = ("bilingual" if translated_count else "source") if sources else "reference" if refs else "asr"
     summary = {"bilingual": "采用学习语言原文和按时间对应的已有译文",
@@ -521,4 +781,18 @@ def plan_subtitle_sources(media_path: Path, language: LanguagePair, subtitle_pat
                 "source_count": len(sources), "reference_count": len(refs), "paired_count": translated_count,
                 "candidates": [track.record for track in tracks]}
     metadata["identity"] = hashlib.sha256(json.dumps(metadata, sort_keys=True).encode()).hexdigest()
-    return SubtitlePlan(sources, refs, metadata)
+    def origin(track):
+        rec = track.record
+        if rec["kind"] == "embedded":
+            return {"kind": "embedded", "path": str(media), "stream_index": rec["index"], "codec": rec["codec"]}
+        return {"kind": "sidecar", "path": str(explicit if explicit and rec["id"] == explicit_id else media.parent / rec["name"])}
+
+    source_info = {}
+    if source:
+        events = {c.id: dict(source.event_sources[c.id]) for c in sources}
+        for cue_id, reference in matches.items():
+            evidence = ref.event_sources[reference.id]
+            if ref is not source or evidence["event_index"] != events[cue_id]["event_index"]:
+                events[cue_id]["translation_event"] = {**origin(ref), **evidence}
+        source_info = {**origin(source), "sha256": source.record["sha256"], "events": events}
+    return SubtitlePlan(sources, refs, metadata, source_info)

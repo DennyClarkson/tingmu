@@ -222,14 +222,17 @@ class PreparationQueue:
                     if existing.get("preparation_version") == TRANSLATION_REVIEW_VERSION:
                         # One published document per movie and language pair. A second workflow
                         # can supersede the material from this still-completed queue entry.
-                        if not agent_workflow and not any(j["media_path"] == media and
-                                j["settings"].get("preparation_workflow") == "subtitle_agent" for j in self._jobs):
-                            continue
                         doc = self.store.load_document(media, settings.language)
+                        published_mode = doc.metadata.get("segmentation_mode", "local") if doc else "local"
                         plan = doc.metadata.get("subtitle_plan", {}) if doc else {}
-                        if doc and doc.metadata.get("stage") == "ready" and bool(plan) == agent_workflow and (
-                                not agent_workflow or plan.get("identity") == existing.get("plan_identity")):
-                            continue
+                        if published_mode == settings.segmentation_mode:
+                            if doc and doc.metadata.get("stage") == "ready" and bool(plan) == agent_workflow and (
+                                    not agent_workflow or plan.get("identity") == existing.get("plan_identity")):
+                                continue
+                            if (not agent_workflow and (not doc or not doc.metadata.get("stage")) and
+                                    not any(j["media_path"] == media and j["settings"].get("preparation_workflow") == "subtitle_agent"
+                                            for j in self._jobs)):
+                                continue  # Legacy completed entries without document stage metadata.
                     existing.update(status="queued", progress="等待更新学习资料", updated_at=time.time())
                     added.append(deepcopy(existing))
                     continue
@@ -353,7 +356,7 @@ class PreparationQueue:
             return len(selected)
 
     def run(self, progress=None, cancelled=None, on_error=None, *, job_ids=None,
-            allow_model_downloads=None) -> list[dict]:
+            allow_model_downloads=None, log_event=None) -> list[dict]:
         selected = frozenset(job_ids) if job_ids is not None else None
         with self._mutation():
             if self._running:
@@ -418,6 +421,8 @@ class PreparationQueue:
 
                 try:
                     extra = {"force_asr": True} if job.get("force_asr") else {}
+                    if log_event is not None:
+                        extra["log_event"] = log_event
                     if job.get("reuse_existing_transcript"):
                         extra["reuse_existing_transcript"] = True
                     if allow_model_downloads is False or job.get("allow_model_downloads") is False:

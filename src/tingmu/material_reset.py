@@ -46,6 +46,7 @@ def reset_job_material_state(job: dict, mode: str, requeue: bool,
     current.target_language = previous.target_language
     current.level = previous.level
     current.preparation_workflow = previous.preparation_workflow
+    current.segmentation_mode = previous.segmentation_mode
     if mode == "teaching":
         for name in PRESERVED_AUDIO_SETTINGS:
             setattr(current, name, getattr(previous, name))

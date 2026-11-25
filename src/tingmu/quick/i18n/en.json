@@ -133,6 +133,15 @@
   "保存语言": "Save languages",
   "保存连接": "Save connection",
   "保存并分配任务": "Save and assign tasks",
+  "新任务分句方式": "Sentence grouping for new jobs",
+  "本地分句": "Local sentence grouping",
+  "模型智能分句": "Model-assisted grouping",
+  "在本机按字幕时间戳、停顿和标点分句。启用逐句复核后，模型可校对每句文字。": "Groups subtitles locally using timestamps, pauses, and punctuation. Enable per-caption review to let the model proofread each caption.",
+  "多语言或复杂对白推荐使用智能分句。按工作区文本权限，使用复核模型重组相邻字幕，未分配时使用讲解模型。已有配对译文的字幕保留原分段。": "Recommended for multilingual or complex dialogue. The review model groups adjacent subtitles using this workspace’s text permissions. If no review model is assigned, the teaching model handles grouping. Captions with supplied translations keep their original boundaries.",
+  "请选择可用的分句方式": "Select a supported sentence grouping mode.",
+  "旧字幕含有无法安全分离的对白或已关联的字幕条目，请重新导入学习字幕。": "Reimport the study subtitles. Some older dialogue or linked cues could not be separated safely.",
+  "无法确定双语字幕中的学习语言对白，请重新导入单语原文或使用字幕 Agent。": "The study-language dialogue could not be identified. Import source-language captions or use the subtitle Agent.",
+  "原始音轨格式与识别音轨不符。": "The original audio format does not match the transcription track.",
   "请补全显示名称、API 地址和有效的输出上限。": "Enter a display name, API URL and valid output token limit.",
   "请先为连接选择或填写模型 ID 并保存，再分配用途。": "Choose or enter a model ID and save the connection before assigning a task.",
   "保留当前草稿？": "Keep the current draft?",
@@ -1142,5 +1151,8 @@
   "＋ 新建工作区": "＋ New workspace",
   "＋ 新建连接": "＋ Add connection",
   "，收藏词语": ", save word",
-  "，预计还需下载 ": "; estimated download "
+  "，预计还需下载 ": "; estimated download ",
+  "字幕规整质量统计": "Pre-review subtitle quality counts",
+  "未找到有效对白。请检查字幕轨、音轨或所选时间范围。": "No dialogue found. Check the subtitle track, audio track, or selected time range.",
+  "自定义 Whisper 模型不可用。请在工作区语音设置中重新选择完整的本地模型。": "Custom Whisper model unavailable. Select a complete local model in Workspace speech settings."
 }

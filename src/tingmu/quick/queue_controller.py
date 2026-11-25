@@ -180,7 +180,8 @@ class QueueController:
         self.ports.start_job(
             "queue",
             lambda progress, cancelled: self.state.queue.run(
-                progress, cancelled, on_error=lambda exc: self.ports.log.exception(exc, "queue_error")
+                progress, cancelled, on_error=lambda exc: self.ports.log.exception(exc, "queue_error"),
+                log_event=self.ports.log.event,
             ),
             lambda result: self.ports.set_state(
                 status="队列已暂停" if self.state.queue.pending_count else "队列处理结束"
@@ -217,7 +218,7 @@ class QueueController:
                 progress,
                 cancel,
                 on_error=lambda exc: self.ports.log.exception(exc, "queue_error"),
-                job_ids=[ident],
+                job_ids=[ident], log_event=self.ports.log.event,
             ),
             lambda _: self.ports.load_document(),
         )

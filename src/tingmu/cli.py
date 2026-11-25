@@ -7,6 +7,7 @@ import sys
 
 
 def main(argv=None) -> int:
+    from .models import SEGMENTATION_MODES
     for stream in (sys.stdout, sys.stderr):
         if stream is not None and hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8")
@@ -20,10 +21,12 @@ def main(argv=None) -> int:
     prepare.add_argument("--subtitle", type=Path)
     prepare.add_argument("--workflow", choices=["classic", "subtitle_agent"],
                          help="使用经典流程或字幕 Agent，默认沿用工作区设置")
+    prepare.add_argument("--segmentation-mode", choices=SEGMENTATION_MODES,
+                         help="新任务分句方式。local 为本地分句；llm_regroup 使用复核模型，必要时使用讲解模型。默认沿用工作区设置")
     prepare.add_argument("--source")
     prepare.add_argument("--target")
-    prepare.add_argument("--provider", choices=["local", "workspace", "deepseek", "openai"], default="local",
-                         help="local 使用本地词典，workspace 按当前工作区的权限使用全局分配的文本模型")
+    prepare.add_argument("--provider", choices=["local", "workspace", "deepseek", "openai"],
+                         help="local 使用本地词典，workspace 使用工作区允许的文本模型。省略时本地分句用 local，模型分句用 workspace")
     prepare.add_argument("--model")
     prepare.add_argument("--asr-model", help="本机 ASR 模型")
     prepare.add_argument("--asr-backend", choices=["local", "local_api", "external"])
@@ -75,14 +78,17 @@ def main(argv=None) -> int:
         settings = store.load_settings()
         if args.workflow:
             settings.preparation_workflow = args.workflow
+        if args.segmentation_mode:
+            settings.segmentation_mode = args.segmentation_mode
         settings.source_language = args.source or settings.source_language
         settings.target_language = args.target or settings.target_language
-        if args.provider != "workspace":
-            settings.provider = args.provider
-            settings.cloud_text_enabled = args.provider != "local"
-            settings.text_models_enabled = args.provider != "local"
+        provider = args.provider or ("workspace" if settings.segmentation_mode == "llm_regroup" else "local")
+        if provider != "workspace":
+            settings.provider = provider
+            settings.cloud_text_enabled = provider != "local"
+            settings.text_models_enabled = provider != "local"
             settings.annotation_profile_id = ""
-            settings.model = args.model or ("gpt-5.4-mini" if args.provider == "openai" else "deepseek-flash")
+            settings.model = args.model or ("gpt-5.4-mini" if provider == "openai" else "deepseek-flash")
         settings.allow_audio_upload = args.allow_audio_upload
         for name in ("asr_model", "device", "audio_track", "asr_backend", "suppress_bgm", "speaker_turns"):
             if getattr(args, name) is not None:

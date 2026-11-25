@@ -354,6 +354,16 @@ class Store:
             self._save_entry(db, "note", media_path, cue, language, cue.text,
                              meaning=cue.translation, note=note)
 
+    def referenced_cue_ids(self, media_path: str, language: LanguagePair) -> set[str]:
+        """Protect IDs linked to live collections or archived notebook sources."""
+        media = canonical_path(media_path)
+        with self.database.session(), self._connection() as db:
+            return {r[0] for r in db.execute("""
+                SELECT cue_id FROM entries WHERE media_path=? AND source_language=? AND target_language=?
+                UNION SELECT json_extract(entry_json, '$.cue_id') FROM notebook_sources
+                  WHERE target_language=? AND json_extract(entry_json, '$.media_path')=?
+            """, (media, language.source, language.target, language.target, media))}
+
     def entries(self, media_path: str | None = None) -> list[dict]:
         with self._connection() as db:
             if media_path is not None:

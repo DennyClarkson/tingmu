@@ -159,8 +159,11 @@ def _cue_id(source: str, index: int, start: float, end: float) -> str:
     return hashlib.sha256(value).hexdigest()[:20]
 
 
-def load_subtitles(path: Path) -> list[Cue]:
+def load_subtitles(path: Path, *, learning_language=None, cancelled=None, metadata_out=None) -> list[Cue]:
     """Import SRT/VTT/ASS/SSA, retaining each original subtitle event's text."""
+    if learning_language is not None:
+        from .subtitle_sources import load_learning_subtitles
+        return load_learning_subtitles(path, learning_language, cancelled=cancelled, metadata_out=metadata_out)
     import pysubs2
     path = Path(path).expanduser().resolve()
     if path.suffix.lower() not in SUBTITLE_EXTENSIONS:
@@ -296,7 +299,7 @@ def _extract_pcm(media_path, output, audio_track, start, duration, cancelled, *,
 
 @contextmanager
 def prepared_audio(media_path: Path, *, audio_track=0, start=0, duration=None, suppress_bgm=True,
-                   progress=None, cancelled=None, metadata_out=None):
+                   progress=None, cancelled=None, metadata_out=None, original_out=None):
     """Yield temporary 16 kHz PCM WAV on the selected slice's clock for either ASR backend."""
     cache = _cache_root()
     cache.mkdir(parents=True, exist_ok=True)
@@ -315,6 +318,12 @@ def prepared_audio(media_path: Path, *, audio_track=0, start=0, duration=None, s
             report(Progress("Spleeter 正在本地分离人声与伴奏", activity="提取立体声音轨"))
             source = _extract_pcm(media_path, folder / "stereo.pcm", audio_track, start, duration,
                                   cancelled, channels=2, rate=44100, fmt="s16le")
+            if original_out is not None:
+                original = folder / "original.wav"
+                _run([_executable("ffmpeg"), "-nostdin", "-loglevel", "error", "-f", "s16le",
+                      "-ar", "44100", "-ac", "2", "-i", str(source), "-ac", "1", "-ar", "16000",
+                      "-c:a", "pcm_s16le", str(original)], cancelled=cancelled)
+                original_out["path"] = original
             vocal = folder / "vocal.pcm"
             isolate_vocals(source, vocal, cache / "speech-models/spleeter", check, progress)
             source.unlink()
@@ -325,6 +334,8 @@ def prepared_audio(media_path: Path, *, audio_track=0, start=0, duration=None, s
         else:
             audio = extract_audio(media_path, folder / "audio.wav", audio_track, start, duration,
                                   cancelled=cancelled)
+            if original_out is not None:
+                original_out["path"] = audio
             if suppress_bgm:
                 report(Progress("本机未安装 Spleeter，使用频谱背景抑制", activity="频谱降噪"))
                 filtered = folder / "foreground.wav"
@@ -368,21 +379,29 @@ def _read_pcm_audio(path: str):
 
 def _whisper_turn_cues(cue, words, turns, offset, *, pauses=(), trace=None):
     """Split only at boundaries supported by the timed words and the source text."""
-    if not words:
+    def fallback(reason):
+        if trace is not None:
+            trace.update(alignment_error=reason)
         return [cue]
+
+    if not words:
+        return fallback("missing_word_times")
     words = list(words)
     raw = "".join(w.word for w in words)
     if raw.strip() != cue.original_text.strip():
-        return [cue]
+        return fallback("word_text_mismatch")
     pieces = [w.word for w in words]
     pieces[0] = cue.original_text[:len(cue.original_text) - len(cue.original_text.lstrip())] + pieces[0].lstrip()
     pieces[-1] = pieces[-1].rstrip() + cue.original_text[len(cue.original_text.rstrip()):]
-    times = [(float(w.start), float(w.end)) for w in words]
+    try:
+        times = [(float(w.start), float(w.end)) for w in words]
+    except (TypeError, ValueError, OverflowError):
+        return fallback("invalid_word_times")
     if any(not math.isfinite(t) for pair in times for t in pair):
-        return [cue]
+        return fallback("invalid_word_times")
     # Overlap between non-degenerate Whisper words makes the boundary ambiguous.
     if any(a < prev_end - .001 and b > a for (_, prev_end), (a, b) in zip(times, times[1:])):
-        return [cue]
+        return fallback("overlapping_word_times")
     from .acoustic import repair_times, sentence_breaks
     ends, separators, cursor = [], [], 0
     for i, piece in enumerate(pieces):
@@ -393,6 +412,10 @@ def _whisper_turn_cues(cue, words, turns, offset, *, pauses=(), trace=None):
             tail += " "
         separators.append(tail)
     lo, hi = cue.start-offset, cue.end-offset
+    if any(a < lo-.025 or b > hi+.025 or b < a for a,b in times):
+        return fallback("word_times_outside_segment")
+    if all(b <= a for a,b in times):
+        return fallback("no_positive_word_span")
     relative = [(a-lo, b-lo) for a,b in times]
     quiet = [(a-lo, b-lo) for a,b in pauses if a < hi and b > lo]
     weights = [_acoustic_weight(w.word) for w in words]
@@ -404,10 +427,27 @@ def _whisper_turn_cues(cue, words, turns, offset, *, pauses=(), trace=None):
             trace.update(alignment_error="word_times_outside_monotonic_anchors")
         return [dataclasses.replace(cue, uncertain=True)]
     cuts = sentence_breaks(cue.original_text, ends, separators, relative, [t-lo for t in turns], quiet)
+    # Forced word onsets occasionally interrupt a short vocative or compound.
+    # When only one unpunctuated CJK character precedes the internal pause,
+    # preserve the short phrase ending at the following comma. Speaker evidence
+    # and longer silences still support independent utterances.
+    edges = [0, *sorted(cuts)]
+    for first, cut, following in zip(edges, edges[1:], edges[2:]):
+        prefix = "".join(pieces[first:cut]).strip()
+        suffix = "".join(pieces[cut:following]).strip()
+        if (len(prefix) == 1 and prefix.isalpha()
+                and 2 <= len(suffix) <= 4 and suffix[:-1].isalpha() and suffix[-1] in ",，、：:"
+                and relative[cut][0] - relative[cut-1][1] <= 2.2
+                and not any(times[cut-1][1] <= t <= times[cut][0] for t in turns)):
+            cuts.discard(cut)
     if trace is not None:
         trace.update(timing_repairs=repairs, repair_time_origin=cue.start)
     if len(cuts) == 1:
-        return [dataclasses.replace(cue, uncertain=cue.uncertain or bool(affected))]
+        start = round(cue.start + relative[0][0], 3)
+        end = round(cue.start + relative[-1][1], 3)
+        if end <= start:
+            return fallback("no_supported_word_span")
+        return [dataclasses.replace(cue, start=start, end=end, uncertain=cue.uncertain or bool(affected))]
     parts, first = [], 0
     for last in sorted(cuts):
         text = "".join(pieces[first:last])
@@ -469,7 +509,11 @@ def _asr_worker(request_path: Path) -> int:
             _worker_emit({"progress": "未安装 Silero 语音活动检测模型，Whisper 将直接转写完整音轨。"})
         from .acoustic import frame_energy, quiet_intervals
         audio = _read_pcm_audio(request["audio"])
-        pauses = quiet_intervals(frame_energy(audio)) if audio is not None and len(audio) else []
+        original = audio
+        if request.get("alignment_audio", request["audio"]) != request["audio"]:
+            original = _read_pcm_audio(request["alignment_audio"])
+        pauses = quiet_intervals(frame_energy(original)) if original is not None and len(original) else []
+        del original
         pause_ends = [end for _, end in pauses]
         segments, info = engine.transcribe(audio, language=language, task="transcribe",
                                           beam_size=5, vad_filter=vad_filter,
@@ -479,43 +523,52 @@ def _asr_worker(request_path: Path) -> int:
                                           vad_parameters={"min_silence_duration_ms": 500})
         _worker_emit({"progress": f"开始识别 {info.duration:.1f} 秒音频（语言 {info.language}）",
                       "metrics": {"activity": "语音识别", "done": 0, "total": float(info.duration), "unit": "秒"}})
+        from .whisper_segments import quality_evidence, segment_evidence
         cues, raw_segments = [], []
+        previous_text = ""
+        origin = request.get("start", 0.)
         for index, segment in enumerate(segments):
-            # Do not normalize/translate the model output; preserve raw text separately.
-            raw_text = segment.text
-            if not raw_text.strip():
-                continue
-            start = request["start"] + max(0.0, segment.start)
-            end = request["start"] + min(info.duration, segment.end)
-            if end <= start:
-                continue
-            uncertain = (segment.avg_logprob < -0.8 or segment.no_speech_prob > 0.5
-                         or segment.compression_ratio > 2.4 or end - start > 15)
-            cue = Cue(id=_cue_id(request["source"], index, start, end), start=round(float(start), 3),
-                      end=round(float(end), 3), text=raw_text.strip(), original_text=raw_text, uncertain=bool(uncertain))
-            words = getattr(segment, "words", None)
-            trace = {}
-            local_turns = turns[bisect_right(turns, segment.start-.6):bisect_right(turns, segment.end+.6)]
-            start_index = bisect_right(pause_ends, segment.start)
-            stop_index = bisect_right(pause_ends, segment.end) + 1
-            parts = _whisper_turn_cues(cue, words, local_turns, request["start"],
-                                       pauses=pauses[start_index:stop_index], trace=trace)
-            cues.extend(dataclasses.asdict(part) for part in parts)
+            span, evidence = segment_evidence(segment, info.duration, origin)
             if request.get("raw_output"):
-                raw_segments.append({**trace, "source_id": cue.id, "start": cue.start, "end": cue.end, "text": raw_text,
-                                     "cue_ids": [part.id for part in parts],
-                                     "words": [{"text": w.word, "start": float(request["start"] + w.start),
-                                                "end": float(request["start"] + w.end)} for w in (words or [])]})
-            done = min(segment.end, info.duration)
-            _worker_emit({"progress": f"已识别 {done:.1f}/{info.duration:.1f} 秒 · {len(cues)} 句",
-                          "metrics": {"activity": "语音识别", "done": float(done), "total": float(info.duration), "unit": "秒"}})
+                raw_segments.append(evidence)
+            if not segment.text.strip() or span is None:
+                continue
+            lo, hi = span
+            start_index = bisect_right(pause_ends, lo)
+            stop_index = bisect_right(pause_ends, hi) + 1
+            local_pauses = pauses[start_index:stop_index]
+            skip, uncertain, previous_text = quality_evidence(evidence, span, local_pauses, previous_text, vad_filter)
+            if skip:
+                evidence["disposition"] = "no_vad_quiet_low_confidence"
+                continue
+            start, end = round(origin + lo, 3), round(origin + hi, 3)
+            cue = Cue(id=_cue_id(request["source"], index, start, end), start=start, end=end,
+                      text=segment.text.strip(), original_text=segment.text, uncertain=bool(uncertain))
+            local_turns = turns[bisect_right(turns, lo-.6):bisect_right(turns, hi+.6)]
+            parts = _whisper_turn_cues(cue, getattr(segment, "words", None), local_turns, origin,
+                                       pauses=local_pauses, trace=evidence)
+            if evidence.get("alignment_error") not in (None, "missing_word_times"):
+                for part in parts:
+                    part.uncertain = True
+            cues.extend(dataclasses.asdict(part) for part in parts)
+            evidence.update(source_id=cue.id, disposition="published", cue_ids=[part.id for part in parts],
+                            cue_timings=[{"id": part.id, "start": part.start, "end": part.end,
+                                          "uncertain": part.uncertain} for part in parts])
+            _worker_emit({"progress": f"已识别 {hi:.1f}/{info.duration:.1f} 秒 · {len(cues)} 句",
+                          "metrics": {"activity": "语音识别", "done": float(hi), "total": float(info.duration), "unit": "秒"}})
         if request.get("raw_output"):
-            Path(request["raw_output"]).write_text(json.dumps({"model": request["model"], "complete": True,
-                                                                "segments": raw_segments}, ensure_ascii=False),
-                                                   encoding="utf-8")
+            audit = {"model": request["model"], "complete": True, "segments": raw_segments,
+                     "quiet_intervals": [[round(origin+a, 3), round(origin+b, 3)] for a,b in pauses],
+                     "word_timestamps": True, "vad_filter": vad_filter,
+                     "word_alignment_input": request.get("recognition_input", "off"),
+                     "boundary_input": "original_track"}
+            Path(request["raw_output"]).write_text(json.dumps(audit, ensure_ascii=False), encoding="utf-8")
         Path(request["result"]).write_text(json.dumps(cues, ensure_ascii=False), encoding="utf-8")
         _worker_emit({"done": True, "device": device, "compute_type": compute, "vad_filter": vad_filter,
-                      "cues": len(cues)})
+                      "quiet_intervals": [[origin+a, origin+b] for a,b in pauses], "cues": len(cues),
+                      "unplaced_segments": sum(s.get("disposition") == "unplaced_segment" for s in raw_segments),
+                      "suppressed_segments": sum(s.get("disposition") == "no_vad_quiet_low_confidence"
+                                                 for s in raw_segments)})
         return 0
     except Exception as exc:
         _worker_emit({"error": str(exc), "error_type": type(exc).__name__})
@@ -537,20 +590,11 @@ def _alignment_to_cues(text: str, items, *, source: str, offset: float,
     units = list(items)
     if not units:
         raise MediaError("Qwen 对非空转写没有返回时间对齐；未生成猜测时间戳。")
-    import unicodedata
-    kept = [(i, char) for i, char in enumerate(text)
-            if char == "'" or unicodedata.category(char).startswith(("L", "N"))]
-    normalized = "".join(char for _, char in kept)
-    locations, cursor = [], 0
-    for item in units:
-        token = "".join(char for char in item.text
-                        if char == "'" or unicodedata.category(char).startswith(("L", "N")))
-        if not token or not normalized.startswith(token, cursor):
-            raise MediaError("Qwen 时间对齐文本与原始转写不一致，无法安全生成字幕。")
-        locations.append((kept[cursor][0], kept[cursor + len(token) - 1][0] + 1))
-        cursor += len(token)
-    if cursor != len(normalized):
-        raise MediaError("Qwen 时间对齐遗漏了原始转写字符，无法安全生成字幕。")
+    from .acoustic import alignment_text_ranges
+    try:
+        locations = alignment_text_ranges(text, [item.text for item in units])
+    except ValueError as exc:
+        raise MediaError(str(exc)) from exc
     boundaries = [location[0] for location in locations[1:]] + [len(text)]
     ends = [end for _, end in locations]
     punctuation = [text[end:boundary] for end, boundary in zip(ends, boundaries)]
@@ -699,7 +743,9 @@ def _qwen_worker(request: dict) -> int:
                             "peak_cuda_allocated_bytes": torch.cuda.max_memory_allocated()})
         Path(request["raw_output"]).write_text(json.dumps({"model": repo, "complete": True, "runtime": runtime,
                                                             "chunks": raw_chunks}, ensure_ascii=False, indent=2), encoding="utf-8")
-    _worker_emit({"done": True, "device": device, "model": repo, "cues": len(cues)})
+    _worker_emit({"done": True, "device": device, "model": repo, "cues": len(cues),
+                  "quiet_intervals": [[chunk["start"]+a, chunk["start"]+b] for chunk in raw_chunks
+                                      for a,b in chunk["quiet_intervals"]]})
     return 0
 
 
@@ -773,6 +819,12 @@ def _run_worker(request: dict, temp_dir: Path, progress, cancelled) -> tuple[boo
                     error = event["error"]
                 if event.get("done") and type(event.get("vad_filter")) is bool:
                     request["vad_filter"] = event["vad_filter"]
+                if event.get("done") and isinstance(event.get("quiet_intervals"), list):
+                    request["asr_quiet_intervals"] = event["quiet_intervals"]
+                if event.get("done"):
+                    for key in ("suppressed_segments", "unplaced_segments"):
+                        if type(event.get(key)) is int and event[key] >= 0:
+                            request[key] = event[key]
                 done = done or event.get("done", False)
             proc.wait()
             stderr.seek(0)
@@ -794,11 +846,25 @@ def _transcription_metadata(request: dict) -> dict:
     qwen_model = _qwen_model_id(request["model"])
     result = {"asr_device": request["device"], "asr_model": qwen_model or request["model"],
               "asr_backend": "qwen3-asr" if qwen_model else "faster-whisper"}
+    if "asr_quiet_intervals" in request:
+        intervals = []
+        for a,b in request["asr_quiet_intervals"]:
+            if not (math.isfinite(a) and math.isfinite(b) and 0 <= a < b):
+                continue
+            a,b = round(a,3), round(b,3)
+            if intervals and a <= intervals[-1][1]+.001:
+                intervals[-1][1] = max(intervals[-1][1], b)
+            else:
+                intervals.append([a,b])
+        result["asr_quiet_intervals"] = intervals
     if not qwen_model:
         result["asr_runtime"] = {"device": request["device"],
                                  "compute_type": "float16" if request["device"] == "cuda" else "int8"}
         if "vad_filter" in request:
             result["asr_runtime"]["vad_filter"] = request["vad_filter"]
+        for key in ("suppressed_segments", "unplaced_segments"):
+            if key in request:
+                result["asr_runtime"][key] = request[key]
         if request.get("raw_output") and Path(request["raw_output"]).is_file():
             result["asr_audit_path"] = str(request["raw_output"])
         return result
@@ -888,6 +954,9 @@ def transcribe(media_path: Path, language: str = "yue", model: str = "large-v3-t
         raise ValueError("设备须为 auto、cuda 或 cpu")
     _check_cancelled(cancelled)
     from .workspace_models import WHISPER_MODELS, weight_readiness
+    if model.startswith("local:"):
+        from .local_whisper import resolve_local_model
+        model = str(resolve_local_model(model))
     qwen_model = _qwen_model_id(model)
     selected = model.lower().removeprefix("qwen/") if qwen_model else model
     if not allow_model_downloads and (qwen_model or selected in WHISPER_MODELS):
@@ -917,7 +986,7 @@ def transcribe(media_path: Path, language: str = "yue", model: str = "large-v3-t
             allow_model_downloads = False
     cache = _cache_root()
     cache.mkdir(parents=True, exist_ok=True)
-    if (_qwen_model_id(model) or speaker_turns or audit_dir is not None) and raw_output is None:
+    if raw_output is None:
         import uuid
         audit_dir = Path(audit_dir) if audit_dir is not None else cache / ("qwen-audit" if _qwen_model_id(model) else "whisper-audit")
         audit_dir.mkdir(parents=True, exist_ok=True)
@@ -931,7 +1000,7 @@ def transcribe(media_path: Path, language: str = "yue", model: str = "large-v3-t
                          metadata_out=audio_metadata) as audio):
         folder = Path(temporary)
         align_audio = audio
-        if _qwen_model_id(model) and suppress_bgm:
+        if suppress_bgm:
             align_audio = extract_audio(media_path, folder / "original.wav", audio_track, start, duration,
                                         cancelled=cancelled)
         changes = []
@@ -942,7 +1011,7 @@ def transcribe(media_path: Path, language: str = "yue", model: str = "large-v3-t
                 if progress:
                     progress("未安装本地换人检测模型，保留识别器原有分句。")
             else:
-                changes = detect_speaker_changes(audio, cache / "speech-models/pyannote/model.onnx",
+                changes = detect_speaker_changes(align_audio, cache / "speech-models/pyannote/model.onnx",
                                                  lambda: _check_cancelled(cancelled), progress)
             audio_metadata.update(speaker_method=method, speaker_change_count=len(changes),
                                   speaker_changes=[round(start + t, 3) for t in changes])
@@ -971,7 +1040,7 @@ def transcribe(media_path: Path, language: str = "yue", model: str = "large-v3-t
                     for key in ("asr_device", "asr_model", "asr_backend", "asr_runtime", "asr_audit_path",
                                 "asr_audit_metadata_available", "alignment_warnings", "alignment_warning_count",
                                 "alignment_warnings_truncated", "alignment_estimated_cue_count",
-                                "alignment_limited_cue_count", "bgm_method", "speaker_method",
+                                "alignment_limited_cue_count", "asr_quiet_intervals", "bgm_method", "speaker_method",
                                 "speaker_change_count", "speaker_changes"):
                         metadata_out.pop(key, None)
                     metadata_out.update(metadata)

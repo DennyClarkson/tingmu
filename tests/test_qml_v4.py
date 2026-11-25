@@ -236,6 +236,38 @@ def test_notebook_draft_debounces_closes_and_recovers_after_restart(quick, qtbot
     assert engine._tingmu_warnings == []
 
 
+def test_segmentation_controls_share_workspace_and_queue_settings(quick, qtbot, monkeypatch):
+    _, bridge, engine, window = quick
+    setup = find(window, "workspaceSetup")
+    invoke(setup, "openTextSettings")
+    qtbot.waitUntil(lambda: setup.property("opened"))
+    workspace = find(setup, "segmentationModeChoice")
+    assert workspace.property("currentIndex") == 0
+    def choose(item, index):
+        assert QMetaObject.invokeMethod(item, "activated", Qt.ConnectionType.DirectConnection, Q_ARG(int, index))
+
+    choose(workspace, 1)
+    assert workspace.property("currentIndex") == 1 and bridge.store.load_settings().segmentation_mode == "llm_regroup"
+    invoke(setup, "close")
+    invoke(window, "openModule", "queue")
+    panel = find(window, "queueModule").property("loadedItem")
+    invoke(panel, "openSettings")
+    queue = find(panel, "segmentationModeChoice")
+    assert queue.property("currentIndex") == 1
+    choose(queue, 0)
+    assert workspace.property("currentIndex") == 0 and bridge.store.load_settings().segmentation_mode == "local"
+    original = bridge._settings
+    def failed_save(_settings):
+        raise OSError("isolated save failure")
+    monkeypatch.setattr(bridge.store, "save_settings", failed_save)
+    choose(queue, 1)
+    assert bridge._settings is original and queue.property("currentIndex") == 0
+    assert bridge.workspaceState["error"] == "isolated save failure"
+    bridge.setting("segmentation_mode", "unknown")
+    assert bridge._settings.segmentation_mode == "local" and bridge.workspaceState["error"] == "请选择可用的分句方式"
+    assert not engine._tingmu_warnings
+
+
 def test_concurrency_controls_share_workspace_and_queue_settings(quick, qtbot):
     _, bridge, engine, window = quick
     setup = find(window, "workspaceSetup")

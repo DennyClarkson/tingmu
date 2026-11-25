@@ -41,6 +41,8 @@ ForceAligner 会产生零时长的字；实测出现的零时长单位均为实�
 
 ### Whisper 后端
 
+内置型号和自选 CTranslate2 模型均请求词级时间戳，包括关闭换人检测的任务。换人和静音分析使用原始音轨；无 VAD 时，只有重复或低置信度同时得到原音静音支持，才从学习字幕中过滤，原始段和判据写入审计。
+
 默认 `large-v3-turbo`。OpenAI 的 large-v3 新增粤语 token；turbo 在 large-v3 基础上减少解码层数。官方 turbo 配置确实包含 `<|yue|>`，因此默认指定 `language='yue'`，普通话则用 `zh`。`zh-CN` / `zh-HK` 会分别规范为 `zh` / `yue`。应用执行 `task='transcribe'`，不使用语音翻译模式。
 
 faster-whisper 将 `large-v3` 映射到 `Systran/faster-whisper-large-v3`，将 `large-v3-turbo` / `turbo` 映射到 `mobiuslabsgmbh/faster-whisper-large-v3-turbo`。权重格式是 CTranslate2，不能直接传入 PyTorch Whisper 权重目录。
@@ -68,6 +70,12 @@ ASR 在独立 Python 子进程中运行；缺失或不兼容的 CUDA DLL 即使�
 通过 pysubs2 导入/导出 SRT、WebVTT、ASS、SSA。读取 UTF-8（含 BOM）、UTF-16（BOM）并尝试 GB18030/Big5；建议使用 UTF-8 避免旧编码歧义。忽略 ASS 注释和零/负时长事件；显示文本去除样式标签、统一换行，原始事件文本另存于 `original_text`。原字幕文件保持不动。
 
 `save_srt` 导出当前显示文本；`save_subtitles` 还支持 VTT/ASS/SSA。SRT/VTT 保留毫秒，ASS/SSA 受格式限制只能保留百分之一秒。导出使用临时文件后替换，避免失败时截断已有字幕。图片字幕（PGS/VobSub）不在本模块 OCR 范围内。
+
+## 学习字幕分句
+
+工作区文本模型页和准备队列齿轮可以为新任务选择分句方式。CLI 参数为 `--segmentation-mode local` 或 `--segmentation-mode llm_regroup`。队列在入队时保存选择。默认 `local` 依据声学证据、字幕事件、时长和标点处理碎行，工作区启用复核时再逐句校对。
+
+智能分句适合多语言或复杂对白。它使用工作区已有的文本访问权限，优先使用分配给全文复核的连接，未分配时使用讲解模型。模型接收学习语言、局部索引、源文字、时间及停顿线索。音频留在所选识别流程。已有配对译文和手工修订保留分段。通过校验的重组结果直接进入逐句讲解与译稿核验。关闭文本模型时，经典准备可使用本地规则完成字幕；字幕 Agent 会保存转写，并提示启用讲解模型。
 
 ## 验证
 

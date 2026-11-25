@@ -68,7 +68,11 @@ class UiActionController:
     def _jobs_public(rows):
         keys = ("id", "name", "status", "completed_cues", "total_cues", "stage_name", "decision")
         return [
-            {**{k: j.get(k) for k in keys}, "workflow": j["settings"].get("preparation_workflow", "classic")}
+            {
+                **{k: j.get(k) for k in keys},
+                "workflow": j["settings"].get("preparation_workflow", "classic"),
+                "segmentation_mode": j["settings"].get("segmentation_mode", "local"),
+            }
             for j in rows
         ]
 
@@ -245,6 +249,7 @@ class UiActionController:
                 for k in (
                     "theme",
                     "preparation_workflow",
+                    "segmentation_mode",
                     "teaching_preferences",
                     "companion_reasoning_effort",
                     "annotation_profile_id",
@@ -325,6 +330,7 @@ class UiActionController:
                 and j["settings"].get("source_language") == context.language.source
                 and j["settings"].get("target_language") == context.language.target
                 and j["settings"].get("preparation_workflow", "classic") == settings.preparation_workflow
+                and j["settings"].get("segmentation_mode", "local") == settings.segmentation_mode
             ]
             self._check(cancelled)
             if matching:

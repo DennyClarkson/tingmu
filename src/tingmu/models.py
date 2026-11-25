@@ -6,13 +6,15 @@ import math
 
 MAX_LLM_CONCURRENCY = 16
 DEFAULT_LLM_CONCURRENCY = 4
+SEGMENTATION_MODES = ("local", "llm_regroup")
 
 
 def preparation_identity_settings(settings: dict) -> dict:
     """Scheduling changes can resume the same material and queue entry."""
     return {key: value for key, value in settings.items()
             if not key.startswith("_") and key not in ("llm_high_concurrency", "llm_max_concurrency")
-            and not (key == "preparation_workflow" and value == "classic")}
+            and not (key == "preparation_workflow" and value == "classic")
+            and not (key == "segmentation_mode" and value == "local")}
 
 
 @dataclass
@@ -126,6 +128,7 @@ class AppSettings:
     llm_high_concurrency: bool = True
     llm_max_concurrency: int = DEFAULT_LLM_CONCURRENCY
     preparation_workflow: str = "classic"
+    segmentation_mode: str = "local"
 
     # Runtime edit baseline: replace() must carry it along with the role values.
     # Explicit serialization below keeps it out of queue snapshots and settings.
@@ -135,6 +138,8 @@ class AppSettings:
         self._loaded_roles = dict(self._loaded_roles or {})
         if self.preparation_workflow not in ("classic", "subtitle_agent"):
             self.preparation_workflow = "classic"
+        if self.segmentation_mode not in SEGMENTATION_MODES:
+            self.segmentation_mode = "local"
         if not isinstance(self.llm_high_concurrency, bool):
             self.llm_high_concurrency = str(self.llm_high_concurrency).lower() in ("true", "1")
         try:

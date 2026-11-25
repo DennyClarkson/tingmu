@@ -15,7 +15,8 @@ Window {
     property bool showRoles:false
     function roleStatus(role) {
         var fallback = role === "annotation" ? qsTranslate("Tingmu", "词典") : qsTranslate("Tingmu", "已停用")
-        if (!backend.settings.text_models_enabled || (role === "review" && !backend.settings.review_enabled))
+        if (!backend.settings.text_models_enabled || (role === "review" && !backend.settings.review_enabled &&
+                backend.settings.segmentation_mode !== "llm_regroup"))
             return fallback
         var id = backend.settings[role + "_profile_id"]
         var profile = (backend.modelProfiles || []).find(function(p){ return p.id === id })

@@ -249,6 +249,7 @@ AppDialog {
                                     }
                                 }
                                 TextModelPolicy { Layout.fillWidth: true }
+                                SegmentationSettings { Layout.fillWidth: true }
                                 LlmConcurrencySettings { Layout.fillWidth: true }
                                 TButton { text: qsTranslate("Tingmu", "管理全局连接与任务分配…"); primary: true; onClicked: root.modelsRequested() }
                             }

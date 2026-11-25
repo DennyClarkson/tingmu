@@ -6,10 +6,69 @@ from tingmu.lesson_material import lesson_counts, translated_subtitles
 from tingmu.models import AppSettings, Cue, StudyDocument
 from tingmu.providers import ProviderError
 from tingmu.storage import Store
+from tingmu.models import preparation_identity_settings
 from tingmu.task_progress import Progress
 from tingmu.translation_review import TRANSLATION_REVIEW_VERSION, lesson_digest
 from test_app_actions_v5 import context
 from test_quick_bridge import bridge as bridge
+
+
+def test_segmentation_mode_is_frozen_and_legacy_jobs_keep_their_identity(tmp_path, monkeypatch):
+    import json
+    from tingmu.material_reset import reset_job_material_state
+
+    movie = tmp_path / "lesson.mkv"
+    movie.touch()
+    store = Store(tmp_path / "data")
+    local = AppSettings()
+    smart = replace(local, segmentation_mode="llm_regroup")
+    assert AppSettings(segmentation_mode="unknown").segmentation_mode == "local"
+    assert preparation_identity_settings({"segmentation_mode": "local"}) == {}
+    assert preparation_identity_settings({"segmentation_mode": "llm_regroup"}) == {"segmentation_mode": "llm_regroup"}
+    queue = PreparationQueue(store)
+    legacy, = queue.enqueue([movie], local)
+    raw = json.loads(queue.path.read_bytes())
+    del raw["jobs"][0]["settings"]["segmentation_mode"]
+    queue.path.write_text(json.dumps(raw), "utf-8")
+    queue = PreparationQueue(store)
+    store.save_settings(smart)
+    assert queue.enqueue([movie], local) == []
+    smart_job, = queue.enqueue([movie], smart)
+    assert smart_job["id"] != legacy["id"] and smart_job["settings"]["segmentation_mode"] == "llm_regroup"
+    assert reset_job_material_state(smart_job, "all", True, local)["settings"]["segmentation_mode"] == "llm_regroup"
+    seen = []
+    def prepare(path, settings, owner, **kwargs):
+        seen.append(settings.segmentation_mode)
+        doc = StudyDocument(str(path), settings.language, [Cue("one", 0, 1, "test")],
+                            metadata={"stage": "ready", "segmentation_mode": settings.segmentation_mode})
+        owner.save_document(doc)
+        return doc
+    monkeypatch.setattr("tingmu.batch.prepare_media", prepare)
+    queue.run()
+    assert seen == ["local", "llm_regroup"]
+    assert not queue.enqueue([movie], smart)
+    again, = queue.enqueue([movie], local)
+    assert again["id"] == legacy["id"]
+    assert Store(tmp_path / "second").load_settings().segmentation_mode == "local"
+
+
+def test_cli_segmentation_override_is_per_invocation(tmp_path, monkeypatch):
+    from tingmu import cli
+    monkeypatch.setattr("tingmu.runtime.installation_root", lambda: tmp_path)
+    store = Store(tmp_path / "data")
+    saved = AppSettings(segmentation_mode="local", text_models_enabled=True, cloud_text_enabled=False)
+    store.save_settings(saved)
+    seen = []
+    def prepare(path, settings, _store, *args, **kwargs):
+        seen.append((settings.segmentation_mode, settings.text_models_enabled, settings.cloud_text_enabled))
+        return StudyDocument(str(path), settings.language, [])
+    monkeypatch.setattr("tingmu.pipeline.prepare_media", prepare)
+    args = ["--data-dir", str(store.data_dir), "prepare", str(tmp_path / "movie.mkv")]
+    assert cli.main(args + ["--segmentation-mode", "llm_regroup"]) == 0
+    assert cli.main(args + ["--segmentation-mode", "llm_regroup", "--provider", "local"]) == 0
+    assert cli.main(args) == 0
+    assert seen == [("llm_regroup", True, False), ("llm_regroup", False, False), ("local", False, False)]
+    assert store.load_settings().segmentation_mode == "local"
 
 
 def test_file_selection_queues_a_frozen_workflow_without_replacing_open_lesson(bridge, tmp_path):

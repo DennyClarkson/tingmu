@@ -22,6 +22,7 @@ from .task_progress import Progress
 
 
 CHUNK_SECONDS = 600
+MAX_WAV_BYTES = 20_000_000  # PCM upload file including its 44-byte RIFF header.
 MAX_RESPONSE = 8 * 1024 * 1024
 
 
@@ -129,36 +130,55 @@ def list_models(settings, data_dir):
                    and 0 < len(row["id"]) <= 180 and not any(ord(c) <= 32 for c in row["id"])})
 
 
-def _wav_chunks(path):
-    """Limit upload size and cut at the quietest 50 ms near a long chunk's end."""
+def _wav_chunks(path, check=None, *, original=None, quiet_out=None):
+    """Cut the prepared PCM at sustained quiet intervals within the upload budget."""
     import numpy as np
+    from .acoustic import frame_energy, pcm_windows, quiet_intervals
 
     with wave.open(str(path), "rb") as reader:
         rate = reader.getframerate()
         if (reader.getnchannels(), reader.getsampwidth(), rate) != (1, 2, 16000):
             raise ProviderError("外部识别需要单声道 16 kHz PCM 音频。")
         total = reader.getnframes()
-        position = 0
-        while position < total:
-            samples = reader.readframes(CHUNK_SECONDS * rate)
-            length = len(samples) // 2
-            if not length:
+        size = min(int(CHUNK_SECONDS * rate), (MAX_WAV_BYTES - 44) // 2)
+
+        def read_at(start, count):
+            if check:
+                check()
+            reader.setpos(start)
+            samples = reader.readframes(count)
+            if len(samples) != count * 2:
                 raise ProviderError("临时音轨读取不完整。")
-            if position + length < total:
-                window = rate // 20
-                tail = min(length // 4, 8 * rate) // window * window
-                if tail:
-                    frames = np.frombuffer(samples, dtype="<i2")[-tail:].astype("float32").reshape(-1, window)
-                    quiet = int(np.argmin(np.mean(frames * frames, axis=1)))
-                    length = length - tail + quiet * window + window // 2
-                    samples = samples[:length * 2]
-                    reader.setpos(position + length)
+            return samples
+
+        # Only the compact 20 ms RMS trace lives for the whole track. The
+        # original mix is local timing evidence; uploads always use reader.
+        with wave.open(str(original or path), "rb") as mix:
+            if (mix.getnchannels(), mix.getsampwidth(), mix.getframerate()) != (1, 2, rate):
+                raise ProviderError("原始音轨格式与识别音轨不符。")
+            measured = min(total, mix.getnframes())
+            hop = rate // 50
+            energy = np.empty(measured // hop, dtype=np.float32)
+            for first in range(0, len(energy), 1500):
+                if check:
+                    check()
+                last = min(first + 1500, len(energy))
+                count = (last - first) * hop
+                raw = mix.readframes(count)
+                if len(raw) != count * 2:
+                    raise ProviderError("临时音轨读取不完整。")
+                energy[first:last] = frame_energy(np.frombuffer(raw, dtype="<i2").astype(np.float32) / 32768., rate)
+            if quiet_out is not None:
+                quiet_out.extend(quiet_intervals(energy))
+
+        for position, end in pcm_windows(total, size, energy, rate):
+            length = end - position
+            samples = read_at(position, length)
             output = io.BytesIO()
             with wave.open(output, "wb") as writer:
                 writer.setparams((1, 2, rate, 0, "NONE", "not compressed"))
                 writer.writeframes(samples)
-            yield position / rate, length / rate, output.getvalue(), total > CHUNK_SECONDS * rate
-            position += length
+            yield position / rate, length / rate, output.getvalue(), total > size
 
 
 def _post(endpoint, key, fields, audio):
@@ -175,7 +195,7 @@ def _post(endpoint, key, fields, audio):
     return _json_request(request, 180)
 
 
-def _segments(data, *, source, offset, duration, namespace, diarized):
+def _segments(data, *, source, offset, duration, namespace, diarized, evidence=None, chunk=1, blanks=None):
     if not isinstance(data, dict) or not isinstance(data.get("segments"), list):
         raise ProviderError("语音服务必须返回带起止时间的 segments。请检查模型与返回格式。")
     result = []
@@ -194,9 +214,16 @@ def _segments(data, *, source, offset, duration, namespace, diarized):
         except (KeyError, ValueError, TypeError):
             raise ProviderError("语音服务返回了无效的时间段、正文或说话人标记。") from None
         if text.strip():
-            start, end = start + offset, min(end, duration) + offset
-            result.append(Cue(_cue_id(source, index, start, end), start, end, text.strip(),
+            absolute_start, absolute_end = start + offset, min(end, duration) + offset
+            ident = _cue_id(source, index, absolute_start, absolute_end)
+            if evidence is not None:
+                evidence[ident] = {"chunk": chunk, "segment_index": index, "offset": offset,
+                                   "reported_start": start, "reported_end": end}
+            result.append(Cue(ident, absolute_start, absolute_end, text.strip(),
                               original_text=text, speaker=namespace + speaker if speaker else ""))
+        elif blanks is not None:
+            blanks.append({"chunk": chunk, "segment_index": index, "offset": offset,
+                           "reported_start": start, "reported_end": end})
     return sorted(result, key=lambda cue: (cue.start, cue.end))
 
 
@@ -211,6 +238,10 @@ def transcribe_external(media_path, settings, data_dir, *, start=0, duration=Non
         if not local and (settings.allow_audio_upload is not True or (permission and not permission())):
             raise ProviderError("请先在当前工作区允许向所选语音服务发送音轨，并检查任务的服务地址。")
 
+    def preparation_cancelled():
+        check()
+        return False
+
     check()
     _, model, fmt, _ = api_options(settings)
     endpoint, key = _connection(settings, data_dir)
@@ -224,12 +255,17 @@ def transcribe_external(media_path, settings, data_dir, *, start=0, duration=Non
         fields["chunking_strategy"] = "auto"
     cues = []
     chunks = 0
+    segment_sources = {} if metadata_out is not None else None
+    blanks = [] if metadata_out is not None else None
+    quiet = [] if metadata_out is not None else None
+    original = {}
     with prepared_audio(media_path, audio_track=settings.audio_track, start=start, duration=duration,
-                        suppress_bgm=settings.suppress_bgm, progress=progress, cancelled=cancelled,
-                        metadata_out=metadata_out) as audio:
+                        suppress_bgm=settings.suppress_bgm, progress=progress, cancelled=preparation_cancelled,
+                        metadata_out=metadata_out, original_out=original) as audio:
         with wave.open(str(audio), "rb") as source:
             length = source.getnframes() / source.getframerate()
-        for chunks, (offset, seconds, wav, multiple) in enumerate(_wav_chunks(audio), 1):
+        windows = _wav_chunks(audio, check, original=original.get("path"), quiet_out=quiet)
+        for chunks, (offset, seconds, wav, multiple) in enumerate(windows, 1):
             label = "本机 API" if local else "外部语音识别"
             if progress:
                 progress(Progress(f"{label} · 第 {chunks} 段（{seconds:.0f} 秒）",
@@ -239,11 +275,14 @@ def transcribe_external(media_path, settings, data_dir, *, start=0, duration=Non
             check()
             source = f"{Path(media_path).resolve()}|{settings.audio_track}|{model}|{chunks}"
             cues.extend(_segments(data, source=source, offset=start + offset, duration=seconds,
-                                  namespace=f"{chunks}·" if multiple else "", diarized=fmt == "diarized_json"))
+                                  namespace=f"{chunks}·" if multiple else "", diarized=fmt == "diarized_json",
+                                  evidence=segment_sources, chunk=chunks, blanks=blanks))
             if progress:
                 progress(Progress(f"{label}已完成第 {chunks} 段", activity=label, done=offset+seconds,
                                   total=length, unit="秒"))
     if metadata_out is not None:
         metadata_out.update(asr_backend=settings.asr_backend, asr_model=model, asr_response_format=fmt,
-                            audio_chunks=chunks, speaker_source="provider" if any(c.speaker for c in cues) else "")
+                            audio_chunks=chunks, asr_segment_sources=segment_sources, asr_blank_segments=blanks,
+                            asr_quiet_intervals=[[start + a, start + b] for a, b in quiet],
+                            speaker_source="provider" if any(c.speaker for c in cues) else "")
     return cues

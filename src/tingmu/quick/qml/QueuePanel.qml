@@ -73,8 +73,10 @@ Item {
                             TButton { objectName:"queueRemoveJobButton";iconSource:"close"; quiet:true; implicitWidth:24; implicitHeight:24; enabled:!backend.queueState.queueRunning && modelData.status!=="running"; tip:qsTranslate("Tingmu", "移出队列"); onClicked:backend.command("removeJob",{id:modelData.id}) }
                         }
                         Text {
-                            text: modelData.settings && modelData.settings.preparation_workflow === "subtitle_agent"
-                                  ? qsTranslate("Tingmu", "字幕 Agent") : qsTranslate("Tingmu", "经典流程")
+                            text: (modelData.settings && modelData.settings.preparation_workflow === "subtitle_agent"
+                                   ? qsTranslate("Tingmu", "字幕 Agent") : qsTranslate("Tingmu", "经典流程"))
+                                  + (modelData.settings && modelData.settings.segmentation_mode === "llm_regroup"
+                                     ? " · " + qsTranslate("Tingmu", "模型智能分句") : "")
                             Layout.fillWidth: true; wrapMode: Text.Wrap
                             color: Theme.muted; font.family: Theme.font; font.pixelSize: 11
                         }
@@ -203,13 +205,14 @@ Item {
                 ColumnLayout {
                     width:settingsScroll.availableWidth; spacing:9
                     Text { textFormat:Text.PlainText; text:qsTranslate("Tingmu", "字幕处理"); color:Theme.text; font.family:Theme.font; font.pixelSize:16 }
+                    SegmentationSettings { Layout.fillWidth:true }
                     LlmConcurrencySettings { Layout.fillWidth:true }
                     Item { id: speechHost; Layout.fillWidth: true; implicitHeight: speech.implicitHeight }
                     Text { textFormat:Text.PlainText; text:qsTranslate("Tingmu", "处理音轨（从 0 开始）"); color:Theme.muted; font.family:Theme.font; font.pixelSize:11 }
                     Field { Layout.fillWidth:true; text:String(backend.settings.audio_track || 0); validator:IntValidator{bottom:0;top:20} onEditingFinished:backend.setting("audio_track",Number(text)) }
                     TButton{text:qsTranslate("Tingmu", "管理全局模型与任务分配");Layout.fillWidth:true;onClicked:backend.requestDialog("models",root,{})}
-                    Toggle { text:qsTranslate("Tingmu", "全文文本复核"); checked:backend.settings.review_enabled; onToggled:backend.setting("review_enabled",checked) }
-                    Field { Layout.fillWidth:true; visible:backend.settings.review_enabled && !backend.settings.review_profile_id; text:backend.settings.review_model || ""; placeholderText:qsTranslate("Tingmu", "全局默认复核模型 ID"); onEditingFinished:backend.setting("review_model",text) }
+                    Toggle { visible:backend.settings.segmentation_mode !== "llm_regroup";text:qsTranslate("Tingmu", "全文文本复核"); checked:backend.settings.review_enabled; onToggled:backend.setting("review_enabled",checked) }
+                    Field { Layout.fillWidth:true; visible:(backend.settings.review_enabled || backend.settings.segmentation_mode === "llm_regroup") && !backend.settings.review_profile_id; text:backend.settings.review_model || ""; placeholderText:qsTranslate("Tingmu", "全局默认复核模型 ID"); onEditingFinished:backend.setting("review_model",text) }
                     Text { textFormat:Text.PlainText; visible:!backend.settings.annotation_profile_id; text:qsTranslate("Tingmu", "全局默认批量讲解"); color:Theme.muted; font.family:Theme.font; font.pixelSize:11 }
                     Choice { Layout.fillWidth:true; visible:!backend.settings.annotation_profile_id; property var providers:["openai","deepseek","local"]; translateOptions:true;model:["OpenAI","DeepSeek","仅使用本地词典"]; currentIndex:Math.max(0,providers.indexOf(backend.settings.provider)); onActivated:backend.setting("provider",providers[currentIndex]) }
                     Field { Layout.fillWidth:true; visible:!backend.settings.annotation_profile_id && backend.settings.provider!=="local"; text:backend.settings.model || ""; placeholderText:qsTranslate("Tingmu", "默认讲解模型 ID"); onEditingFinished:backend.setting("model",text) }

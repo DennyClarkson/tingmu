@@ -5,6 +5,7 @@ No stage imports the compatibility pipeline module.
 """
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable
@@ -62,6 +63,7 @@ class PreparationPlan:
     review_spec: dict | None = None
     reusable: bool = False
     reusable_asr: bool = False
+    resegment: bool = False
     adopted_source: list | None = None
     stages: list[str] = field(default_factory=list)
 
@@ -78,6 +80,7 @@ class PreparationContext:
     progress: Callable | None = None
     cancelled: Callable | None = None
     force_asr: bool = False
+    log_event: Callable | None = None
     audio_permission: Callable | None = None
     allow_model_downloads: bool = False
     reuse_existing_transcript: bool = False
@@ -117,7 +120,7 @@ def _compatible_asr_cache(cached, spec):
     previous = cached.metadata.get("transcript_spec", {})
     if previous.get("subtitle") or previous.get("asr_backend") not in ("local", "local_api", "external"):
         return False
-    ignored = {"preparation_workflow", "subtitle_plan_identity", "force_asr"}
+    ignored = {"preparation_workflow", "subtitle_plan_identity", "force_asr", "segmentation_mode"}
     return ({k: v for k, v in previous.items() if k not in ignored}
             == {k: v for k, v in spec.items() if k not in ignored})
 
@@ -154,6 +157,10 @@ def review_document(document, settings, store, spec, report, check_cancel, cance
                  segmented_texts=[])
          for c in document.cues], document.language, settings.target_script)
     completed = set(metadata.get("review_completed_ids", [])) if same else set()
+    # A supplied bilingual pair is evidence for this complete source event.
+    # A review rewrite or split would detach its translation from the original.
+    provided = metadata.get("provided_translations", {})
+    completed.update(c.id for c in original_cues if c.id in provided)
     # Individually revised source cues stay authoritative even if the user switches the
     # whole-film reviewer. Do not overwrite a correction at an intermediate checkpoint.
     corrections = metadata.get("cue_corrections", {})
@@ -228,6 +235,9 @@ def plan_preparation(ctx: PreparationContext):
     if ctx.start < 0 or (ctx.duration is not None and ctx.duration <= 0):
         raise ValueError("片段时间范围无效")
     ctx.language = ctx.settings.language
+    from .models import SEGMENTATION_MODES
+    if ctx.settings.segmentation_mode not in SEGMENTATION_MODES:
+        raise ValueError("未知的字幕分句模式。")
 
     ctx.check_cancel()
     if ctx.reuse_existing_transcript and (ctx.force_asr or ctx.subtitle_path or ctx.start or ctx.duration is not None):
@@ -283,11 +293,16 @@ def resolve_models(ctx: PreparationContext):
         ctx.plan.teach_enabled, ctx.plan.annotation_profile, ctx.plan.role_error = False, None, exc
     if ctx.reuse_existing_transcript and not ctx.plan.teach_enabled and not ctx.plan.agent_workflow:
         raise ProviderError("请在工作区启用可用的讲解模型，再补齐讲解与译文。")
+    smart = ctx.settings.segmentation_mode == "llm_regroup"
+    # Explicit smart mode replaces the optional per-cue reviewer. Route through
+    # the workspace's text/remote permissions even for a loopback model profile.
+    role = "annotation" if smart and not ctx.settings.review_profile_id else "review"
     try:
-        ctx.plan.review_enabled, ctx.plan.review_profile = (registry.text_role(ctx.settings, "review")
-                                          if ctx.settings.review_enabled and not ctx.reuse_existing_transcript
-                                          and not ctx.plan.source_captions and (ctx.plan.teach_enabled or not ctx.plan.agent_workflow)
-                                          else (False, None))
+        if role == "annotation":
+            ctx.plan.review_enabled, ctx.plan.review_profile = ctx.plan.teach_enabled, ctx.plan.annotation_profile
+        elif smart or (ctx.settings.review_enabled and not ctx.reuse_existing_transcript
+                       and not ctx.plan.source_captions and (ctx.plan.teach_enabled or not ctx.plan.agent_workflow)):
+            ctx.plan.review_enabled, ctx.plan.review_profile = registry.text_role(ctx.settings, "review")
     except ProviderError as exc:
         if not ctx.plan.agent_workflow:
             raise
@@ -303,6 +318,8 @@ def resolve_models(ctx: PreparationContext):
         "subtitle": str(ctx.subtitle_path) if ctx.subtitle_path else None,
         "subtitle_fingerprint": media_fingerprint(ctx.subtitle_path) if ctx.subtitle_path else None,
     }
+    if smart:
+        ctx.plan.transcript_spec["segmentation_mode"] = ctx.settings.segmentation_mode
     if ctx.force_asr:
         ctx.plan.transcript_spec["force_asr"] = True
     if not ctx.subtitle_path and not ctx.plan.source_captions and not ctx.reuse_existing_transcript:
@@ -335,10 +352,16 @@ def resolve_models(ctx: PreparationContext):
                 or "\x00" in ctx.settings.teaching_preferences):
             raise ValueError("讲解偏好最多 6000 字符")
         ctx.plan.annotation_spec["teaching_preferences"] = ctx.settings.teaching_preferences
-    ctx.plan.review_spec = ({"provider": ctx.settings.review_provider, "model": ctx.settings.review_model,
-                    "version": ctx.ports.REVIEW_VERSION, "language": asdict(ctx.language),
-                    "target_script": ctx.settings.target_script}
-                   if ctx.plan.review_enabled else None)
+    version = ctx.ports.REVIEW_VERSION
+    if smart:
+        from .regroup import VERSION
+        version = VERSION
+        ctx.plan.annotation_spec["segmentation_mode"] = ctx.settings.segmentation_mode
+    ctx.plan.review_spec = ({
+        "provider": ctx.settings.provider if role == "annotation" else ctx.settings.review_provider,
+        "model": ctx.settings.model if role == "annotation" else ctx.settings.review_model,
+        "version": version, "language": asdict(ctx.language), "target_script": ctx.settings.target_script,
+    } if ctx.plan.review_enabled else None)
     if ctx.plan.review_spec and ctx.plan.review_profile:
         ctx.plan.review_spec.update(provider=ctx.plan.review_profile["provider"], model=ctx.plan.review_profile["model"],
                            profile=profile_identity(ctx.plan.review_profile))
@@ -346,23 +369,38 @@ def resolve_models(ctx: PreparationContext):
     if ctx.reuse_existing_transcript and (not ctx.plan.cached or not ctx.plan.cached.cues):
         raise ProviderError("此视频没有可复用的字幕，请先生成或导入字幕。")
     if ctx.plan.resume_requested and (not ctx.plan.agent_workflow or ctx.plan.saved_plan):
-        ctx.plan.transcript_spec = ctx.plan.cached.metadata.get("transcript_spec", ctx.plan.transcript_spec)
-        if ctx.plan.cached.metadata.get("review_stage") == "ready" and ctx.plan.cached.metadata.get("review_spec"):
+        ctx.plan.transcript_spec = dict(ctx.plan.cached.metadata.get("transcript_spec", ctx.plan.transcript_spec))
+        if smart:
+            ctx.plan.transcript_spec["segmentation_mode"] = ctx.settings.segmentation_mode
+        else:
+            ctx.plan.transcript_spec.pop("segmentation_mode", None)
+        if (not smart and ctx.plan.cached.metadata.get("segmentation_mode", "local") == "local"
+                and ctx.plan.cached.metadata.get("review_stage") == "ready" and ctx.plan.cached.metadata.get("review_spec")):
             ctx.plan.review_spec = ctx.plan.cached.metadata.get("review_spec", ctx.plan.review_spec)
             ctx.plan.annotation_spec["review"] = ctx.plan.review_spec
     # Old workspaces keep their existing transcript when reopened or resumed.
     # Only an explicit full regeneration opts that material into the new audio stages.
-    if ctx.plan.cached and not ctx.plan.agent_workflow and not ctx.subtitle_path and not ctx.force_asr and ctx.settings.asr_backend == "local":
+    if not smart and ctx.plan.cached and not ctx.plan.agent_workflow and not ctx.subtitle_path and not ctx.force_asr and ctx.settings.asr_backend == "local":
         old_spec = ctx.plan.cached.metadata.get("transcript_spec", {})
         if "asr_backend" not in old_spec and all(ctx.plan.transcript_spec.get(k) == v for k, v in old_spec.items()) and old_spec:
             ctx.plan.transcript_spec = old_spec
-    ctx.plan.reusable = ctx.plan.cached is not None and (ctx.reuse_existing_transcript or ctx.plan.cached.metadata.get("transcript_spec") == ctx.plan.transcript_spec)
-    ctx.plan.reusable_asr = ctx.plan.agent_workflow and not ctx.force_asr and not ctx.plan.source_captions and _compatible_asr_cache(ctx.plan.cached, ctx.plan.transcript_spec)
+    cached = ctx.plan.cached
+    previous = cached.metadata.get("transcript_spec", {}) if cached else {}
+    different_mode = cached and cached.metadata.get("segmentation_mode", "local") != ctx.settings.segmentation_mode
+    def acquisition_spec(spec):
+        return {k: v for k, v in spec.items() if k != "segmentation_mode"}
+    ctx.plan.reusable_asr = ((ctx.plan.agent_workflow or different_mode) and not ctx.force_asr and not ctx.subtitle_path
+                             and not ctx.plan.source_captions and _compatible_asr_cache(cached, ctx.plan.transcript_spec))
+    ctx.plan.resegment = bool(different_mode and not ctx.force_asr and not ctx.plan.legacy_supplement
+                              and (ctx.plan.reusable_asr or ctx.reuse_existing_transcript
+                                   or acquisition_spec(previous) == acquisition_spec(ctx.plan.transcript_spec)))
+    ctx.plan.reusable = bool(cached and not ctx.plan.resegment
+                             and (ctx.reuse_existing_transcript or previous == ctx.plan.transcript_spec))
     if ctx.plan.agent_workflow:
         ctx.plan.annotation_spec["subtitle_plan_identity"] = ctx.plan.decision["identity"]
     ctx.plan.stages = (["字幕评估", "读取原字幕" if ctx.plan.source_captions else "字幕识别"] if ctx.plan.agent_workflow else ["字幕识别"])
-    if ctx.plan.review_spec and not ctx.reuse_existing_transcript:
-        ctx.plan.stages.append("文本复核")
+    if ctx.plan.review_spec and (smart or not ctx.reuse_existing_transcript):
+        ctx.plan.stages.append("智能分块重组" if smart else "文本复核")
     if ctx.plan.agent_workflow:
         ctx.plan.stages.append("逐句讲解")
         if ctx.plan.evidence and ctx.plan.source_captions:
@@ -382,13 +420,103 @@ def resolve_models(ctx: PreparationContext):
         ctx.report(Progress("检查识别与字幕缓存", stage=ctx.plan.stages[0], stage_code="transcript", plan=ctx.plan.stages))
     ctx.plan.adopted_source = None
     if ctx.plan.legacy_supplement and not ctx.plan.reusable_asr:
-        matching_source = ctx.plan.source_captions and [(c.start, c.end, c.original_text) for c in ctx.plan.cached.cues] == [
-            (c.start, c.end, c.original_text) for c in ctx.plan.evidence.source_cues]
-        if not matching_source:
+        ctx.plan.adopted_source = (_adopt_caption_ids(ctx.plan.cached, ctx.plan.evidence.source_cues)
+                                   if ctx.plan.source_captions else None)
+        if not ctx.plan.adopted_source:
             raise ProviderError("旧字幕缺少可核实的音轨或原文来源。请从准备队列启动字幕 Agent，重新判断字幕和识别音轨。")
-        # Library links and notes refer to the old IDs. Only adopt evidence after
-        # checking the entire sequence, text and timing, preserving those links.
-        ctx.plan.adopted_source = [replace(c, id=old.id) for c, old in zip(ctx.plan.evidence.source_cues, ctx.plan.cached.cues)]
+
+
+def _adopt_caption_ids(cached, evidence):
+    """Compare the original track before reusing study IDs referenced by notes."""
+    lineage = cached.metadata.get("pre_llm_lineage")
+    if not lineage:
+        if [(c.start, c.end, c.original_text) for c in cached.cues] != [
+                (c.start, c.end, c.original_text) for c in evidence]:
+            return None
+        return [replace(c, id=old.id) for old, c in zip(cached.cues, evidence)]
+    if [(r["start"], r["end"], r["text"]) for r in lineage["sources"]] != [
+            (c.start, c.end, c.text) for c in evidence]:
+        return None
+    adopted = []
+    provided = cached.metadata.get("provided_translations", {})
+    uses = Counter(i for row in lineage["outputs"].values() for i in set(row["source_indices"]))
+    for old in cached.cues:
+        row = lineage["outputs"][old.id]
+        indices = row["source_indices"]
+        translation = provided.get(old.id, "")
+        if any(evidence[i].translation for i in indices):
+            # A newly supplied pair can be reused only for its complete original line.
+            if len(indices) != 1 or uses[indices[0]] != 1 or "sentence_split" in row.get("operations", ()):
+                return None
+            translation = evidence[indices[0]].translation
+        adopted.append(replace(old, translation=translation))
+    return adopted
+
+
+def _quality_source(ctx):
+    metadata = ctx.document.metadata
+    explicit = metadata.get("subtitle_import", {}).get("kind")
+    if explicit in ("embedded", "sidecar"):
+        return explicit
+    plan = metadata.get("subtitle_plan", {})
+    if plan.get("decision") in ("source", "bilingual"):
+        return "embedded" if str(plan.get("source_id")).startswith("stream:") else "sidecar"
+    spec = metadata.get("transcript_spec", {})
+    if spec.get("subtitle") or metadata.get("subtitle_path"):
+        return "sidecar"
+    backend = spec.get("asr_backend")
+    if backend in ("local_api", "external"):
+        return "local_api" if backend == "local_api" else "external_api"
+    if backend == "local":
+        from .media import _qwen_model_id
+        return "local_qwen" if _qwen_model_id(spec.get("asr_model", "")) else "local_whisper"
+    return {"faster-whisper": "local_whisper", "qwen3-asr": "local_qwen",
+            "local_api": "local_api", "external": "external_api"}.get(metadata.get("asr_backend"), "legacy")
+
+
+def record_quality_counts(store, document, audit, source_kind, log_event):
+    from .diagnostics import media_id
+    counts = {k: v for k, v in audit.items() if type(v) is int}
+    fields = {"media_id": media_id(document.media_path), "source_kind": source_kind, **counts}
+    if log_event:
+        log_event("pre_llm_audit", "字幕规整质量统计", **fields)
+    else:
+        from contextlib import closing
+        from .diagnostics import AppLog
+        with closing(AppLog(store.data_dir)) as log:
+            log.event("pre_llm_audit", "字幕规整质量统计", **fields)
+
+
+def apply_quality_gate(doc, store, *, source_kind, protected_ids=(), log_event=None):
+    """Freeze study-unit identities before any review, teaching or local annotation."""
+    from .pre_llm import VERSION, normalize
+
+    metadata = doc.metadata
+    if metadata.get("pre_llm_audit", {}).get("version") == VERSION and "pre_llm_lineage" in metadata:
+        return False
+    protected = set(metadata.get("provided_translations", {}))
+    protected.update(metadata.get("cue_corrections", {}))
+    protected.update(metadata.get("review_completed_ids", ()))
+    if metadata.get("annotation_spec", {}).get("provider", doc.provider) != "local":
+        protected.update(metadata.get("completed_ids", ()))
+    protected.update(c.id for c in doc.cues if c.translation or c.explanation or c.segmented_texts)
+    protected.update(protected_ids)
+    protected.update(store.referenced_cue_ids(doc.media_path, doc.language))
+    cues, audit, lineage = normalize(
+        doc.cues, source_kind=source_kind, language=doc.language, protected_ids=protected,
+        speaker_changes=metadata.get("speaker_changes", ()),
+        quiet_intervals=metadata.get("asr_quiet_intervals", ()),
+    )
+    record_quality_counts(store, doc, audit, source_kind, log_event)
+    if not cues:
+        raise ValueError("未找到有效对白。请检查字幕轨、音轨或所选时间范围。")
+    raw = metadata.get("raw_display_text", {})
+    doc.cues = cues
+    metadata.update(pre_llm_audit=audit, pre_llm_lineage=lineage,
+                    raw_display_text={c.id: raw.get(c.id, c.text) if c.id in protected else c.text for c in cues})
+    if "subtitle_plan" in metadata:
+        metadata["subtitle_plan"]["prepared_count"] = len(cues)
+    return True
 
 
 def acquire_transcript(ctx: PreparationContext):
@@ -415,24 +543,61 @@ def acquire_transcript(ctx: PreparationContext):
                 return
     else:
         asr_metadata = {}
-        if ctx.plan.source_captions:
+        if ctx.plan.resegment:
+            from .regroup_stage import acquisition_cues
+            cached = ctx.plan.cached
+            ctx.report("复用同一素材与时间范围的原始字幕证据")
+            protected = ctx.store.referenced_cue_ids(cached.media_path, cached.language)
+            protected.update(cached.metadata.get("cue_corrections", {}))
+            protected.update(cached.metadata.get("provided_translations", {}))
+            if ctx.reuse_existing_transcript:
+                protected.update(c.id for c in cached.cues if c.explanation and c.translation)
+            cues = acquisition_cues(cached, protected, ctx.store)
+            asr_metadata = {k: v for k, v in cached.metadata.items()
+                            if k.startswith(("asr_", "raw_asr", "alignment_", "speaker_"))
+                            or k in ("bgm_method", "audio_chunks", "cue_corrections", "subtitle_import",
+                                     "subtitle_path", "provided_translations", "source_ancestry")}
+            if ctx.reuse_existing_transcript:
+                for key in ("translation_review", "model_responses", "analysis_batches", "checkpoint_events"):
+                    if key in cached.metadata:
+                        asr_metadata[key] = cached.metadata[key]
+        elif ctx.plan.source_captions:
             limit = ctx.start + ctx.duration if ctx.duration is not None else float("inf")
             cues = [c for c in (ctx.plan.adopted_source or ctx.plan.evidence.source_cues) if c.end > ctx.start and c.start < limit]
+            source = ctx.plan.evidence.import_source
+            if source:
+                if ctx.plan.adopted_source:
+                    # The source ledger is keyed by acquisition IDs. A rolling line may have
+                    # contributed to a merged unit or several children in the old document.
+                    ledger = ctx.plan.cached.metadata.get("pre_llm_lineage")
+                    raw_ids = ([r["id"] for r in ledger["sources"]] if ledger
+                               else [c.id for c in ctx.plan.adopted_source])
+                    events = {ident: source["events"][original.id]
+                              for ident, original in zip(raw_ids, ctx.plan.evidence.source_cues, strict=True)}
+                else:
+                    events = {c.id: source["events"][c.id] for c in cues}
+                asr_metadata["subtitle_import"] = {**source, "events": events}
         elif ctx.subtitle_path:
             ctx.report(f"读取字幕：{ctx.subtitle_path.name}")
-            cues = ctx.ports.load_subtitles(ctx.subtitle_path)
+            cues = ctx.ports.load_subtitles(ctx.subtitle_path, learning_language=ctx.language,
+                                            cancelled=ctx.cancelled, metadata_out=asr_metadata)
             if ctx.start or ctx.duration is not None:
                 limit = ctx.start + ctx.duration if ctx.duration is not None else float("inf")
                 cues = [c for c in cues if c.end > ctx.start and c.start < limit]
+                selected = {c.id for c in cues}
+                if "subtitle_import" in asr_metadata:
+                    events = asr_metadata["subtitle_import"]["events"]
+                    asr_metadata["subtitle_import"]["events"] = {k: v for k, v in events.items() if k in selected}
+                    asr_metadata["provided_translations"] = {c.id: c.translation for c in cues if c.translation}
         elif ctx.plan.reusable_asr:
             ctx.report("复用同一视频、音轨和时间范围内的原始识别")
-            raw = ctx.plan.cached.metadata.get("raw_display_text", {})
+            cached = ctx.plan.cached
+            raw = cached.metadata.get("raw_display_text", {})
             cues = [replace(c, text=raw.get(c.id, c.original_text), explanation="", translation="", tokens=[],
-                            segmented_texts=[]) for c in ctx.plan.cached.cues]
-            # Keep recognizer provenance, without carrying forward old teaching or review state.
-            asr_metadata = {k: v for k, v in ctx.plan.cached.metadata.items()
-                            if k.startswith(("asr_", "raw_asr", "alignment_", "speaker_"))
-                            or k in ("bgm_method", "audio_chunks")}
+                            segmented_texts=[]) for c in cached.cues]
+            asr_metadata = {k: v for k, v in cached.metadata.items()
+                            if k.startswith(("asr_", "raw_asr", "alignment_", "speaker_", "pre_llm_"))
+                            or k in ("bgm_method", "audio_chunks", "cue_corrections", "source_ancestry")}
         elif ctx.settings.asr_backend in ("local_api", "external"):
             from .external_asr import transcribe_external
             cues = transcribe_external(ctx.media_path, ctx.settings, ctx.store.data_dir, start=ctx.start, duration=ctx.duration,
@@ -443,7 +608,11 @@ def acquire_transcript(ctx: PreparationContext):
             model = ctx.settings.asr_model
             if model.startswith("local:"):
                 from .local_whisper import resolve_local_model
-                model = str(resolve_local_model(model))
+                from .media import AsrSetupError
+                try:
+                    model = str(resolve_local_model(model))
+                except (ValueError, OSError) as exc:
+                    raise AsrSetupError("自定义 Whisper 模型不可用。请在工作区语音设置中重新选择完整的本地模型。") from exc
             cues = ctx.ports.transcribe(ctx.media_path, language=ctx.language.target, model=model,
                               device=ctx.settings.device, audio_track=ctx.settings.audio_track, start=ctx.start,
                               duration=ctx.duration, progress=ctx.report, cancelled=ctx.cancelled,
@@ -460,17 +629,26 @@ def acquire_transcript(ctx: PreparationContext):
             **asr_metadata,
         })
         if ctx.plan.decision:
-            from .subtitle_sources import align_reference_hints
-            references = ctx.plan.evidence.reference_cues if ctx.plan.evidence else []
-            ctx.provided = {c.id: c.translation for c in cues if ctx.plan.source_captions and c.translation.strip()}
+            references = ([{"id": c.id, "start": c.start, "end": c.end, "text": c.text}
+                           for c in ctx.plan.evidence.reference_cues] if ctx.plan.evidence else
+                          ctx.plan.cached.metadata.get("subtitle_reference_cues", []) if ctx.plan.saved_plan else [])
+            if ctx.plan.resegment:
+                pairs = asr_metadata.get("provided_translations", {})
+                ctx.provided = {c.id: pairs[c.id] for c in cues if c.id in pairs}
+            else:
+                ctx.provided = {c.id: c.translation for c in cues if ctx.plan.source_captions and c.translation.strip()}
             if ctx.plan.legacy_supplement:
                 # The caller asked to fill existing lessons. Keep validated fields and
                 # hand revisions now that we have established the raw source identity.
                 ctx.document = ctx.plan.cached
+                if "subtitle_import" in asr_metadata:
+                    ctx.document.metadata["subtitle_import"] = asr_metadata["subtitle_import"]
                 corrected = ctx.document.metadata.get("cue_corrections", {})
                 adopted = []
+                projected = ctx.document.metadata.get("raw_display_text", {})
                 for c in ctx.document.cues:
-                    if c.id in corrected or c.text != learning_text(c.original_text, ctx.language, ctx.settings.target_script):
+                    source = learning_text(projected.get(c.id, c.original_text), ctx.language, ctx.settings.target_script)
+                    if c.id in corrected or c.text != source:
                         ctx.provided.pop(c.id, None)
                     if c.id in ctx.provided:
                         matches = c.translation == ctx.provided[c.id] and len(c.segmented_texts) <= 1
@@ -480,26 +658,57 @@ def acquire_transcript(ctx: PreparationContext):
                 ctx.document.cues = adopted
                 ctx.document.metadata["transcript_spec"] = ctx.plan.transcript_spec
                 ctx.reuse_existing_transcript = ctx.plan.source_captions or ctx.document.metadata.get("review_stage") == "ready"
-            hints = {}
-            if references and not ctx.plan.source_captions:
-                end = min(ctx.start + ctx.duration if ctx.duration is not None else float("inf"),
-                          ctx.plan.decision.get("duration") or float("inf"))
-                in_range = [c for c in cues if ctx.start <= c.start < c.end <= end]
-                hints = align_reference_hints(in_range, references)
             ctx.document.metadata.update(
                 subtitle_plan={**ctx.plan.decision, "prepared_count": len(cues), "provided_count": len(ctx.provided),
-                               "reference_hint_count": len(hints)},
+                               "reference_hint_count": 0},
                 provided_translations=ctx.provided,
-                subtitle_reference_cues=[{"id": c.id, "start": c.start, "end": c.end, "text": c.text}
-                                         for c in references],
-                subtitle_reference_hints=hints,
+                subtitle_reference_cues=references,
+                subtitle_reference_hints={},
             )
-        # Save immediately, before any optional model call can fail.
+    # Gate fresh and resumable transcripts before the first text-model checkpoint.
+    protected = ctx.plan.cached.metadata.get("cue_corrections", {}) if ctx.plan.cached else ()
+    if ctx.plan.reusable and not ctx.document.metadata.get("pre_llm_audit"):
+        from .subtitle_sources import project_legacy_import
+        linked = ctx.store.referenced_cue_ids(ctx.document.media_path, ctx.language)
+        project_legacy_import(ctx.document, protected_ids=linked.union(protected), cancelled=ctx.cancelled)
+    metadata = ctx.document.metadata
+    metadata["segmentation_mode"] = ctx.settings.segmentation_mode
+    metadata["transcript_spec"] = ctx.plan.transcript_spec
+    if ctx.settings.segmentation_mode == "llm_regroup" and ctx.plan.review_spec:
+        # Save acquisition evidence before the first network call. The regroup
+        # stage reads the original timed units directly, including on retries.
+        gated = False
+    else:
+        gated = apply_quality_gate(ctx.document, ctx.store, source_kind=_quality_source(ctx),
+                                   protected_ids=protected, log_event=ctx.log_event)
+    if not ctx.plan.reusable:
+        _refresh_reference_hints(ctx)
+    if gated or not ctx.plan.reusable:
         ctx.store.save_document(ctx.document)
+
+
+def _refresh_reference_hints(ctx):
+    metadata = ctx.document.metadata
+    spec = metadata.get("transcript_spec", {})
+    start, duration = spec.get("start", ctx.start), spec.get("duration", ctx.duration)
+    if not ctx.plan.source_captions and metadata.get("subtitle_reference_cues"):
+        from .models import Cue
+        from .subtitle_sources import align_reference_hints
+        end = min(start + duration if duration is not None else float("inf"),
+                  metadata.get("subtitle_plan", {}).get("duration") or float("inf"))
+        hints = align_reference_hints([c for c in ctx.document.cues if start <= c.start < c.end <= end],
+                                      [Cue(**r) for r in metadata["subtitle_reference_cues"]])
+        metadata["subtitle_reference_hints"] = hints
+        metadata["subtitle_plan"]["reference_hint_count"] = len(hints)
 
 
 def run_review_stage(ctx: PreparationContext):
     ctx.check_cancel()
+    smart = ctx.settings.segmentation_mode == "llm_regroup"
+    if smart and ctx.plan.review_spec:
+        from .regroup_stage import regroup_document
+        regroup_document(ctx, source_kind=_quality_source(ctx))
+        _refresh_reference_hints(ctx)
     if ctx.plan.agent_workflow and (not ctx.plan.teach_enabled or ctx.plan.role_error):
         ctx.document.metadata.update(stage="partial", lesson_status="needs_teaching", error="TeachingUnavailable")
         ctx.store.save_document(ctx.document)
@@ -507,7 +716,7 @@ def run_review_stage(ctx: PreparationContext):
             raise ProviderError(f"字幕已保存。请检查工作区文本模型设置并重试。{ctx.plan.role_error}",
                                 category="configuration") from ctx.plan.role_error
         raise ProviderError("原字幕已保存。请在工作区启用逐句讲解模型，允许其使用本机或指定的远程文本服务后重试。")
-    if ctx.plan.review_spec and not ctx.reuse_existing_transcript:
+    if not smart and ctx.plan.review_spec and not ctx.reuse_existing_transcript:
         ctx.report(Progress("开始文本复核", stage="文本复核", stage_code="review"))
         try:
             ctx.ports.review_document(ctx.document, ctx.settings, ctx.store, ctx.plan.review_spec, ctx.report, ctx.check_cancel, ctx.cancelled, ctx.plan.review_profile)
@@ -527,7 +736,9 @@ def run_teaching_stage(ctx: PreparationContext):
     if ctx.reuse_existing_transcript:
         ctx.completed.update(c.id for c in ctx.document.cues if c.translation.strip() and c.explanation.strip())
     if not ctx.same_annotation and not ctx.reuse_existing_transcript:
-        raw_display = ctx.document.metadata.get("reviewed_text" if ctx.plan.review_spec else "raw_display_text", {})
+        raw_display = ctx.document.metadata.get("raw_display_text", {})
+        if ctx.plan.review_spec:
+            raw_display = {**raw_display, **ctx.document.metadata.get("reviewed_text", {})}
         reviewed_parts = ctx.document.metadata.get("reviewed_segmented_texts", {})
         ctx.document.cues = [c if c.id in ctx.corrections else replace(c, text=raw_display.get(c.id, c.original_text or c.text),
                                  translation="", explanation="", tokens=[],
@@ -539,7 +750,7 @@ def run_teaching_stage(ctx: PreparationContext):
         ctx.document.cues = [replace(c, text=ctx.corrections[c.id]["text"],
                                  segmented_texts=ctx.corrections[c.id]["segmented_texts"])
                          if c.id in ctx.corrections else c for c in ctx.document.cues]
-    ctx.provided = ctx.document.metadata.get("provided_translations", {}) if ctx.plan.agent_workflow else {}
+    ctx.provided = ctx.document.metadata.get("provided_translations", {})
     if ctx.provided:
         ctx.document.cues = [replace(c, translation=ctx.provided[c.id]) if c.id in ctx.provided else c for c in ctx.document.cues]
     if not ctx.reuse_existing_transcript:
@@ -582,7 +793,7 @@ def run_teaching_stage(ctx: PreparationContext):
             cues = ctx.ports.normalize_cues(cues, ctx.language, ctx.settings.target_script)
         update = {c.id: c for c in cues}
         for c in cues:
-            if c.id in ctx.provided:
+            if c.id in ctx.provided and ctx.plan.teach_enabled:
                 if c.translation != ctx.provided[c.id] or not c.explanation.strip() or len(c.segmented_texts) > 1:
                     raise AnnotationValidationError("已有译文或原始分段发生变化，请重新检查此句。")
                 ctx.review["provided"][c.id] = lesson_digest(c, [])
@@ -610,15 +821,20 @@ def run_teaching_stage(ctx: PreparationContext):
         ctx.agent.max_workers = ctx.settings.llm_workers
         ctx.agent.split_invalid_batches = True
         ctx.agent.repair_feedback = ctx.teaching_errors
-        ctx.agent.preserve_text = bool(ctx.plan.agent_workflow or ctx.reuse_existing_transcript or ctx.plan.review_spec or ctx.corrections)
+        ctx.agent.preserve_text = bool(ctx.provided or ctx.plan.agent_workflow or ctx.reuse_existing_transcript or ctx.plan.review_spec or ctx.corrections)
         ctx.agent.teaching_preferences = ctx.settings.teaching_preferences
         ctx.agent.provided_translations = ctx.provided
         ctx.agent.reference_hints = ctx.document.metadata.get("subtitle_reference_hints", {}) if ctx.plan.agent_workflow else {}
         ctx.agent.unreviewed_source = bool(ctx.plan.agent_workflow and ctx.document.metadata.get("review_stage") != "ready")
         if ctx.pending:
             ctx.report(f"{ctx.document.provider} 分析：{len(ctx.pending)} 句")
+            context = ctx.document.cues
+            if not ctx.agent.preserve_text:
+                # A resumed classic job uses the same projected source neighbors as its first request.
+                raw = ctx.document.metadata.get("raw_display_text", {})
+                context = [replace(c, original_text=raw.get(c.id, c.text)) for c in context]
             result = ctx.agent.annotate(ctx.pending, ctx.language, progress=ctx.report, cancelled=ctx.cancelled,
-                                    checkpoint=checkpoint, context_cues=ctx.document.cues)
+                                        checkpoint=checkpoint, context_cues=context)
             checkpoint(result)
         if not all(c.translation.strip() and c.explanation.strip() for c in ctx.document.cues):
             raise ValueError("仍有字幕缺少逐句译文或讲解。")
