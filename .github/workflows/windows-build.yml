@@ -48,7 +48,6 @@ jobs:
         with:
           version: "0.12.10"
           python-version: "3.12.14"
-          python-arch: x86_64
           enable-cache: true
           cache-dependency-glob: uv.lock
           cache-local-path: ${{ github.workspace }}/.cache/uv
