@@ -18,6 +18,14 @@ from .system_tray import SystemTray
 from .workspace_controller import WorkspaceController
 
 
+def _register_bundled_font(path):
+    if QFontDatabase.addApplicationFont(str(path)) >= 0:
+        return
+    # Qt's offscreen FreeType backend can lose Unicode paths in the native code page.
+    if QFontDatabase.addApplicationFontFromData(path.read_bytes()) < 0:
+        raise RuntimeError("随附字体无法读取，请检查便携文件夹是否完整")
+
+
 def create_qml_app(data_dir=None, initial_path=None, *, show_setup=False, runtime_setup_dir=None):
     # QML loads its native Quick plugins. Avoid pulling the QtQuick/OpenGL
     # Python bindings into the portable runtime solely to select a style.
@@ -42,8 +50,7 @@ def create_qml_app(data_dir=None, initial_path=None, *, show_setup=False, runtim
             if QQuickStyle.name() != "Basic":
                 QQuickStyle.setStyle("Basic")
         for font_path in (Path(__file__).parent / "qml/fonts").glob("*.otf"):
-            if QFontDatabase.addApplicationFont(str(font_path)) < 0:
-                raise RuntimeError("随附字体无法读取，请检查便携文件夹是否完整")
+            _register_bundled_font(font_path)
         application._tingmu_fonts_loaded = True
     application.setFont(QFont("Source Han Sans SC", 10))
     if not hasattr(application, "_tingmu_tray"):
