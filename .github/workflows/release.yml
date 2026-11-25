@@ -76,7 +76,7 @@ jobs:
               else .ref.target | (if .__typename == "Tag" then .target else . end) |
                 if .__typename == "Commit" then .oid else error("Tag must point to a commit") end
               end')
-          flags=(--target "$TESTED_COMMIT")
+          flags=()
           if [[ "$state" == released ]]; then
             echo "Release $TAG already exists. Its assets have been preserved." >&2
             exit 1
@@ -89,6 +89,8 @@ jobs:
           elif [[ "$GITHUB_REF_TYPE" == tag || -n "$EXISTING_TAG" ]]; then
             echo "The triggering tag $TAG no longer exists." >&2
             exit 1
+          else
+            flags+=(--target "$TESTED_COMMIT")
           fi
           if [[ "$DRAFT" == true ]]; then flags+=(--draft); fi
           if [[ "${VERSION%%+*}" == *-* ]]; then flags+=(--prerelease); fi
