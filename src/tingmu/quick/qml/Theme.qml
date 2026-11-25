@@ -1,9 +1,15 @@
 pragma Singleton
 import QtQuick
+import QtQuick.Window
 
 QtObject {
     id: theme
     property bool closing: false
+    function canAnimate(item) {
+        if (!onscreenAnimations || closing || !item || !item.visible) return false
+        const window = item.Window.window
+        return !!window && window.visible && window.visibility !== Window.Minimized
+    }
     property string name: backend.settings.theme || "forest"
     readonly property bool isDark: name !== "paper" && name !== "mist"
     readonly property var palettes: ({

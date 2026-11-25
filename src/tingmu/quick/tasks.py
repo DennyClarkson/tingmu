@@ -90,6 +90,9 @@ class BackgroundTaskManager:
     def _job_progress(self, key, text):
         if not self.state.closed:
             if key == "model-download":
+                worker = self.state.workers.get(key)
+                if worker is not None and worker[1].is_set():
+                    return
                 self.ports.set_state(
                     domain="download",
                     status=str(text),
@@ -139,6 +142,10 @@ class BackgroundTaskManager:
         if worker is None:
             return False
         worker[1].set()
+        if key == "model-download":
+            previous = self.ports.state_snapshot().get("downloadProgress") or {}
+            self.ports.set_state(domain="download", downloadMessage="正在取消…",
+                                 downloadProgress={**previous, "stage": "cancelling", "rate": 0, "eta": None})
         return True
 
     def register_pool(self, name, executor):

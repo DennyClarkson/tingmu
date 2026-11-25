@@ -18,6 +18,7 @@ from filelock import FileLock, Timeout
 
 from . import runtime_install_qwen as qwen
 from .runtime import confined_path, installation_root
+from .task_progress import TransferMeter
 
 
 _TARGETS = {"ffmpeg": "bin", "local-asr": ".cache/runtime-deps/local-asr",
@@ -62,14 +63,15 @@ def _check(cancelled):
         raise InterruptedError("运行环境安装已取消")
 
 
-def _fetch(item, target, offset, total, progress, cancelled):
+def _fetch(item, target, offset, total, meter, cancelled):
     digest = hashlib.sha256()
     size = 0
-    last = 0
     with urlopen(item["url"], timeout=15) as response, target.open("xb") as output:
+        meter.update(offset, total, offset, force=True)
+        read = getattr(response, "read1", response.read)
         while True:
             _check(cancelled)
-            chunk = response.read(_CHUNK)
+            chunk = read(_CHUNK)
             if not chunk:
                 break
             size += len(chunk)
@@ -77,13 +79,11 @@ def _fetch(item, target, offset, total, progress, cancelled):
                 raise ValueError("运行环境下载大小异常")
             output.write(chunk)
             digest.update(chunk)
-            now = time.monotonic()
-            if now - last >= 0.15:
-                progress(offset + size, total)
-                last = now
+            meter.update(offset + size, total, offset + size, force=size == item["size"])
+    _check(cancelled)
+    meter.stage("verifying")
     if size != item["size"] or digest.hexdigest() != item["sha256"]:
         raise ValueError("运行环境下载校验失败")
-    progress(offset + size, total)
 
 
 def _member(info):
@@ -209,22 +209,32 @@ def _publish(kind, stage, target, backup, cancelled):
 
 
 def install(root, kind, progress, cancelled):
-    """Install one explicitly selected component. The callback receives byte counts."""
+    """Install one selected component, reporting a TransferMeter or legacy byte callback."""
     root = Path(root).resolve()
     if kind not in _TARGETS:
         raise ValueError(f"Unknown runtime: {kind}")
     target = _path(root, _TARGETS[kind])
+    if isinstance(progress, TransferMeter):
+        meter = progress
+    else:
+        def legacy(event):
+            if event.details["stage"] == "download":
+                progress(int(event.details["completed"]), int(event.details["total"]))
+        meter = TransferMeter(kind, legacy)
     work = _path(root, ".cache/runtime-deps")
     _check(cancelled)
     work.mkdir(parents=True, exist_ok=True)
     lock = FileLock(str(_path(work, kind + ".lock")))
+    waiting = False
     while True:
         _check(cancelled)
         try:
             lock.acquire(timeout=.25)
             break
         except Timeout:
-            continue
+            if not waiting:
+                meter.stage("waiting")
+                waiting = True
     try:
         backup = _path(work, kind + ".previous")
         if backup.exists() and not target.exists():
@@ -233,31 +243,37 @@ def install(root, kind, progress, cancelled):
             shutil.rmtree(backup)
         if target.is_dir():
             try:
+                meter.stage("testing")
                 _verify(root, kind, target, cancelled)
             except InterruptedError:
                 raise
             except (OSError, RuntimeError, ValueError):
                 pass
             else:
-                progress(0, 0)
+                meter.update(0, 0, 0, force=True)
+                meter.stage("ready")
                 return target
         with tempfile.TemporaryDirectory(prefix="install-" + kind + "-", dir=work) as temp:
             stage = _path(work, Path(temp).name)
             payload = _path(stage, "payload")
             payload.mkdir()
-            if kind == "qwen":
-                packages = qwen.prepare(root, payload)
             plan = _plan(root, kind)
             total = sum(item["size"] for _, item in plan)
-            progress(0, total)
+            meter.total = total
+            if kind == "qwen":
+                meter.stage("installing")
+                packages = qwen.prepare(root, payload, cancelled)
             offset = 0
             wheels = []
-            for category, item in plan:
+            for index, (category, item) in enumerate(plan, 1):
                 _check(cancelled)
                 filename = unquote(urlsplit(item["url"]).path.rsplit("/", 1)[-1])
                 artifact = _path(stage, filename)
-                _fetch(item, artifact, offset, total, progress, cancelled)
+                meter.stage("connecting", package=index, packages=len(plan), filename=filename)
+                _fetch(item, artifact, offset, total, meter, cancelled)
                 offset += item["size"]
+                if category != "qwen":
+                    meter.stage("installing")
                 _archive(category, artifact, stage if category == "uv" else payload, cancelled)
                 if category == "qwen":
                     wheels.append(artifact)
@@ -269,15 +285,19 @@ def install(root, kind, progress, cancelled):
                     _check(cancelled)
                     _path(stage, "uv.exe").replace(uv)
             if kind == "qwen":
+                meter.stage("installing", filename="")
                 _offline_uv(_local_uv(root), payload / "python.exe", wheels, packages, stage, cancelled)
+                _check(cancelled)
                 qwen.finish(packages)
             _check(cancelled)
             if kind == "ffmpeg" and not (payload / "FFmpeg-LICENSE.txt").is_file():
                 raise ValueError("FFmpeg 安装包缺少许可证")
+            meter.stage("testing", filename="")
             _verify(root, kind, payload, cancelled)
             if kind == "qwen":
                 qwen.configure(root, payload, target)
             _publish(kind, payload, target, backup, cancelled)
+            meter.stage("ready")
             return target
     finally:
         lock.release()

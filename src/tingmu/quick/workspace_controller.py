@@ -51,6 +51,7 @@ class _DeferredCheckTrigger:
 
 class WorkspaceController(QObject):
     changed = Signal()
+    preparationReadinessChanged = Signal()
     _recommendationReady = Signal(str, object, str)
     _settingsSnapshotRequested = Signal(object)
     _deferredCheckRequested = Signal()
@@ -67,6 +68,7 @@ class WorkspaceController(QObject):
         self.items = catalog.summaries()
         self.model = ""
         self.readiness = ""
+        self._weight_checks = {}
         self.runtime_setup = RuntimeSetup(bridge, runtime_setup_dir)
         self.runtime_setup.detectionFinished.connect(self._runtime_updated)
         self.proposal = {}
@@ -143,6 +145,8 @@ class WorkspaceController(QObject):
 
     @Slot()
     def refresh(self):
+        self._weight_checks.clear()
+        self.preparationReadinessChanged.emit()
         self.readiness = ""
         self.items = self.catalog.summaries()
         self.changed.emit()
@@ -512,8 +516,7 @@ class WorkspaceController(QObject):
                     self.error = self.proposal["error"]
                     if self.pending_switch == frozen["workspace_id"]:
                         self.pending_switch = ""
-                self.readiness = ""
-                self.changed.emit()
+                self._runtime_updated()
             self.bridge.start_task("model-download", fetch, complete)
         except Exception as exc:
             self.error = str(exc)
@@ -575,7 +578,75 @@ class WorkspaceController(QObject):
             self.readiness = model_status(model)
         return self.readiness
 
+    def _readiness_roles(self, settings, *, fresh=False):
+        from tingmu.agent import provider_status
+        from .preparation_readiness import text_roles
+        if fresh:
+            registry = self.bridge.store.model_registry
+            registry.load_roles(settings)
+            profiles = registry.public_profiles()
+        else:
+            profiles = self.bridge.modelProfiles
+        return text_roles(settings, profiles, provider_status())
+
+    @Slot(str, "QVariantMap", str, result="QVariantMap")
+    def preparationReadiness(self, scenario, job, current_path):
+        from .preparation_readiness import job_configuration, readiness_rows, subtitle_source
+
+        workspace = self.bridge.settings_snapshot()
+        settings, differs = job_configuration(workspace, job)
+        source = subtitle_source(scenario, settings.preparation_workflow, job, current_path, settings.target_language)
+        components, weights, supported = {}, True, True
+        if source in {"asr", "evaluate"}:
+            from tingmu.runtime import installation_root
+            from tingmu.runtime_deps import last_probe
+            for kind in ("ffmpeg", "qwen", "local-asr", "whisper-cuda"):
+                row = self.runtime_setup.results.get(kind) or last_probe(installation_root(), kind)
+                if row:
+                    components[kind] = row
+            if settings.asr_backend == "local":
+                from tingmu.workspace_models import weight_readiness
+                from tingmu.model_advisor import model_supports_language
+                key = settings.asr_model, settings.target_language
+                if key not in self._weight_checks:
+                    self._weight_checks[key] = (weight_readiness(key[0]).ready, model_supports_language(*key))
+                weights, supported = self._weight_checks[key]
+        roles = self._readiness_roles(settings) if scenario not in ("speech", "watch") else {}
+        rows = readiness_rows(settings, source, roles, components=components, weights=weights,
+                              language_supported=supported, portable=self.runtime_setup.available,
+                              include_text=scenario != "speech", workspace=workspace)
+        # Agent inspection can reuse a caption without ASR. Surface fallback
+        # prerequisites before the queue starts, separately from definite issues.
+        fallback = readiness_rows(settings, "asr", {}, components=components, weights=weights,
+                                  language_supported=supported, portable=self.runtime_setup.available,
+                                  include_text=False) if source == "evaluate" else []
+        if differs:
+            can_retry_teaching = (job.get("needs_teaching") and settings.preparation_workflow == "subtitle_agent"
+                                  and job.get("status") in ("failed", "paused", "cleared"))
+            rows.append({"code": "frozenRetry" if can_retry_teaching else "frozenSpec", "action": "", "value": ""})
+        return {"source": source, "issues": rows, "asrFallback": fallback, "job": bool(job.get("settings")), "workflow": settings.preparation_workflow,
+                "mode": settings.segmentation_mode, "backend": settings.asr_backend,
+                "policy": "off" if not settings.text_models_enabled else
+                          "remote" if settings.cloud_text_enabled else "local"}
+
+    @Slot(result="QVariantMap")
+    def remotePermissionOffer(self):
+        roles = self._readiness_roles(self.bridge.settings_snapshot(), fresh=True)
+        remote = {role: row for role, row in roles.items() if not row["local"] and (row["id"] or row["configured"])}
+        signature = hashlib.sha256(json.dumps([self.workspace_id, remote], sort_keys=True).encode()).hexdigest()
+        return {"signature": signature, "roles": [
+            {"role": role, "model": row["model"], "host": row["host"]} for role, row in remote.items()]}
+
+    @Slot(str, result=bool)
+    def confirmRemotePermission(self, signature):
+        if signature != self.remotePermissionOffer()["signature"]:
+            return False
+        self.bridge.command("textModelPolicy", {"mode": "remote"})
+        return self.bridge.settings_snapshot().cloud_text_enabled
+
     def _runtime_updated(self):
+        self._weight_checks.clear()
+        self.preparationReadinessChanged.emit()
         self.readiness = ""
         self.changed.emit()
 
@@ -668,9 +739,8 @@ class WorkspaceController(QObject):
         self._check_model_runtime(engine_model, device)
 
         def complete(result):
-            self.readiness = ""
             self.bridge.publish_state(status=f"{result} 模型文件已就绪")
-            self.changed.emit()
+            self._runtime_updated()
 
         def fetch(progress, cancel):
             self.runtime_setup.check_before_transfer(engine_model, device)

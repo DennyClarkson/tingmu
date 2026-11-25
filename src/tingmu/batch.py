@@ -12,6 +12,7 @@ import time
 from .models import AppSettings, preparation_identity_settings
 from .diagnostics import redact_text
 from .preparation_stages import stage_code, stage_label
+from .studio_metrics import CueRate, LIVE_FIELDS, quality_summary, record_batch_slot, verified_examples
 from .translation_review import TRANSLATION_REVIEW_VERSION
 from .storage import Store, atomic_json, canonical_path, media_fingerprint
 
@@ -64,15 +65,21 @@ def _failure_details(error, document):
 def _apply_progress(job, details):
     if "decision" in details:
         job["decision"] = details["decision"]
-        for key in ("evidence_counts", "source_name", "reference_name", "evidence_notes"):
+        for key in ("evidence_counts", "source_name", "reference_name", "evidence_notes", "adoption",
+                    "track_evidence", "screening_notes"):
             if key in details:
                 job[key] = details[key]
     if "plan" in details:
         job["plan"] = details["plan"]
+    if details.get("quality"):
+        job["quality"] = details["quality"]
     if "stage" in details or "stage_code" in details:
         code = details.get("stage_code") or stage_code(details.get("stage", ""))
         job.update(stage_name=details.get("stage", stage_label(code)), stage_code=code,
                    activity="", stage_done=0, stage_total=0, unit="", batches=[])
+        history = job.setdefault("stage_history", [])
+        if job["stage_name"] not in history:
+            history.append(job["stage_name"])
     if "activity" in details and details["activity"] != job.get("activity"):
         job.update(activity=details["activity"], stage_done=0, stage_total=0, unit="")
     if "total" in details and "done" in details:
@@ -80,6 +87,7 @@ def _apply_progress(job, details):
         if job["unit"] == "句":
             job.update(completed_cues=details["done"], total_cues=details["total"])
     if batch := details.get("batch"):
+        record_batch_slot(job, batch)
         rows = [item for item in job.get("batches", []) if item["id"] != batch["id"]]
         rows.append(batch)
         running = sorted((item for item in rows if item["status"] == "running"), key=lambda item: item["id"])
@@ -88,7 +96,7 @@ def _apply_progress(job, details):
 
 
 def _end_batches(job):
-    for batch in job.get("batches", []):
+    for batch in job.get("batches", []) + job.get("batch_slots", []):
         if batch["status"] == "running":
             batch["status"] = "interrupted"
 
@@ -109,6 +117,7 @@ class PreparationQueue:
         self._subscribers = []
         self._revision = 0
         self._saved_payload = None
+        self._previews = {}  # Local presentation only. Never part of a durable job or its public snapshot.
         self._pause = threading.Event()
         self._running = False
         saved = {}
@@ -178,17 +187,22 @@ class PreparationQueue:
 
     def _save(self):
         # Timestamp-only changes do not require a new durable snapshot.
+        durable = [{key: value for key, value in job.items() if key not in LIVE_FIELDS} for job in self._jobs]
         signature = json.dumps([{key: value for key, value in job.items() if key != "updated_at"}
-                                for job in self._jobs], ensure_ascii=False, sort_keys=True)
+                                for job in durable], ensure_ascii=False, sort_keys=True)
         if signature == self._saved_payload:
             return
-        atomic_json(self.path, {"version": 1, "model_scope": "global", "jobs": self._jobs})
+        atomic_json(self.path, {"version": 1, "model_scope": "global", "jobs": durable})
         self._saved_payload = signature
         self._revision += 1
 
     def snapshot(self) -> list[dict]:
         with self._lock:
             return deepcopy(self._jobs)
+
+    def studio_previews(self):
+        with self._lock:
+            return deepcopy(self._previews)
 
     @property
     def pending_count(self) -> int:
@@ -318,10 +332,14 @@ class PreparationQueue:
             if any(j["id"] == job_id and j["status"] == "running" for j in self._jobs):
                 raise ValueError("请先暂停正在处理的视频")
             self._jobs = [j for j in self._jobs if j["id"] != job_id]
+            self._previews.pop(job_id, None)
             self._save()
 
     def clear_completed(self):
         with self._mutation():
+            for job in self._jobs:
+                if job["status"] == "completed":
+                    self._previews.pop(job["id"], None)
             self._jobs = [j for j in self._jobs if j["status"] != "completed"]
             self._save()
 
@@ -349,6 +367,7 @@ class PreparationQueue:
                     identities.add(identity)
                 from .material_reset import reset_job_material_state
                 reset = reset_job_material_state(job, mode, requeue, settings)
+                self._previews.pop(job["id"], None)
                 reset["updated_at"] = time.time()
                 job.clear()
                 job.update(reset)
@@ -375,7 +394,14 @@ class PreparationQueue:
                                 and (selected is None or j["id"] in selected)), None)
                     if job is None:
                         break
+                    for key in ("quality", "adoption", "decision", "evidence_counts", "evidence_notes",
+                                "source_name", "reference_name", "matrix_stage", "worker_limit",
+                                "track_evidence", "screening_notes"):
+                        job.pop(key, None)
+                    self._previews.pop(job["id"], None)
+                    started = time.monotonic()
                     job.update(status="running", error="", error_message="", progress="开始处理", updated_at=time.time(),
+                               run_started_at=time.time(), elapsed_seconds=0, throughput=0, batch_slots=[], stage_history=[],
                                plan=[], stage_name="", stage_code="", activity="", stage_total=0, stage_done=0, unit="", batches=[])
                     self._save()
                 allowed = {f.name for f in fields(AppSettings) if not f.name.startswith("_")}
@@ -388,9 +414,10 @@ class PreparationQueue:
                     settings.llm_high_concurrency = active.llm_high_concurrency
                     settings.llm_max_concurrency = active.llm_max_concurrency
                 last_snapshot = None
+                rate = CueRate(started)
 
                 def update(message):
-                    nonlocal last_snapshot
+                    nonlocal last_snapshot, rate
                     now = time.monotonic()
                     details = getattr(message, "details", {})
                     stage_event = "stage" in details or "stage_code" in details
@@ -399,7 +426,12 @@ class PreparationQueue:
                               if notify and not details and not job.get("plan") else None)
                     with self._mutation():
                         previous_stage = (job.get("stage_code"), job.get("stage_name"))
-                        job.update(progress=str(message), updated_at=time.time())
+                        job.update(progress=str(message), updated_at=time.time(), worker_limit=settings.llm_workers,
+                                   elapsed_seconds=max(0, now - started))
+                        if examples := details.get("verified_examples"):
+                            ids = {row["id"] for row in examples}
+                            prior = [r for r in self._previews.get(job["id"], ()) if r["id"] not in ids]
+                            self._previews[job["id"]] = (prior + examples)[-3:]
                         _apply_progress(job, details)
                         if cached:
                             job["total_cues"] = len(cached.cues)
@@ -409,10 +441,16 @@ class PreparationQueue:
                             if stage == "verifying":
                                 job["completed_cues"] = len(cached.metadata["translation_review"]["verified"])
                         changed_stage = stage_event and previous_stage != (job.get("stage_code"), job.get("stage_name"))
+                        if changed_stage:
+                            rate = CueRate(now, details.get("done", 0))
+                        if changed_stage and job["stage_code"] != "publish":
+                            job["throughput"] = 0
+                        if details.get("unit") == "句" and "done" in details:
+                            job["throughput"] = rate.update(now, details["done"])
                         if changed_stage or "plan" in details or "decision" in details:
                             last_snapshot = now
                             self._save()
-                        elif notify:
+                        elif notify or "batch" in details or details.get("quality"):
                             # The material checkpoint owns resumable work. Keep
                             # live counters visible between durable stage/status changes.
                             last_snapshot = now
@@ -449,13 +487,20 @@ class PreparationQueue:
                                              progress=update, cancelled=stopped, **extra)
                     with self._mutation():
                         local_only = document.metadata.get("lesson_status") == "local_only"
+                        if audit := quality_summary(document.metadata):
+                            job["quality"] = audit
+                        if job["id"] not in self._previews:
+                            review = document.metadata.get("translation_review", {})
+                            if review.get("verified"):
+                                self._previews[job["id"]] = verified_examples(document.cues, review)
                         job.pop("needs_teaching", None)
                         if plan := document.metadata.get("subtitle_plan"):
                             job["plan_identity"] = plan.get("identity")
                             job["decision"] = job.get("decision") or plan.get("summary", "")
                         job.update(status="completed", progress="本地字幕就绪，未生成讲解与译文" if local_only else "已准备",
                                    preparation_version=TRANSLATION_REVIEW_VERSION, completed_cues=len(document.cues),
-                                   total_cues=len(document.cues), error="", error_message="", updated_at=time.time())
+                                   total_cues=len(document.cues), error="", error_message="", updated_at=time.time(),
+                                   elapsed_seconds=max(0, time.monotonic() - started))
                         self._save()
                 except Exception as exc:
                     partial = self.store.load_document(job["media_path"], settings.language)
@@ -471,7 +516,8 @@ class PreparationQueue:
                         job.update(status="paused" if stopped() else "failed",
                                    progress="已暂停，可继续" if stopped() else details["progress"],
                                    error_message="" if stopped() else details["error_message"],
-                                   error="" if stopped() else type(exc).__name__, updated_at=time.time())
+                                   error="" if stopped() else type(exc).__name__, updated_at=time.time(),
+                                   elapsed_seconds=max(0, time.monotonic() - started))
                         self._save()
                     if stopped():
                         break

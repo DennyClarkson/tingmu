@@ -134,6 +134,14 @@ Item {
                         primary: true
                         onClicked: backend.command("openFiles", {})
                     }
+                    TButton {
+                        objectName: "playerGuideButton"
+                        Layout.alignment: Qt.AlignHCenter
+                        text: qsTranslate("Tingmu", "查看上手指南")
+                        quiet: true
+                        implicitHeight: Theme.compactHeight
+                        onClicked: root.workspace.openGuide()
+                    }
                 }
             }
         }

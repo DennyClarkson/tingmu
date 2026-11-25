@@ -1,18 +1,23 @@
 import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
+import QtQuick.Window
 import "Style.js" as S
+
 Item {
-    id:root
+    id: root
     property bool panelShown: true
-    property var selectedIds:[]
-    property string resetMode:"all"
-    readonly property bool hasPending:!!backend.queueState.hasPending
-    readonly property int failedCount:backend.queueState.failedCount || 0
-    function selected(id){return selectedIds.indexOf(id)>=0}
-    function toggle(id){var next=selectedIds.slice();var i=next.indexOf(id);if(i>=0)next.splice(i,1);else next.push(id);selectedIds=next}
-    function confirmReset(mode){resetMode=mode;resetConfirm.open()}
-    function openSettings(){settingsPopup.open()}
+    property var selectedIds: []
+    property string resetMode: "all"
+    readonly property bool wide: width >= 630
+    readonly property bool hasPending: !!backend.queueState.hasPending
+    readonly property int failedCount: backend.queueState.failedCount || 0
+    signal watchRequested(string path)
+    signal navigateRequested(string destination)
+    function selected(id) { return selectedIds.indexOf(id) >= 0 }
+    function toggle(id) { selectedIds = selected(id) ? selectedIds.filter(i => i !== id) : selectedIds.concat(id) }
+    function confirmReset(mode) { resetMode = mode; resetConfirm.open() }
+    function openSettings() { settingsPopup.open() }
     function selectAll() {
         if (selectedIds.length) { selectedIds = []; return }
         var ids = []
@@ -23,163 +28,238 @@ Item {
         selectedIds = ids
     }
     ColumnLayout {
-        anchors.fill:parent; anchors.margins:12; spacing:10
-        AgentWorkflow {}
-        Flow {
-            Layout.fillWidth:true;spacing:6
-            TButton { objectName:"queueStartButton";text:backend.queueState.queueRunning ? qsTranslate("Tingmu", "暂停") : !root.hasPending && root.failedCount>0 ? qsTranslate("Tingmu", "重试失败") : qsTranslate("Tingmu", "开始队列"); primary:!backend.queueState.queueRunning; enabled:!!backend.queueState.queueRunning || root.hasPending || root.failedCount>0; onClicked:backend.command(backend.queueState.queueRunning ? "pauseQueue" : "startQueue",{}) }
-            TButton { objectName:"queueClearCompletedButton";text:qsTranslate("Tingmu", "清除已完成"); quiet:true;enabled:!backend.queueState.queueRunning; onClicked:backend.command("clearCompleted",{}) }
-        }
-        Flow {
-            Layout.fillWidth:true;spacing:6
-            TButton{text:root.selectedIds.length ? qsTranslate("Tingmu", "取消选择") : qsTranslate("Tingmu", "全选");quiet:true;implicitHeight:28;onClicked:root.selectAll()}
-            TButton{objectName:"resetAllJobsButton";danger:true;text:qsTranslate("Tingmu", "清除识别与讲解");enabled:root.selectedIds.length>0 && !backend.queueState.queueRunning;implicitHeight:28;onClicked:root.confirmReset("all")}
-            TButton{objectName:"resetTeachingJobsButton";text:qsTranslate("Tingmu", "仅重做讲解");enabled:root.selectedIds.length>0 && !backend.queueState.queueRunning;implicitHeight:28;onClicked:root.confirmReset("teaching")}
-        }
-        FirstUseLoader {
-            requested: root.panelShown
+        anchors.fill: parent; anchors.margins: root.wide ? 14 : 9; spacing: 7
+        GridLayout {
             Layout.fillWidth: true
-            Layout.fillHeight: true
-            sourceComponent: ListView {
-                id:jobs; objectName:"queueList"
-                clip:true; spacing:8; model:backend.jobModel
-                ScrollBar.vertical:AppScrollBar {}
-                delegate:Rectangle {
-                    id: jobCard; objectName: "queueJob:" + modelData.id
-                    required property var modelData
-                    readonly property bool running: modelData.status === "running"
-                    property bool evidenceOpen: false
-                    readonly property var plan: modelData.plan || []
-                    readonly property int step: plan.indexOf(modelData.stage_name)
-                    width:Math.max(0, jobs.width - 10); height:jobContent.implicitHeight+22; radius:Theme.radiusMd; color:Theme.panel; border.color:Theme.line
-                    ColumnLayout {
-                        id:jobContent
-                        anchors.left:parent.left; anchors.right:parent.right; anchors.top:parent.top; anchors.margins:11; spacing:7
-                        RowLayout {
-                            Layout.fillWidth:true
-                            Toggle{checked:root.selected(modelData.id);enabled:modelData.status!=="running";onToggled:root.toggle(modelData.id)}
-                            Text {
-                                text: modelData.name; textFormat: Text.PlainText
-                                Layout.fillWidth: true; Layout.minimumWidth: 0
-                                color: Theme.text; font.family: Theme.font; font.pixelSize: 13; font.weight: Font.DemiBold
-                                elide: Text.ElideMiddle
-                            }
-                            StatusBadge {
-                                objectName: "queueStatusBadge"
-                                text: S.status(modelData.status)
-                                tone: modelData.status === "failed" ? "danger" : modelData.status === "paused" ? "warning"
-                                      : jobCard.running || modelData.status === "completed" ? "accent" : "neutral"
-                            }
-                            TButton { objectName:"queueRemoveJobButton";iconSource:"close"; quiet:true; implicitWidth:24; implicitHeight:24; enabled:!backend.queueState.queueRunning && modelData.status!=="running"; tip:qsTranslate("Tingmu", "移出队列"); onClicked:backend.command("removeJob",{id:modelData.id}) }
+            columns: root.wide ? 2 : 1; columnSpacing: 16; rowSpacing: 4
+            Text {
+                textFormat: Text.PlainText; Layout.fillWidth: true
+                text: qsTranslate("Tingmu", "准备工作室")
+                font.family: Theme.serif; font.weight: Font.DemiBold; font.pixelSize: root.wide ? 24 : 18; color: Theme.text
+            }
+            AgentWorkflow { Layout.maximumWidth: root.wide ? 310 : -1 }
+        }
+        Flow {
+            Layout.fillWidth: true; spacing: 4
+            TButton {
+                objectName: "queueStartButton"
+                text: backend.queueState.queueRunning ? qsTranslate("Tingmu", "暂停")
+                     : !root.hasPending && root.failedCount > 0 ? qsTranslate("Tingmu", "重试失败") : qsTranslate("Tingmu", "开始队列")
+                iconSource: backend.queueState.queueRunning ? "pause" : "play"
+                primary: !backend.queueState.queueRunning
+                enabled: !!backend.queueState.queueRunning || root.hasPending || root.failedCount > 0
+                onClicked: backend.command(backend.queueState.queueRunning ? "pauseQueue" : "startQueue", {})
+            }
+            TButton {
+                objectName: "queueClearCompletedButton"; text: qsTranslate("Tingmu", "清除已完成")
+                quiet: true; enabled: !backend.queueState.queueRunning
+                onClicked: backend.command("clearCompleted", {})
+            }
+            TButton {
+                text: root.selectedIds.length ? qsTranslate("Tingmu", "取消选择") : qsTranslate("Tingmu", "全选")
+                quiet: true; visible: backend.jobModel.count > 0; onClicked: root.selectAll()
+            }
+            TButton {
+                objectName: "resetAllJobsButton"; danger: true; text: qsTranslate("Tingmu", "清除识别与讲解")
+                visible: root.selectedIds.length > 0; enabled: visible && !backend.queueState.queueRunning
+                onClicked: root.confirmReset("all")
+            }
+            TButton {
+                objectName: "resetTeachingJobsButton"; text: qsTranslate("Tingmu", "仅重做讲解")
+                visible: root.selectedIds.length > 0; enabled: visible && !backend.queueState.queueRunning
+                onClicked: root.confirmReset("teaching")
+            }
+        }
+        Rectangle { Layout.fillWidth: true; implicitHeight: 1; color: Theme.line }
+        FirstUseLoader {
+            Layout.fillWidth: true; Layout.fillHeight: true
+            requested: root.panelShown
+            sourceComponent: Item {
+                id: body
+                ListView {
+                    id: jobs
+                    objectName: "queueList"
+                    visible: count > 0
+                    anchors { top: parent.top; bottom: parent.bottom; left: parent.left }
+                    width: root.wide ? Math.min(250, Math.max(180, root.width * 0.30)) : body.width
+                    clip: true; spacing: 6
+                    property bool initialized: false
+                    function checkSize() {
+                        if (!initialized && width > 0 && height > 0) initialized = true
+                    }
+                    onWidthChanged: checkSize()
+                    onHeightChanged: checkSize()
+                    model: initialized ? backend.jobModel : null
+                    property string pickedId: ""
+                    property bool narrowExpanded: true
+                    function followQueue() {
+                        if (!root.panelShown || !count) return
+                        // Only run on collection/status changes. Progress updates bind
+                        // directly to the current stable ListView delegate.
+                        var preferred = -1
+                        var pending = -1
+                        for (var i = 0; i < count; ++i) {
+                            const row = backend.jobModel.get(i)
+                            if (pickedId && row.id === pickedId) { currentIndex = i; return }
+                            if (row.status === "running") preferred = i
+                            if (pending < 0 && row.status === "queued") pending = i
                         }
-                        Text {
-                            text: (modelData.settings && modelData.settings.preparation_workflow === "subtitle_agent"
-                                   ? qsTranslate("Tingmu", "字幕 Agent") : qsTranslate("Tingmu", "经典流程"))
-                                  + (modelData.settings && modelData.settings.segmentation_mode === "llm_regroup"
-                                     ? " · " + qsTranslate("Tingmu", "模型智能分句") : "")
-                            Layout.fillWidth: true; wrapMode: Text.Wrap
-                            color: Theme.muted; font.family: Theme.font; font.pixelSize: 11
+                        pickedId = ""
+                        currentIndex = preferred >= 0 ? preferred : pending >= 0 ? pending : count - 1
+                    }
+                    function inspect(index, id) {
+                        if (!root.wide && pickedId === id && currentIndex === index) narrowExpanded = !narrowExpanded
+                        else narrowExpanded = true
+                        pickedId = id
+                        currentIndex = index
+                    }
+                    onCountChanged: Qt.callLater(followQueue)
+                    Component.onCompleted: { checkSize(); Qt.callLater(followQueue) }
+                    Connections {
+                        target: backend
+                        enabled: root.panelShown
+                        function onQueueStateChanged() { jobs.followQueue() }
+                    }
+                    Connections {
+                        target: root
+                        function onPanelShownChanged() { if (root.panelShown) jobs.followQueue() }
+                    }
+                    ScrollBar.vertical: AppScrollBar {}
+                    delegate: Rectangle {
+                        id: jobCard
+                        required property var modelData
+                        required property int index
+                        objectName: "queueJob:" + modelData.id
+                        property bool evidenceOpen: false
+                        readonly property bool current: ListView.isCurrentItem
+                        readonly property bool running: modelData.status === "running"
+                        width: Math.max(0, jobs.width - 10); height: jobContents.implicitHeight + 20
+                        radius: Theme.radiusMd
+                        color: current ? Theme.tint(Theme.panel, Theme.accent, 0.075) : Theme.surfaceElevated
+                        border.color: current ? Theme.accent : Theme.line
+                        MouseArea {
+                            anchors.fill: parent; cursorShape: Qt.PointingHandCursor
+                            onClicked: jobs.inspect(jobCard.index, jobCard.modelData.id)
                         }
-                        Text {
-                            visible: !!modelData.decision
-                            Layout.fillWidth: true; wrapMode: Text.Wrap
-                            textFormat: Text.PlainText; font.family: Theme.font; font.pixelSize: 12; color: Theme.text
-                            text: qsTranslate("TingmuStatus", modelData.decision || "")
-                        }
-                        Text {
-                            visible: !!modelData.source_name || !!modelData.reference_name
-                            Layout.fillWidth: true; wrapMode: Text.WrapAnywhere
-                            textFormat: Text.PlainText; font.family: Theme.font; font.pixelSize: 11; color: Theme.muted
-                            text: [modelData.source_name, modelData.reference_name === modelData.source_name
-                                   ? "" : modelData.reference_name].filter(Boolean).map(name => /^内嵌字幕轨 \d+$/.test(name) ? qsTranslate("TingmuStatus", name) : name).join("  ·  ")
-                        }
-                        Text {
-                            readonly property var counts: modelData.evidence_counts || []
-                            visible: counts.length === 3 && (counts[0] > 0 || counts[2] > 0)
-                            Layout.fillWidth: true; wrapMode: Text.Wrap
-                            textFormat: Text.PlainText; font.family: Theme.font; font.pixelSize: 11; color: Theme.muted
-                            text: counts[0] > 0 ? qsTranslate("Tingmu", "原文 %1 句 · 采用已有译文 %2 句").arg(counts[0]).arg(counts[1])
-                                                : qsTranslate("Tingmu", "参考译文 %1 句").arg(counts[2] || 0)
-                        }
-                        TButton {
-                            visible: !!(modelData.evidence_notes || []).length
-                            quiet: true; implicitHeight: 26
-                            text: jobCard.evidenceOpen ? qsTranslate("Tingmu", "收起字幕检查详情") : qsTranslate("Tingmu", "字幕检查详情")
-                            onClicked: jobCard.evidenceOpen = !jobCard.evidenceOpen
-                        }
-                        Text {
-                            visible: jobCard.evidenceOpen && !!(modelData.evidence_notes || []).length
-                            Layout.fillWidth: true; wrapMode: Text.Wrap
-                            textFormat: Text.PlainText; font.family: Theme.font; font.pixelSize: 11; color: Theme.muted
-                            text: (modelData.evidence_notes || []).map(note => qsTranslate("TingmuEvidence", note)).join("\n")
-                        }
-                        Text {
-                            visible: jobCard.plan.length > 0 && modelData.status !== "completed"
-                            Layout.fillWidth: true; wrapMode: Text.Wrap; color: Theme.muted
-                            textFormat: Text.PlainText; font.family: Theme.font; font.pixelSize: 10
-                            text: jobCard.plan.map(label => qsTranslate("TingmuStatus", label || "")).join("  ›  ")
-                        }
-                        Text {
-                            visible: jobCard.step >= 0 && modelData.status !== "completed"
-                            Layout.fillWidth: true; wrapMode: Text.Wrap; color: Theme.text
-                            textFormat: Text.PlainText; font.family: Theme.font; font.pixelSize: 12
-                            text: qsTranslate("Tingmu", "步骤 ") + (jobCard.step + 1) + "/" + jobCard.plan.length + "  ·  "
-                                  + qsTranslate("TingmuStatus", modelData.activity || modelData.stage_name || "")
-                                  + (modelData.stage_total > 0 ? "  ·  " + Math.floor(modelData.stage_done) + "/"
-                                      + Math.ceil(modelData.stage_total) + " " + qsTranslate("TingmuStatus", modelData.unit || "")
-                                      + " (" + Math.floor(100 * modelData.progress) + "%)" : "")
-                        }
-                        Text {
-                            objectName: "queueJobMessage"
-                            Layout.fillWidth: true
-                            visible: text.length > 0
-                            text: qsTranslate("TingmuStatus", modelData.message || "")
-                            color: Theme.muted; font.family: Theme.font; font.pixelSize: 11
-                            textFormat: Text.PlainText
-                            wrapMode: modelData.status === "failed" ? Text.Wrap : Text.NoWrap
-                            elide: modelData.status === "failed" ? Text.ElideNone : Text.ElideRight
-                        }
-                        TButton{objectName:"requeueJobButton";text:qsTranslate("Tingmu", "重新排队");iconSource:"repeat";quiet:true;implicitHeight:26;visible:modelData.status==="cleared" || modelData.status==="paused";enabled:!backend.queueState.queueRunning;onClicked:backend.command("retryJob",{id:modelData.id})}
-                        AppProgressBar {
-                            objectName: "queueStageProgressBar"; Layout.fillWidth: true
-                            value: modelData.progress || 0
-                            indeterminate: jobCard.running && !(modelData.stage_total > 0)
-                        }
-                        Repeater {
-                            model: modelData.status === "completed" ? [] : (modelData.batches || [])
-                            delegate: ColumnLayout {
-                                id: taskRow
-                                required property var modelData
+                        ColumnLayout {
+                            id: jobContents
+                            anchors { top: parent.top; left: parent.left; right: parent.right; margins: 10 }
+                            spacing: 5
+                            RowLayout {
                                 Layout.fillWidth: true; spacing: 3
+                                Toggle {
+                                    checked: root.selected(jobCard.modelData.id); enabled: !jobCard.running
+                                    onToggled: root.toggle(jobCard.modelData.id)
+                                }
                                 Text {
-                                    Layout.fillWidth: true; wrapMode: Text.Wrap
-                                    textFormat: Text.PlainText; font.family: Theme.font; font.pixelSize: 11; color: Theme.muted
-                                    text: (taskRow.modelData.repair ? qsTranslate("Tingmu", "重试 · ") : "") + qsTranslate("TingmuStatus", taskRow.modelData.label || "") + "  ·  "
-                                          + ({running:qsTranslate("Tingmu", "等待模型返回"),completed:qsTranslate("Tingmu", "已验证"),partial:qsTranslate("Tingmu", "部分通过"),failed:qsTranslate("Tingmu", "失败"),
-                                              split:qsTranslate("Tingmu", "拆分重试"),cancelled:qsTranslate("Tingmu", "已取消"),interrupted:qsTranslate("Tingmu", "已中断")})[taskRow.modelData.status]
-                                          + "  " + taskRow.modelData.done + "/" + taskRow.modelData.total
+                                    Layout.fillWidth: true; Layout.minimumWidth: 0; textFormat: Text.PlainText
+                                    text: jobCard.modelData.name; color: Theme.text; font.family: Theme.font
+                                    font.pixelSize: 13; font.weight: Font.DemiBold; elide: Text.ElideMiddle
                                 }
-                                AppProgressBar {
-                                    objectName: "queueBatchProgressBar"; Layout.fillWidth: true
-                                    readonly property var batch: taskRow.modelData
-                                    indeterminate: batch.status === "running"
-                                    value: batch.total > 0 ? batch.done / batch.total : 0
+                                TButton {
+                                    objectName: "queueRemoveJobButton"; iconSource: "close"; quiet: true
+                                    implicitWidth: 24; implicitHeight: 24
+                                    enabled: !backend.queueState.queueRunning && !jobCard.running
+                                    tip: qsTranslate("Tingmu", "移出队列")
+                                    onClicked: backend.command("removeJob", {id: jobCard.modelData.id})
                                 }
                             }
-                        }
-                        TextEdit { objectName:"queueJobError";textFormat:TextEdit.PlainText; Layout.fillWidth:true; visible:!!modelData.error; text:qsTranslate("TingmuStatus", modelData.error || ""); color:Theme.error; font.family:Theme.font; font.pixelSize:12; wrapMode:TextEdit.Wrap;readOnly:true;selectByMouse:true;selectionColor:Theme.selection;selectedTextColor:Theme.text }
-                        RowLayout {
-                            visible: modelData.status === "failed"
+                            RowLayout {
+                                Layout.fillWidth: true
+                                StatusBadge {
+                                    objectName: "queueStatusBadge"; text: S.status(jobCard.modelData.status)
+                                    tone: jobCard.modelData.status === "failed" ? "danger" : jobCard.modelData.status === "paused" ? "warning"
+                                         : jobCard.running || jobCard.modelData.status === "completed" ? "accent" : "neutral"
+                                }
+                                Item { Layout.fillWidth: true }
+                                TButton {
+                                    iconSource: "chevron-right"; quiet: true; implicitWidth: 24; implicitHeight: 24
+                                    tip: qsTranslate("Tingmu", "查看任务详情")
+                                    onClicked: jobs.inspect(jobCard.index, jobCard.modelData.id)
+                                }
+                            }
+                            Text {
+                                objectName: "queueJobMessage"; Layout.fillWidth: true; visible: !!text
+                                text: qsTranslate("TingmuStatus", jobCard.modelData.message || "")
+                                textFormat: Text.PlainText; color: Theme.muted; font.family: Theme.font; font.pixelSize: 11
+                                wrapMode: jobCard.modelData.status === "failed" ? Text.Wrap : Text.NoWrap
+                                elide: jobCard.modelData.status === "failed" ? Text.ElideNone : Text.ElideRight
+                            }
+                            AppProgressBar {
+                                id: rowBar
+                                objectName: "queueStageProgressBar"; Layout.fillWidth: true; implicitHeight: 3
+                                value: jobCard.modelData.progress || 0
+                                indeterminate: jobCard.running && !(jobCard.modelData.stage_total > 0)
+                                animationEnabled: root.panelShown && root.visible && !!root.Window.window
+                                    && root.Window.window.visible && root.Window.window.visibility !== Window.Minimized
+                                    && jobCard.y + rowBar.mapToItem(jobCard, 0, 0).y >= jobs.contentY
+                                    && jobCard.y + rowBar.mapToItem(jobCard, 0, 0).y < jobs.contentY + jobs.height
+                            }
+                            TextEdit {
+                                objectName: "queueJobError"; Layout.fillWidth: true; visible: !!text
+                                text: qsTranslate("TingmuStatus", jobCard.modelData.error || "")
+                                textFormat: TextEdit.PlainText; color: Theme.error; font.family: Theme.font; font.pixelSize: 12
+                                wrapMode: TextEdit.WrapAnywhere; readOnly: true; selectByMouse: true
+                                selectionColor: Theme.selection; selectedTextColor: Theme.text
+                            }
                             TButton {
-                                visible: !!modelData.needs_teaching
-                                text: qsTranslate("Tingmu", "配置逐句讲解模型…")
-                                onClicked: backend.command("openLessonSettings", {})
+                                objectName: "requeueJobButton"; text: qsTranslate("Tingmu", "重新排队"); iconSource: "repeat"
+                                quiet: true; implicitHeight: 26
+                                visible: ["cleared", "paused"].includes(jobCard.modelData.status)
+                                enabled: !backend.queueState.queueRunning
+                                onClicked: backend.command("retryJob", {id: jobCard.modelData.id})
                             }
-                            TButton { objectName:"queueRetryJobButton";text:qsTranslate("Tingmu", "重试");iconSource:"repeat";enabled:!backend.queueState.queueRunning;implicitHeight:30;tip:qsTranslate("Tingmu", "继续处理这个视频，已保存的步骤会复用");onClicked:backend.command("retryJob",{id:modelData.id}) }
+                            Flow {
+                                Layout.fillWidth: true; spacing: 4; visible: jobCard.modelData.status === "failed"
+                                TButton {
+                                    visible: !!jobCard.modelData.needs_teaching
+                                    text: qsTranslate("Tingmu", "配置逐句讲解模型…"); onClicked: backend.command("openLessonSettings", {})
+                                }
+                                TButton {
+                                    objectName: "queueRetryJobButton"; text: qsTranslate("Tingmu", "重试"); iconSource: "repeat"
+                                    enabled: !backend.queueState.queueRunning; implicitHeight: 30
+                                    tip: qsTranslate("Tingmu", "继续处理这个视频，已保存的步骤会复用")
+                                    onClicked: backend.command("retryJob", {id: jobCard.modelData.id})
+                                }
+                            }
+                            Loader {
+                                Layout.fillWidth: true
+                                active: !root.wide && jobCard.current && jobs.narrowExpanded
+                                visible: active
+                                sourceComponent: PreparationStudio {
+                                    compact: true
+                                    job: jobCard.modelData; viewport: jobs; panelShown: root.panelShown
+                                    evidenceOpen: jobCard.evidenceOpen
+                                    onEvidenceOpenChanged: jobCard.evidenceOpen = evidenceOpen
+                                    onWatchRequested: path => root.watchRequested(path)
+                                    onNavigateRequested: target => root.navigateRequested(target)
+                                }
+                            }
                         }
                     }
                 }
-                Text { textFormat:Text.PlainText; anchors.centerIn:parent; width:parent.width-24; visible:jobs.count===0; text:qsTranslate("Tingmu", "先在媒体库勾选视频。\n识别、复核、讲解会依次完成。"); color:Theme.muted; font.family:Theme.font; font.pixelSize:12; wrapMode:Text.Wrap; horizontalAlignment:Text.AlignHCenter; lineHeight:1.5 }
+                AppScrollView {
+                    id: detailScroll
+                    objectName: "studioDetailScroll"
+                    anchors { top: parent.top; bottom: parent.bottom; right: parent.right }
+                    width: Math.max(0, body.width - (root.wide && jobs.count > 0 ? jobs.width + 12 : 0))
+                    visible: root.wide || !jobs.count
+                    clip: true; contentWidth: availableWidth
+                    Loader {
+                        width: detailScroll.availableWidth
+                        active: detailScroll.visible
+                        sourceComponent: PreparationStudio {
+                            property var currentCard: jobs.currentItem
+                            job: currentCard ? currentCard.modelData : ({})
+                            viewport: detailScroll.contentItem
+                            panelShown: root.panelShown
+                            evidenceOpen: currentCard ? currentCard.evidenceOpen : false
+                            onEvidenceOpenChanged: if (currentCard) currentCard.evidenceOpen = evidenceOpen
+                            onWatchRequested: path => root.watchRequested(path)
+                            onNavigateRequested: target => root.navigateRequested(target)
+                        }
+                    }
+                }
             }
         }
     }

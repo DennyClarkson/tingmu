@@ -8,6 +8,7 @@ AppDialog {
     objectName: "workspaceSetup"
     signal modelsRequested()
     signal runtimeRequested()
+    signal guideRequested()
     anchors.centerIn: parent
     width: Math.min(850, parent.width - 32)
     height: Math.min(660, parent.height - 20)
@@ -17,7 +18,29 @@ AppDialog {
     property bool creating: false
     property bool openAsCreate: false
     property bool openForLessons: false
-    function openTextSettings(){if(opened){creating=false;section="text"}else{openForLessons=true;open()}}
+    property string requestedSection: ""
+    function openSection(name) {
+        if (opened) { creating = false; section = name; return }
+        requestedSection = name
+        open()
+    }
+    function openTextSettings() { openSection("text") }
+    function focusSetting(item) {
+        const pos = item.mapToItem(form.item, 0, 0)
+        scroll.contentItem.contentY = Math.max(0, Math.min(pos.y, scroll.contentHeight - scroll.availableHeight))
+        item.forceActiveFocus()
+    }
+    function repair(target) {
+        if (target === "models") modelsRequested()
+        else if (target === "runtime") runtimeRequested()
+        else if (target === "text") {
+            section = "text"
+            Qt.callLater(function() { root.focusSetting(form.item.textPolicy); form.item.textPolicy.choosePolicy() })
+        } else if (target === "speech") {
+            section = "models"
+            Qt.callLater(function() { root.focusSetting(form.item.speechFields) })
+        }
+    }
     property string savedSource: ""
     property string savedTarget: ""
     property string section: "general"
@@ -48,6 +71,7 @@ AppDialog {
     onOpened: {
         activatePage()
         if(openAsCreate) { beginCreate(); openAsCreate = false }
+        else if(requestedSection) { section = requestedSection; requestedSection = "" }
         else if(openForLessons){root.section="text";openForLessons=false}
         else if(initialOpen && root.current.showSetup === "models") root.section = "models"
         initialOpen = false
@@ -155,6 +179,8 @@ AppDialog {
                             property alias learningLanguage: learning
                             property alias nameInput: workspaceName
                             property alias reuseToggle: reuseText
+                            property alias textPolicy: textPolicy
+                            property alias speechFields: speechFields
                             ColumnLayout {
                                 visible: root.creating; Layout.fillWidth: true; spacing: 6
                                 Hint { text: qsTranslate("Tingmu", "工作区名称") }
@@ -206,6 +232,11 @@ AppDialog {
                             }
                             ColumnLayout {
                                 visible: !root.creating && root.section === "models"; Layout.fillWidth: true; spacing: 10
+                                ReadinessCard {
+                                    Layout.fillWidth: true; scenario: "speech"
+                                    active: root.opened && !root.creating && root.section === "models"
+                                    onNavigate: target => root.repair(target)
+                                }
                                 TButton {
                                     objectName: "workspaceRuntimeSetup"; visible: runtimeSetup.available
                                     text: qsTranslate("Tingmu", "运行环境与依赖管理…"); onClicked: root.runtimeRequested()
@@ -213,14 +244,9 @@ AppDialog {
                                 Hint { text: root.cantonese
                                     ? qsTranslate("Tingmu", "粤语原声可选 Qwen3-ASR，下载时会一并取得对齐模型。Whisper 可选 large-v3-turbo 或 large-v3；small 不支持指定粤语。")
                                     : qsTranslate("Tingmu", "多语种识别可先试 Whisper small。选择 Qwen 或转写接口前，请确认模型支持当前学习语言 ") + backend.settings.target_language + "。" }
-                                SpeechSettings { Layout.fillWidth: true }
+                                SpeechSettings { id: speechFields; Layout.fillWidth: true }
                                 ColumnLayout {
                                     visible: backend.settings.asr_backend === "local"; Layout.fillWidth: true; spacing: 7
-                                    Hint {
-                                        text: root.section === "models" && root.current
-                                              ? qsTranslate("TingmuStatus", workspaces.readinessFor(backend.settings.asr_model) || "") : ""
-                                        color: Theme.accent
-                                    }
                                     Hint { text: qsTranslate("Tingmu", "设备选 cpu 可用处理器识别；有兼容的 NVIDIA GPU 可选 cuda。auto 会根据运行环境选择设备。\n同一模型供所有工作区共用，缓存位于 ") + root.current.cache; wrapMode: Text.WrapAnywhere }
                                     RowLayout {
                                         TButton { objectName: "workspaceDownload"; text: qsTranslate("Tingmu", "下载所选模型"); visible: !String(backend.settings.asr_model).startsWith("local:"); enabled: !backend.applicationState.busy; onClicked: root.confirmDownload("download") }
@@ -237,6 +263,11 @@ AppDialog {
                             }
                             ColumnLayout {
                                 visible: !root.creating && root.section === "text"; Layout.fillWidth: true; spacing: 11
+                                ReadinessCard {
+                                    Layout.fillWidth: true; scenario: "text"
+                                    active: root.opened && !root.creating && root.section === "text"
+                                    onNavigate: target => root.repair(target)
+                                }
                                 SectionTitle { text: qsTranslate("Tingmu", "全局任务分配") }
                                 Hint { text: qsTranslate("Tingmu", "逐句讲解模型为每句准备讲解，再核对译稿。可选择本机 API 或允许的远程连接。") }
                                 Repeater {
@@ -248,7 +279,7 @@ AppDialog {
                                         Hint { text: backend.settings[modelData.field] || qsTranslate("Tingmu", "待配置"); color: Theme.text }
                                     }
                                 }
-                                TextModelPolicy { Layout.fillWidth: true }
+                                TextModelPolicy { id: textPolicy; Layout.fillWidth: true }
                                 SegmentationSettings { Layout.fillWidth: true }
                                 LlmConcurrencySettings { Layout.fillWidth: true }
                                 TButton { text: qsTranslate("Tingmu", "管理全局连接与任务分配…"); primary: true; onClicked: root.modelsRequested() }
@@ -263,7 +294,12 @@ AppDialog {
             text: qsTranslate("TingmuStatus", root.current.error || backend.workspaceState.error || (root.section === "models" ? backend.workspaceState.status : "") || "")
         }
         RowLayout {
-            Layout.alignment: Qt.AlignRight
+            Layout.fillWidth: true
+            TButton {
+                objectName: "workspaceQuickStart"; quiet: true; text: qsTranslate("Tingmu", "打开快速入门")
+                onClicked: root.guideRequested()
+            }
+            Item { Layout.fillWidth: true }
             TButton { visible: root.creating; text: qsTranslate("Tingmu", "取消"); onClicked: root.activatePage() }
             TButton {
                 objectName: "workspaceContinue"; primary: true

@@ -138,9 +138,9 @@ class SubtitleTimeline:
             if segment.end_ms <= segment.start_ms:
                 continue
             gap_ms = segment.start_ms - covered_until
-            if owner is not None and 0 < gap_ms <= MAX_DIALOGUE_PAUSE_MS:
+            if owner is not None and gap_ms > 0:
                 previous = self.segments[owner]
-                if gap_ms <= self.gap:
+                if gap_ms <= min(self.gap, MAX_DIALOGUE_PAUSE_MS):
                     self.segments[owner] = replace(previous, end_ms=segment.start_ms)
                 else:
                     end_ms = min(previous.start_ms + self.minimum, segment.start_ms - BREATHING_GAP_MS)
@@ -148,6 +148,11 @@ class SubtitleTimeline:
                         self.segments[owner] = replace(previous, end_ms=end_ms)
             if segment.end_ms >= covered_until:
                 covered_until, owner = segment.end_ms, index
+        if owner is not None:
+            last = self.segments[owner]
+            readable_end = last.start_ms + self.minimum
+            if readable_end > last.end_ms:
+                self.segments[owner] = replace(last, end_ms=readable_end)
         self._starts = [s.start_ms for s in self.segments]
         self._ends = [s.end_ms for s in self.segments]
         self._max_ends = list(accumulate(self._ends, max))

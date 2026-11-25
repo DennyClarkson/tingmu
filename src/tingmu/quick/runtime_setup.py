@@ -1,13 +1,13 @@
 """Human-controlled setup for the optional components of a clean portable player."""
 
 import json
-import time
 
 from PySide6.QtCore import QObject, Property, Signal, Slot
 
 from tingmu import runtime
 from tingmu.portable_paths import _migration_lock
 from tingmu.storage import atomic_json
+from tingmu.task_progress import TransferMeter
 from .localization import ui_text
 
 
@@ -29,7 +29,7 @@ class RuntimeSetup(QObject):
     changed = Signal()
     progressChanged = Signal()
     detectionFinished = Signal()
-    _transfer = Signal(str, float, float)
+    _transfer = Signal(object)
     _detected = Signal(str, object)
 
     def __init__(self, bridge, data_dir):
@@ -89,9 +89,11 @@ class RuntimeSetup(QObject):
     def transfer(self):
         return self.progress
 
-    @Slot(str, float, float)
-    def _show_transfer(self, kind, done, total):
-        self.progress = {"kind": kind, "done": done, "total": total}
+    @Slot(object)
+    def _show_transfer(self, sample):
+        self.progress = {**sample, "kind": sample["component"], "done": sample["completed"]}
+        if self.phase == "cancelling":
+            self.progress.update(stage="cancelling", rate=0.0, eta=None)
         self.progressChanged.emit()
 
     @Slot(str, object)
@@ -100,7 +102,7 @@ class RuntimeSetup(QObject):
         self.changed.emit()
 
     def _start(self, phase, work, complete):
-        if not self.root or self.phase:
+        if (not self.root and phase != "detect") or self.phase:
             return
         self.phase, self.message = phase, ""
         self.changed.emit()
@@ -134,7 +136,7 @@ class RuntimeSetup(QObject):
         from tingmu.runtime_deps import probe
         from tingmu.runtime_install import download_bytes
 
-        row = dict(probe(self.root, kind, configured, cancelled=cancelled))
+        row = dict(probe(self.root or runtime.installation_root(), kind, configured, cancelled=cancelled))
         row["bytes"] = float(download_bytes(kind))
         return row
 
@@ -142,7 +144,7 @@ class RuntimeSetup(QObject):
     def detect(self):
         def work(cancelled):
             rows = {}
-            paths = self._read().get("paths")
+            paths = self._read().get("paths") if self.root else {}
             for kind in KINDS:
                 if cancelled():
                     break
@@ -192,27 +194,18 @@ class RuntimeSetup(QObject):
                 or any(kind not in self.results or self.results[kind]["ready"] for kind in kinds)
                 or ("whisper-cuda" in kinds and not self.results["whisper-cuda"].get("nvidia_present"))):
             return
-        self._show_transfer(kinds[0], 0, 0)
+        self._show_transfer({"component": kinds[0], "completed": 0, "total": 0, "stage": "checking"})
 
         def work(cancelled):
             from tingmu.runtime_install import install
 
             rows = {}
             for kind in kinds:
-                last = -1.0
-
-                def report(done, total):
-                    nonlocal last
-                    now = time.monotonic()
-                    if done == 0 or done == total or now - last >= .15:
-                        self._transfer.emit(kind, done, total)
-                        if done:
-                            last = now
-
+                meter = TransferMeter(kind, lambda event: self._transfer.emit(event.details))
                 try:
                     if cancelled():
                         raise InterruptedError
-                    report(0, 0)
+                    meter.stage("checking")
                     rows[kind] = self._probe(kind, cancelled=cancelled)
                     if rows[kind]["ready"]:
                         continue
@@ -220,10 +213,12 @@ class RuntimeSetup(QObject):
                         return rows, "未检测到 NVIDIA 显卡，无需安装。"
                     if cancelled():
                         raise InterruptedError
-                    install(self.root, kind, report, cancelled)
+                    install(self.root, kind, meter, cancelled)
+                    meter.stage("testing")
                     rows[kind] = self._probe(kind, cancelled=cancelled)
                     if not rows[kind]["ready"]:
                         return rows, "已安装的组件未通过检测。请检查组件路径后重试。"
+                    self._detected.emit(kind, rows[kind])
                 except InterruptedError:
                     return rows, "已取消安装。可重新选择组件后继续。"
                 except Exception as exc:
@@ -240,8 +235,9 @@ class RuntimeSetup(QObject):
     @Slot()
     def cancel(self):
         if self.phase == "install":
-            self.bridge.cancel_task("runtime-setup")
             self.phase = "cancelling"
+            self._show_transfer(self.progress)
+            self.bridge.cancel_task("runtime-setup")
             self.changed.emit()
 
     @Slot(bool, result=bool)

@@ -743,12 +743,22 @@ def regroup(
         entry["digest"] = _hash([fingerprint, key, entry["groups"], entry["responses"]])
         return BatchResponse(value=[(key, entry)])
 
+    def report_chunk(job, status):
+        if progress:
+            from .task_progress import Progress
+            index = job.indices[0]
+            label = f"分块 {index + 1}/{len(plans)}"
+            progress(Progress(label, batch={"id": index, "label": label, "total": 1,
+                              "done": int(status == "completed"), "status": status, "repair": False}))
+
     def save(results):
         completed = {**previous, **dict(results)}
         if checkpoint:
             checkpoint(deepcopy({"version": VERSION, "fingerprint": fingerprint, "completed": completed}))
         if progress:
-            progress(f"字幕重组 {len(completed)}/{len(plans)}")
+            from .task_progress import Progress
+            progress(Progress(f"字幕重组 {len(completed)}/{len(plans)}", done=len(completed),
+                              total=len(plans), unit="块"))
 
     scheduler = ConcurrentBatchScheduler(
         keys=tuple(map(str, range(len(plans)))),
@@ -760,6 +770,8 @@ def regroup(
         make_error=lambda i, msg, exc: exc,
         cancelled=cancelled,
         checkpoint=save,
+        before_submit=lambda job: report_chunk(job, "running"),
+        on_update=lambda _, outcome: report_chunk(outcome.job, outcome.status),
         cancelled_error=lambda exc: isinstance(exc, InterruptedError),
         thread_name="tingmu-regroup",
     )
@@ -771,9 +783,16 @@ def regroup(
     rows = _readable_rows(rows, units)
     cues, lineage = _materialize(rows, units, sources)
     responses = [m for entry in ordered for m in entry["responses"]]
+    # Ranges can share a unit when a long source is split at text offsets.
+    covered, previous_end = 0, -1
+    for row in rows:
+        begin, end = row["start_index"], row["end_index"]
+        covered += max(0, end - max(previous_end, begin - 1))
+        previous_end = max(previous_end, end)
     audit = {
         "version": VERSION,
         "input_unit_count": len(units),
+        "covered_unit_count": covered,
         "output_cue_count": len(cues),
         "mandatory_boundary_count": sum(bool(u.get("boundary_before")) for u in units[1:]),
         "chunk_count": len(plans),

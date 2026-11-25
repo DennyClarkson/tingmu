@@ -198,14 +198,23 @@ def model_status(model):
 def _download_python():
     # The Windows venv redirector spawns a second process. Launch CPython with
     # the same venv identity so killing the monitored PID closes the Hub files.
-    if os.name == "nt" and sys.prefix != sys.base_prefix:
-        return [sys._base_executable, "-B"], {**os.environ, "__PYVENV_LAUNCHER__": sys.executable}
-    return [sys.executable, "-B"], None
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1"}
+    executable = sys.executable
+    if root := portable_root():
+        bundled = confined_path(root, "runtime/python/python.exe")
+        if not bundled.is_file():
+            raise FileNotFoundError("未找到便携版 Python 解释器")
+        executable = str(bundled)
+        env.pop("__PYVENV_LAUNCHER__", None)
+    elif os.name == "nt" and sys.prefix != sys.base_prefix:
+        executable = sys._base_executable
+        env["__PYVENV_LAUNCHER__"] = sys.executable
+    return [executable, "-B", "-u", "-X", "utf8"], env
 
 
 def _download_repo(model, repo, progress, cancelled):
     meter = TransferMeter(repo, progress)
-    progress(f"正在核对 {repo} 的文件和本地缓存")
+    meter.stage("connecting")
     with tempfile.TemporaryDirectory(dir=cache_root()) as temp:
         events = os.path.join(temp, "transfer.jsonl")
         ledger = Path(temp) / "partial-files.txt"
@@ -225,7 +234,9 @@ def _download_repo(model, repo, progress, cancelled):
                     if lines:
                         sample = json.loads(lines[-1])
                     if sample:
-                        meter.update(*sample, force=finished)
+                        done, total, received, *estimated = sample
+                        meter.context["estimated"] = bool(estimated)
+                        meter.update(done, total, received, force=finished)
                     if cancelled():
                         raise InterruptedError("模型下载已暂停，可重新下载以继续")
                     if finished:
@@ -248,6 +259,7 @@ def _download_repo(model, repo, progress, cancelled):
                                 path.unlink(missing_ok=True)
             if child.returncode:
                 raise RuntimeError(f"下载 {repo} 失败，请检查 Hugging Face 网络连接和缓存盘空间后重试")
+            meter.stage("verifying")
 
 
 def download_model(model, progress, cancelled):
@@ -305,46 +317,122 @@ def _fetch_snapshot(selected, repository):
     plan = snapshot_download(repository, cache_dir=cache, allow_patterns=patterns, dry_run=True)
     if not plan:
         raise ValueError("模型仓库未返回文件清单")
-    total = sum(f.file_size for f in plan) if all(f.file_size is not None for f in plan) else 0
-    cached = sum(f.file_size or 0 for f in plan if not f.will_download)
-    completed, received = cached, 0
+    def known_size(file):
+        if file.file_size is not None or file.will_download:
+            return file.file_size
+        try:
+            return confined_path(cache, file.local_path).stat().st_size
+        except (AttributeError, OSError, TypeError, ValueError):
+            return None
+
+    sizes = {file.filename: known_size(file) for file in plan}
+    pending = {file.filename for file in plan if file.will_download}
+    cached = sum(size or 0 for name, size in sizes.items() if name not in pending)
+    unknown = {name for name in pending if sizes[name] is None}
+    # The pinned SDK grows the aggregate reconstruction total as HTTP metadata
+    # arrives. Other versions expose file Content-Length on individual byte bars.
+    file_bars = {}
+    aggregate_bars = []
+    # SDK versions expose separate transport/reconstruction bars or ordinary
+    # per-file HTTP byte bars. A file-count iterator uses a different unit.
+    counters = {"transfer": 0, "reconstruction": 0, "aggregate": 0, "aggregate_received": 0,
+                "http": 0, "http_received": 0}
+    channels = set()
     lock = threading.Lock()
 
     class TransferBar(tqdm):
         def __init__(self, *args, **kwargs):
-            desc = kwargs.get("desc", "")
-            self.network = desc == "Downloading bytes"
-            self.file_bytes = desc.startswith("Reconstructing")
+            desc = (kwargs.get("desc") or "").lower()
+            self.channel = None
+            if kwargs.get("unit") in ("B", "byte", "bytes"):
+                if desc == "downloading bytes":
+                    self.channel = "transfer"
+                elif desc.startswith("reconstruct"):
+                    self.channel = "reconstruction"
+                elif desc.startswith("downloading ("):
+                    self.channel = "aggregate"
+                else:
+                    self.channel = "http"
             super().__init__(*args, **kwargs)
+            if self.channel:
+                with lock:
+                    channels.add(self.channel)
+                    if self.channel != "transfer":
+                        counters[self.channel] += kwargs.get("initial", 0) or 0
+                    if self.channel in ("reconstruction", "aggregate"):
+                        aggregate_bars.append(self)
+                    elif self.channel == "http":
+                        desc = (kwargs.get("desc") or "").removeprefix("(…)")
+                        matches = [name for name in unknown if desc and
+                                   (name == desc or name.rsplit("/", 1)[-1] == desc or
+                                    (kwargs.get("desc", "").startswith("(…)") and name.endswith(desc)))]
+                        if len(matches) == 1:
+                            file_bars[matches[0]] = self
 
         def display(self, *args, **kwargs):
             pass
 
         def update(self, n=1):
-            nonlocal completed, received
+            super().update(n)
+            if not self.channel or not n:
+                return
             with lock:
-                super().update(n)
-                if self.network:
-                    received = max(0, received + n)
-                if self.file_bytes:
-                    completed = max(cached, completed + n)
+                if self.channel == "transfer":
+                    counters["transfer"] += max(0, n)
+                else:
+                    counters[self.channel] = max(0, counters[self.channel] + n)
+                    if self.channel in ("aggregate", "http"):
+                        counters[self.channel + "_received"] += max(0, n)
+
+    def sample():
+        with lock:
+            # Some SDKs report the same chunks to multiple bars. Prefer the
+            # canonical stream for each metric; never sum representations.
+            logical = max(counters["reconstruction"], counters["aggregate"], counters["http"])
+            if not channels.intersection({"reconstruction", "aggregate", "http"}):
+                logical = counters["transfer"]
+            received = counters["transfer"] or counters["http_received"] or counters["aggregate_received"]
+            complete = cached + logical
+            for name, bar in file_bars.items():
+                if (bar.total or 0) > 0:
+                    sizes[name] = int(bar.total)
+            if None not in sizes.values():
+                total = sum(sizes.values())
+                return [min(total, complete), total, received]
+
+            discovered = max((int(bar.total or 0) for bar in aggregate_bars), default=0)
+            if discovered and len(pending) == 1 and all(sizes[n] is not None for n in sizes.keys() - pending):
+                total = cached + discovered
+                return [min(total, complete), total, received]
+            known_bytes = sum(size or 0 for size in sizes.values())
+            # A growing aggregate spans only files whose headers have arrived.
+            # The extra flag keeps that denominator (or the offline plan) visibly approximate.
+            estimate = cached + discovered if discovered else REPOSITORY_BYTES.get(repository, 0)
+            return [complete, max(estimate, known_bytes, complete), received, True]
+
     stop = threading.Event()
 
     def publish():
         while not stop.wait(.25):
-            with lock:
-                print(json.dumps([completed, total, received]), flush=True)
+            print(json.dumps(sample()), flush=True)
 
-    print(json.dumps([cached, total, 0]), flush=True)
+    print(json.dumps(sample()), flush=True)
     publisher = threading.Thread(target=publish, daemon=True)
     publisher.start()
     try:
-        snapshot_download(repository, revision=plan[0].commit_hash, cache_dir=cache,
-                          allow_patterns=patterns, tqdm_class=TransferBar)
+        snapshot = snapshot_download(repository, revision=plan[0].commit_hash, cache_dir=cache,
+                                     allow_patterns=patterns, tqdm_class=TransferBar)
     finally:
         stop.set()
         publisher.join()
-    print(json.dumps([total or completed, total, received]), flush=True)
+    completed, total, received, *estimated = sample()
+    if estimated and snapshot:
+        try:
+            total = sum(confined_path(cache, Path(snapshot) / f.filename).stat().st_size for f in plan)
+            estimated = []
+        except (AttributeError, OSError, ValueError):
+            pass
+    print(json.dumps([completed if estimated else total, total, received, *estimated]), flush=True)
 
 
 if __name__ == "__main__":

@@ -13,6 +13,8 @@ QUEUE_PROGRESS_FIELDS = (
     "plan", "decision", "source_name", "reference_name", "evidence_counts", "evidence_notes",
     "plan_identity", "needs_teaching", "retry_text_settings", "stage_name", "stage_code", "activity",
     "stage_total", "stage_done", "unit", "batches", "reuse_existing_transcript",
+    "adoption", "quality", "run_started_at", "elapsed_seconds", "worker_limit", "batch_slots",
+    "matrix_stage", "throughput", "stage_history", "track_evidence", "screening_notes",
 )
 PRESERVED_AUDIO_SETTINGS = (
     "asr_backend", "asr_model", "device", "audio_track", "suppress_bgm", "speaker_turns", "asr_endpoint",

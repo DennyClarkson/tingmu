@@ -13,7 +13,7 @@ AppDialog {
     readonly property bool downloading: proposal.status === "downloading"
     readonly property real bytes: proposal.download_bytes || 0
     anchors.centerIn: parent
-    width: Math.min(430, parent.width - 28)
+    width: Math.min(520, parent.width - 28)
     modal: false
     focus: false
     closePolicy: Popup.NoAutoClose
@@ -37,7 +37,7 @@ AppDialog {
             text: (dialog.proposal.workspace_name || "") + "  ·  " + (dialog.proposal.model_name || dialog.proposal.model || "")
         }
         Text {
-            Layout.fillWidth: true; textFormat: Text.PlainText; wrapMode: Text.Wrap
+            Layout.fillWidth: true; visible: !dialog.downloading; textFormat: Text.PlainText; wrapMode: Text.Wrap
             color: Theme.muted; font.family: Theme.font; font.pixelSize: 13
             text: dialog.pending && workspaces.info.error ? qsTranslate("TingmuStatus", workspaces.info.error || "")
                 : dialog.pending ? (qsTranslate("Tingmu", "模型包总量约 ") + S.bytes(dialog.proposal.estimated_download_bytes)
@@ -60,7 +60,9 @@ AppDialog {
                 text: qsTranslate("Tingmu", "同意下载"); onClicked: workspaces.decideProposal(dialog.displayedId, true)
             }
             TButton {
-                visible: dialog.downloading; text: qsTranslate("Tingmu", "暂停下载"); onClicked: workspaces.action("stopDownload", {})
+                visible: dialog.downloading
+                enabled: (backend.downloadState.downloadProgress || {}).stage !== "cancelling"
+                text: qsTranslate("Tingmu", "暂停下载"); onClicked: workspaces.action("stopDownload", {})
             }
             TButton {
                 visible: !dialog.pending; text: dialog.downloading ? qsTranslate("Tingmu", "后台下载") : qsTranslate("Tingmu", "关闭")

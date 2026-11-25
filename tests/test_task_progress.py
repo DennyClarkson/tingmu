@@ -124,13 +124,14 @@ def test_hub_download_reports_real_file_bytes_and_network_bytes(tmp_path, monkey
 
 def test_rate_excludes_reused_bytes_and_stops_on_idle(monkeypatch):
     events = []
-    times = iter([0., .1, 2.1, 3.1])
-    monkeypatch.setattr("tingmu.task_progress.time.monotonic", lambda: next(times))
+    times = iter([0., .1, 2.1, 3.1, 5.1])
+    monkeypatch.setattr("tingmu.task_progress.time.perf_counter", lambda: next(times))
     meter = TransferMeter("test", events.append)
     meter.update(900, 1000, 0)
     meter.update(980, 1000, 50)
     meter.update(980, 1000, 50)
-    assert [e.details["rate"] for e in events] == [0, 25, 0]
+    meter.update(980, 1000, 50)
+    assert [e.details["rate"] for e in events] == [0, 25, 25, 0]
     assert events[-1].details["completed"] == 980 and events[-1].details["received"] == 50
 
 

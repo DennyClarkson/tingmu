@@ -1,15 +1,32 @@
 import QtQuick
+import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
 ColumnLayout {
+    id: policy
     spacing: 5
+    function selectedIndex() {
+        return !backend.settings.text_models_enabled ? 0 : backend.settings.cloud_text_enabled ? 2 : 1
+    }
+    function choosePolicy() { choice.forceActiveFocus(); choice.popup.open() }
+    function requestRemote() { consent.active = true; consent.item.review() }
+    Loader {
+        id: consent
+        active: false
+        sourceComponent: RemoteTextPermissionDialog { origin: policy }
+    }
     Text { text: qsTranslate("Tingmu", "当前工作区的使用权限"); color: Theme.muted; font.family: Theme.font; font.pixelSize: 12 }
     Choice {
+        id: choice
         objectName: "textModelPolicy"
         Layout.fillWidth: true
         translateOptions:true;model:["停用文本模型", "仅本机 API", "允许远程文本 API"]
-        currentIndex: !backend.settings.text_models_enabled ? 0 : backend.settings.cloud_text_enabled ? 2 : 1
-        onActivated: function(index) { backend.command("textModelPolicy", {mode: ["off", "local", "remote"][index]}) }
+        currentIndex: policy.selectedIndex()
+        onActivated: function(index) {
+            if (index === 2 && policy.selectedIndex() !== 2) policy.requestRemote()
+            else if (index !== policy.selectedIndex()) backend.command("textModelPolicy", {mode: ["off", "local", "remote"][index]})
+            currentIndex = Qt.binding(policy.selectedIndex)
+        }
     }
     Text {
         Layout.fillWidth: true

@@ -7,6 +7,7 @@ from .agent import AnnotationValidationError, batch_worker, splittable_batch_err
 from .batch_scheduler import BatchResponse, ConcurrentBatchScheduler, RepairPolicy
 from .task_progress import Progress, batch_progress
 from .translation_review import lesson_digest, translation_available
+from .studio_metrics import verified_examples
 
 
 def verify_document(document, agent, store, report, check_cancel, *, event_factory=Event):
@@ -75,11 +76,11 @@ def verify_document(document, agent, store, report, check_cancel, *, event_facto
             review["responses"].append(dict(metadata, cue_start_index=job.indices[0],
                 requested_count=len(job.indices), verified_count=len(outcome.completed), repair_attempt=job.attempt))
             review["responses"].sort(key=lambda row: row.get("cue_start_index", -1))
-        status = "failed" if outcome.failure and not outcome.children else ("partial" if outcome.errors else "completed")
         event = batch_progress(job.index + 1, job.indices[0] + 1, job.indices[-1] + 1,
-                               len(job.indices), done=len(outcome.completed), status=status, repair=bool(job.feedback))
+                               len(job.indices), done=len(outcome.completed), status=outcome.status, repair=bool(job.feedback))
         progress(Progress(f"译稿已核验 {len(review['verified'])}/{total} 句", **event.details,
-                          done=len(review["verified"]), total=total, unit="句"))
+                          done=len(review["verified"]), total=total, unit="句",
+                          verified_examples=verified_examples([cue for cue, _ in outcome.completed], review)))
         if outcome.children:
             first = next(index for index in job.indices if document.cues[index].id in outcome.errors)
             progress(f"译文核验：第 {first + 1} 句 · {outcome.errors[document.cues[first].id]} "

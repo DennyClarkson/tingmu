@@ -133,6 +133,13 @@ def _evidence_progress(decision, plan):
         if c.get("reason"):
             notes.append(f"{c.get('name', '')}：{c['reason']}")
     return Progress(decision["summary"], stage=plan[1], stage_code="transcript", plan=plan, decision=decision["summary"],
+                    adoption=decision.get("decision", ""),
+                    track_evidence=[{"name": c.get("name", ""), "reason": c.get("reason", ""),
+                                     "codec": c.get("codec", ""), "language": c.get("language", ""),
+                                     "source": c["id"] == decision.get("source_id"),
+                                     "reference": c["id"] == decision.get("reference_id")}
+                                    for c in candidates[:16]],
+                    screening_notes=list(dict.fromkeys(decision.get("notes", [])))[:16],
                     evidence_notes=list(dict.fromkeys(notes))[:16],
                     source_name=names.get(decision.get("source_id"), ""),
                     reference_name=names.get(decision.get("reference_id"), ""),
@@ -685,6 +692,9 @@ def acquire_transcript(ctx: PreparationContext):
         _refresh_reference_hints(ctx)
     if gated or not ctx.plan.reusable:
         ctx.store.save_document(ctx.document)
+    if not (ctx.settings.segmentation_mode == "llm_regroup" and ctx.plan.review_spec):
+        from .studio_metrics import quality_summary
+        ctx.report(Progress("字幕规整质量统计", quality=quality_summary(metadata)))
 
 
 def _refresh_reference_hints(ctx):
@@ -708,6 +718,8 @@ def run_review_stage(ctx: PreparationContext):
     if smart and ctx.plan.review_spec:
         from .regroup_stage import regroup_document
         regroup_document(ctx, source_kind=_quality_source(ctx))
+        from .studio_metrics import quality_summary
+        ctx.report(Progress("字幕规整质量统计", quality=quality_summary(ctx.document.metadata)))
         _refresh_reference_hints(ctx)
     if ctx.plan.agent_workflow and (not ctx.plan.teach_enabled or ctx.plan.role_error):
         ctx.document.metadata.update(stage="partial", lesson_status="needs_teaching", error="TeachingUnavailable")

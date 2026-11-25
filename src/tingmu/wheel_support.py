@@ -65,11 +65,14 @@ class WheelSupport:
         digest = hashlib.sha256()
         count = 0
         meter = TransferMeter(self.name, progress)
-        meter.update(0, self.wheel_bytes, 0)
+        meter.total = self.wheel_bytes
+        meter.stage("connecting")
         with urlopen(self.wheel_url, timeout=15) as response, wheel.open("xb") as output:
+            meter.update(0, self.wheel_bytes, 0, force=True)
+            read = getattr(response, "read1", response.read)
             while True:
                 _check_cancelled(cancelled)
-                chunk = response.read(256 * 1024)
+                chunk = read(128 * 1024)
                 if not chunk:
                     break
                 count += len(chunk)
@@ -78,8 +81,11 @@ class WheelSupport:
                 output.write(chunk)
                 digest.update(chunk)
                 meter.update(count, self.wheel_bytes, count, force=count == self.wheel_bytes)
+        _check_cancelled(cancelled)
+        meter.stage("verifying")
         if count != self.wheel_bytes or digest.hexdigest() != self.wheel_sha256:
             raise ValueError("模型支持文件下载校验失败，请重新下载")
+        meter.stage("installing")
         with ZipFile(wheel) as archive:
             for member, (size, expected) in self.members.items():
                 _check_cancelled(cancelled)

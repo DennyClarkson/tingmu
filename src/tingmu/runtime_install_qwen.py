@@ -7,11 +7,13 @@ import shutil
 from .runtime import confined_path
 
 
-def prepare(root, stage):
+def prepare(root, stage, cancelled=lambda: False):
     base = confined_path(root, "runtime/python")
     if not (base / "python.exe").is_file():
         raise FileNotFoundError("安装 Qwen3-ASR 需要便携版自带的 Python 3.12")
     for name in ("python.exe", "python312.dll", "python3.dll", "vcruntime140.dll", "vcruntime140_1.dll"):
+        if cancelled():
+            raise InterruptedError("运行环境安装已取消")
         shutil.copy2(confined_path(root, base / name), confined_path(stage, name))
     packages = confined_path(stage, "Lib/site-packages")
     packages.mkdir(parents=True)

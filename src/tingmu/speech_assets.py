@@ -81,33 +81,38 @@ def install(cache: Path, progress=print, cancelled=None):
 
 
 def _install_locked(cache, downloads, progress, check):
-    for family, tag, name, digest, files in MODELS:
+    for index, (family, tag, name, digest, files) in enumerate(MODELS, 1):
         check()
         target = confined_path(cache, "speech-models/" + family)
         if _complete(target, files):
             progress(f"{family} 模型已安装")
             continue
         archive = confined_path(downloads, family + ".tar.bz2")
+        meter = TransferMeter(family, progress)
+        meter.stage("checking", package=index, packages=len(MODELS))
         if not archive.is_file() or _sha256(archive) != digest:
             with tempfile.TemporaryDirectory(dir=downloads) as folder:
                 partial = Path(folder) / "download"
-                progress(f"正在连接并下载 {family}")
+                total = ARCHIVE_BYTES[family]
+                meter.total = total
+                meter.stage("connecting")
                 with urllib.request.urlopen(f"{RELEASE}{tag}/{name}.tar.bz2", timeout=30) as source:
-                    meter = TransferMeter(family, progress)
-                    total = ARCHIVE_BYTES[family]
-                    meter.update(0, total, 0)
+                    meter.update(0, total, 0, force=True)
                     with partial.open("wb") as output:
                         received = 0
-                        while block := source.read(512 * 1024):
+                        read = getattr(source, "read1", source.read)
+                        while block := read(128 * 1024):
                             check()
                             output.write(block)
                             received += len(block)
                             meter.update(received, total, received, force=received == total)
+                check()
+                meter.stage("verifying")
                 if _sha256(partial) != digest:
                     raise ValueError(f"{name} SHA256 校验失败")
                 partial.replace(archive)
         check()
-        progress(f"校验并安装 {family}")
+        meter.stage("installing")
         target.mkdir(parents=True, exist_ok=True)
         with tarfile.open(archive, "r:bz2") as tar, tempfile.TemporaryDirectory(dir=target) as tmp:
             staged = Path(tmp)

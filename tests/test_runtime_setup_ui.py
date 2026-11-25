@@ -215,6 +215,36 @@ def test_ready_component_discovered_again_before_install(portable, qtbot):
     qtbot.waitUntil(lambda: not manager.firstRun)
     assert manager.results["ffmpeg"]["ready"] and not installs
 
+
+def test_install_can_background_reopen_and_cancel_without_running_detection_again(portable, qtbot, monkeypatch):
+    _, launch, _, _, _ = portable
+    bridge, window, _ = launch()
+    dialog = wait_dialog(window, qtbot)
+    manager = bridge.workspaces.runtime_setup
+    qtbot.waitUntil(lambda: not manager.phase)
+
+    def transfer(base, kind, meter, cancelled):
+        meter.stage("connecting", filename="media.zip", package=1, packages=2)
+        meter(1024, 4096)
+        while not cancelled():
+            time.sleep(.01)
+        raise InterruptedError
+
+    monkeypatch.setattr(runtime_install, "install", transfer)
+    invoke(find(dialog, "installSelectedRuntime"), "click")
+    qtbot.waitUntil(lambda: manager.transfer.get("completed") == 1024)
+    invoke(find(dialog, "backgroundRuntimeInstall"), "click")
+    qtbot.waitUntil(lambda: not dialog.property("opened"))
+    assert manager.phase == "install" and manager.firstRun
+    invoke(find(window, "runtimeSetupAction"), "trigger")
+    assert wait_dialog(window, qtbot) is dialog
+    assert manager.transfer["filename"] == "media.zip" and manager.transfer["rate"] > 0
+    assert find(dialog, "runtimeInstallProgress").property("value") == .25
+    invoke(find(dialog, "cancelRuntimeInstall"), "click")
+    assert manager.transfer["stage"] == "cancelling"
+    qtbot.waitUntil(lambda: not manager.phase)
+    assert manager.firstRun and "取消" in manager.message
+
 def test_custom_workspace_shares_installation_setup_marker(portable, qtbot):
     root, launch, _, _, installs = portable
     bridge, window, _ = launch(root / "other-workspaces")

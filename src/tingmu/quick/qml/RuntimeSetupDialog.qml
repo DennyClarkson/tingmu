@@ -6,6 +6,7 @@ import "Style.js" as S
 AppDialog {
     id: dialog
     objectName: "runtimeSetupDialog"
+    signal guideRequested()
     anchors.centerIn: parent
     width: Math.min(710, parent ? parent.width - 24 : 710)
     height: Math.min(628, parent ? parent.height - 20 : 628)
@@ -36,17 +37,15 @@ AppDialog {
     }
     readonly property var selectedIds: options.map(o => o.kind).filter(k => selected(k))
     readonly property real selectedBytes: selectedIds.reduce((sum, k) => sum + components[k].bytes, 0)
-    function componentTitle(kind) {
-        const item = options.find(o => o.kind === kind)
-        return item ? item.title : ""
-    }
     function sourceName(source) {
         return source === "portable" ? qsTranslate("Tingmu", "已使用包内组件")
                                      : qsTranslate("Tingmu", "已复用本机组件")
     }
     onAboutToShow: {
-        choices = ({})
-        runtimeSetup.detect()
+        if (idle) {
+            choices = ({})
+            runtimeSetup.detect()
+        }
     }
     component LabelText: Text {
         Layout.fillWidth: true
@@ -61,7 +60,14 @@ AppDialog {
                 : qsTranslate("Tingmu", "未检测到 Qt 播放后端。请检查基础便携包是否完整。")
             color: dialog.snapshot.playback ? Theme.text : Theme.error
         }
-        LabelText { text: qsTranslate("Tingmu", "检测仅在本机进行。已有组件会直接复用，勾选并确认后才会下载。") }
+        RowLayout {
+            Layout.fillWidth: true
+            LabelText { text: qsTranslate("Tingmu", "检测仅在本机进行。已有组件会直接复用，勾选并确认后才会下载。") }
+            TButton {
+                objectName: "runtimeGuide"; quiet: true
+                text: qsTranslate("Tingmu", "查看使用指南"); onClicked: dialog.guideRequested()
+            }
+        }
         AppScrollView {
             id: list
             Layout.fillWidth: true; Layout.fillHeight: true
@@ -115,27 +121,26 @@ AppDialog {
         }
         LabelText {
             objectName: "runtimeSetupStatus"
-            text: dialog.installing ? (dialog.snapshot.phase === "cancelling" ? qsTranslate("Tingmu", "正在取消…")
-                    : dialog.componentTitle(runtimeSetup.transfer.kind) + "  " + S.bytes(runtimeSetup.transfer.done)
-                    + (runtimeSetup.transfer.total > 0 ? " / " + S.bytes(runtimeSetup.transfer.total) : ""))
+            text: dialog.installing ? ""
                 : dialog.snapshot.phase ? qsTranslate("Tingmu", "正在本机检测组件…")
                 : qsTranslate("TingmuStatus", dialog.snapshot.message || "")
             visible: !!text
         }
-        AppProgressBar {
-            objectName: "runtimeInstallProgress"; Layout.fillWidth: true
-            visible: dialog.installing; indeterminate: !(runtimeSetup.transfer.total > 0)
-            value: runtimeSetup.transfer.total > 0 ? runtimeSetup.transfer.done / runtimeSetup.transfer.total : 0
+        DownloadProgress {
+            Layout.fillWidth: true; visible: dialog.installing
+            sample: runtimeSetup.transfer; message: ""
+            barObjectName: "runtimeInstallProgress"
         }
         RowLayout {
             Layout.fillWidth: true
             TButton {
-                text: qsTranslate("Tingmu", "重新检测"); enabled: dialog.idle
+                text: qsTranslate("Tingmu", "重新检测"); visible: !dialog.installing; enabled: dialog.idle
                 onClicked: runtimeSetup.detect()
             }
             Item { Layout.fillWidth: true }
             TButton {
                 objectName: "skipRuntimeSetup"
+                visible: !dialog.installing
                 text: runtimeSetup.firstRun ? qsTranslate("Tingmu", "暂不下载，直接进入") : qsTranslate("Tingmu", "关闭")
                 enabled: dialog.idle || dialog.snapshot.phase === "detect"
                 onClicked: if (runtimeSetup.dismiss(true)) dialog.close()
@@ -144,6 +149,10 @@ AppDialog {
                 objectName: "cancelRuntimeInstall"; visible: dialog.installing
                 enabled: dialog.snapshot.phase === "install"
                 text: qsTranslate("Tingmu", "取消安装"); onClicked: runtimeSetup.cancel()
+            }
+            TButton {
+                objectName: "backgroundRuntimeInstall"; visible: dialog.installing
+                text: qsTranslate("Tingmu", "后台安装"); onClicked: dialog.close()
             }
             TButton {
                 objectName: "installSelectedRuntime"; primary: true

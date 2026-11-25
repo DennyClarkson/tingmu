@@ -28,11 +28,11 @@ def test_gap_limit_boundaries_and_zero_gap_setting():
     assert cues[0].end == 3
 
 
-def test_sparse_lines_never_hold_into_long_silence_and_seeks_are_immediate():
+def test_sparse_lines_expire_at_the_reading_minimum_and_seeks_are_immediate():
     timeline = SubtitleTimeline([Cue("a", 1, 1.1, "啊"), Cue("b", 10, 11, "好")],
                                 min_duration_ms=5000, companion_hold_ms=8000)
-    for at, identity in [(1050, "a"), (2300, None), (10100, "b"), (0, None),
-                         (1050, "a"), (1100, None), (11000, None)]:
+    for at, identity in [(1050, "a"), (2300, "a"), (5999, "a"), (6000, None), (10100, "b"), (0, None),
+                         (1050, "a"), (1100, "a"), (14999, "b"), (15000, None)]:
         for surface in (timeline.subtitle_at, timeline.companion_at):
             cue = surface(at)
             assert (cue.id if cue else None) == identity
@@ -46,7 +46,8 @@ def test_dense_cues_each_transition_once_without_merge_or_backlog():
     for i in reversed(range(49)):
         assert timeline.subtitle_at(i * 200 + 199).id == str(i)
         assert timeline.companion_at(i * 200 + 200).id == str(i + 1)
-    assert timeline.subtitle_at(9900) is None
+    assert timeline.subtitle_at(9900).id == "49"
+    assert timeline.subtitle_at(11000) is None
 
 
 def test_overlap_returns_underlying_dialogue_without_extending_short_sign():
@@ -59,7 +60,8 @@ def test_overlap_returns_underlying_dialogue_without_extending_short_sign():
     assert timeline.subtitle_at(6500).id == "long"
     assert timeline.subtitle_at(10200).id == "long"
     assert timeline.subtitle_at(10300).id == "next"
-    assert timeline.subtitle_at(11000) is None
+    assert timeline.subtitle_at(11000).id == "next"
+    assert timeline.subtitle_at(11500) is None
 
 
 def test_reviewed_segments_have_explicit_estimates_and_preserve_raw_source():
@@ -103,13 +105,13 @@ def test_reading_minimum_borrows_only_until_a_breath_before_the_next_cue():
             Cue("last", 5.08, 5.28, "Three")]
     timeline = SubtitleTimeline(cues, min_duration_ms=1200)
     assert [(s.start_ms, s.end_ms) for s in timeline.segments] == [
-        (1000, 2200), (4080, 4980), (5080, 5280)]
+        (1000, 2200), (4080, 4980), (5080, 6280)]
     for pos, expected in ((1080, "first"), (2200, None), (4979, "second"), (4980, None),
-                          (5079, None), (5080, "last"), (5280, None)):
+                          (5079, None), (5080, "last"), (5280, "last"), (6280, None)):
         assert getattr(timeline.subtitle_at(pos), "id", None) == expected
         assert getattr(timeline.companion_at(pos), "id", None) == expected
     assert [c.end for c in timeline.cues] == [1.08, 4.16, 5.28]
-    assert [c.end for c in timeline.export_cues()] == [2.2, 4.98, 5.28]
+    assert [c.end for c in timeline.export_cues()] == [2.2, 4.98, 6.28]
     assert [c.end for c in SubtitleTimeline(cues, min_duration_ms=0).export_cues()] == [1.08, 4.16, 5.28]
 
 
@@ -130,3 +132,17 @@ def test_legacy_reviewed_split_below_600ms_uses_source_text_and_verified_whole_t
     cue.end = 2.4
     assert [(s.cue.id, s.end_ms) for s in SubtitleTimeline([cue]).segments] == [
         ("s:part:1", 600), ("s:part:2", 2400)]
+
+
+def test_long_transition_and_final_overlap_extend_only_the_union_owner():
+    source = [Cue("intro", 0, .08, "First"), Cue("last", 9, 9.3, "Last"),
+              Cue("aside", 9.1, 9.2, "Aside"), Cue("zero", 12, 12, "Unplaced")]
+    before = [asdict(c) for c in source]
+    timeline = SubtitleTimeline(source, min_duration_ms=1000, gap_fill_ms=1500)
+    assert [(c.id, c.end) for c in timeline.export_cues()] == [
+        ("intro", 1), ("last", 10), ("aside", 9.2)]
+    assert timeline.subtitle_at(1000) is None and timeline.subtitle_at(8000) is None
+    assert timeline.subtitle_at(9150).id == "aside"
+    assert timeline.subtitle_at(9250).id == "last"
+    assert timeline.subtitle_at(10000) is None
+    assert [asdict(c) for c in source] == before

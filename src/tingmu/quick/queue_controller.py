@@ -57,6 +57,7 @@ class QueueController:
     def _refresh_jobs(self):
         self.state.timer.stop()
         snapshot = self.state.queue.snapshot()
+        previews = self.state.queue.studio_previews()
         rows = []
         for job in snapshot:
             done, total = job.get("completed_cues", 0), job.get("total_cues", 0)
@@ -68,6 +69,7 @@ class QueueController:
             rows.append(
                 {
                     **job,
+                    "verified_examples": previews.get(job["id"], []),
                     "path": job["media_path"],
                     "message": job.get("progress", ""),
                     "error": job.get("error_message")

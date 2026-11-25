@@ -159,6 +159,37 @@ ApplicationWindow {
     ModelManager{id:modelManager}
     TeachingPreferences{id:teachingPreferences}
     SubtitleCorrection{id:subtitleCorrection}
+    function openGuide() {
+        app.raise()
+        app.requestActivate()
+        helpDialog.open()
+    }
+    function navigateStudio(target) {
+        helpDialog.close()
+        const runtimeDialog = runtimeLoader.item
+        if (runtimeDialog && runtimeDialog.opened && target !== "runtime") {
+            pendingWorkspaceSetup = false
+            runtimeDialog.close()
+        }
+        if (["workspace", "speech", "text"].indexOf(target) >= 0) {
+            workspaceSetup.openSection(target === "speech" ? "models" : target === "text" ? "text" : "general")
+        } else if (target === "models") {
+            app.openDialog("models", app, {})
+        } else if (target === "runtime") {
+            if (runtimeSetup.available) openRuntimeSetup()
+            else workspaceSetup.openSection("models")
+        } else {
+            workspaceSetup.close()
+            if (["watch", "prepare", "learn", "queue"].indexOf(target) >= 0) {
+                changeView(target === "queue" ? "prepare" : target)
+                if (target === "queue") queueDock.present()
+            } else if (target === "open") {
+                backend.command("openFiles", {})
+            } else if (target === "reset") {
+                resetWorkspace()
+            }
+        }
+    }
     function openRuntimeSetup() {
         runtimeLoader.active = true
         runtimeLoader.item.open()
@@ -171,6 +202,7 @@ ApplicationWindow {
     }
     Connections {
         target: runtimeLoader.item
+        function onGuideRequested() { app.openGuide() }
         function onClosed() {
             if (app.pendingWorkspaceSetup) {
                 app.pendingWorkspaceSetup = false
@@ -187,6 +219,7 @@ ApplicationWindow {
         id: workspaceSetup
         onModelsRequested: app.openDialog("models", app, {})
         onRuntimeRequested: app.openRuntimeSetup()
+        onGuideRequested: app.openGuide()
     }
     Connections {
         target:backend
@@ -202,7 +235,7 @@ ApplicationWindow {
     AppDialog {
         id: activeDownload
         objectName: "activeModelDownload"
-        title: qsTranslate("Tingmu", "模型下载"); anchors.centerIn: parent; width: Math.min(430, app.width - 24)
+        title: qsTranslate("Tingmu", "模型下载"); anchors.centerIn: parent; width: Math.min(520, app.width - 24)
         contentItem: ColumnLayout {
             DownloadProgress { Layout.fillWidth: true }
             RowLayout {
@@ -311,7 +344,7 @@ ApplicationWindow {
                 }
                 AppMenu {
                     title:qsTranslate("Tingmu", "帮助")
-                    Action{text:qsTranslate("Tingmu", "使用与快捷键");onTriggered:helpDialog.open()}
+                    Action{objectName:"quickStartGuideAction";text:qsTranslate("Tingmu", "快速上手与使用说明");onTriggered:app.openGuide()}
                     Action{text:qsTranslate("Tingmu", "关于听幕");onTriggered:aboutDialog.open()}
                     AppMenuSeparator {}
                     Action{objectName:"developerModeAction";text:qsTranslate("Tingmu", "开发者模式");checkable:true;checked:!!backend.settings.developer_mode;onTriggered:backend.setting("developer_mode",checked)}
@@ -360,7 +393,16 @@ ApplicationWindow {
             handle:Rectangle{implicitHeight:8;implicitWidth:8;color:"transparent";Rectangle{anchors.centerIn:parent;width:30;height:2;color:SplitHandle.hovered || SplitHandle.pressed ? Theme.accent : Theme.line}}
             onResizingChanged:if(!resizing)persist.restart()
             DockPanel { id:libraryDock;objectName:"libraryModule";moduleId:"library";title:qsTranslate("Tingmu", "媒体库");subtitle:String(backend.library.length);workspace:app;visible:app.slotEnabled(moduleId);SplitView.preferredHeight:430;SplitView.fillHeight:!queueDock.visible;SplitView.minimumHeight:app.slotMinimumHeight("library",250);panelContent:Component{LibraryPanel{}} }
-            DockPanel { id:queueDock;objectName:"queueModule";moduleId:"queue";title:qsTranslate("Tingmu", "处理队列");subtitle:backend.queueState.queueRunning ? qsTranslate("Tingmu", "进行中") : String(backend.queueState.totalCount || 0);workspace:app;visible:app.slotEnabled(moduleId);SplitView.fillHeight:true;SplitView.minimumHeight:app.slotMinimumHeight("queue",210);panelContent:Component{QueuePanel{panelShown:queueDock.detached || (app.viewMode!=="learn" && app.moduleEnabled("queue"))}} }
+            DockPanel { id:queueDock;objectName:"queueModule";moduleId:"queue";title:qsTranslate("Tingmu", "处理队列");subtitle:backend.queueState.queueRunning ? qsTranslate("Tingmu", "进行中") : String(backend.queueState.totalCount || 0);workspace:app;visible:app.slotEnabled(moduleId);SplitView.fillHeight:true;SplitView.minimumHeight:app.slotMinimumHeight("queue",210);panelContent:Component{QueuePanel {
+                panelShown: queueDock.detached || (app.viewMode !== "learn" && app.moduleEnabled("queue"))
+                onNavigateRequested: function(destination) { app.navigateStudio(destination) }
+                onWatchRequested: function(path) {
+                    backend.command("openMedia", {path: path})
+                    app.changeView("watch")
+                    app.raise()
+                    app.requestActivate()
+                }
+            }} }
         }
         SplitView {
             id:centerColumn;orientation:Qt.Vertical
@@ -394,15 +436,35 @@ ApplicationWindow {
             Rectangle{width:5;height:5;radius:3;color:backend.notificationState.error ? Theme.error : Theme.accent}
             Text { objectName:"applicationStatus";textFormat:Text.PlainText;Layout.fillWidth:true;text:qsTranslate("TingmuStatus", backend.notificationState.error || backend.notificationState.status || "") || qsTranslate("Tingmu", "就绪");color:backend.notificationState.error ? Theme.error : Theme.muted;font.family:Theme.font;font.pixelSize:10;elide:Text.ElideRight}
             TButton{visible:!!backend.notificationState.error;iconSource:"close";quiet:true;implicitHeight:24;tip:qsTranslate("Tingmu", "关闭提示");onClicked:backend.command("dismissError",{})}
-            TButton { visible: !!backend.downloadState.modelDownloading; text: qsTranslate("Tingmu", "查看下载"); quiet: true
-                implicitHeight: 24; onClicked: activeDownload.open() }
+            Loader {
+                active: !!backend.downloadState.modelDownloading
+                visible: active
+                Layout.maximumWidth: app.width * 0.27
+                sourceComponent: DownloadProgress {
+                    objectName: "modelDownloadFooter"
+                    compact: true
+                    onDetailsRequested: activeDownload.open()
+                }
+            }
+            Loader {
+                active: runtimeSetup.state.phase === "install" || runtimeSetup.state.phase === "cancelling"
+                visible: active
+                Layout.maximumWidth: app.width * 0.27
+                sourceComponent: DownloadProgress {
+                    objectName: "runtimeDownloadFooter"
+                    compact: true
+                    sample: runtimeSetup.transfer
+                    message: ""
+                    onDetailsRequested: app.openRuntimeSetup()
+                }
+            }
             Text { textFormat:Text.PlainText;text:!backend.settings.text_models_enabled ? qsTranslate("Tingmu", "文本模型已停用") : backend.applicationState.cloudEnabled ? qsTranslate("Tingmu", "允许远程文本 API") : qsTranslate("Tingmu", "文本仅用本机 API");color:Theme.muted;font.family:Theme.font;font.pixelSize:10}
         }
     }
-    AppDialog {
-        id:helpDialog;objectName:"helpDialog";title:qsTranslate("Tingmu", "使用听幕");anchors.centerIn:parent;width:470;modal:true;standardButtons:Dialog.Close
-
-        contentItem:Text { textFormat:Text.PlainText;text:qsTranslate("Tingmu", "1. 添加视频或打开文件夹，点击文件开始播放。\n2. 勾选需要学习的视频，加入处理队列并开始。\n3. 点击字幕定位，点击伴侣里的词语收藏。\n\n拖动模块标题可弹出独立窗口；↙ 放回原位置。\n拖动模块间的细线，调整工作区比例。\n设置分别位于每个模块右上角的齿轮。\n\n空格　播放 / 暂停\n← / →　前后 5 秒\n↑ / ↓　上一句 / 下一句\nF　全屏　　Esc　退出全屏\nCtrl+O　打开视频\nCtrl+Enter　发送对话");color:Theme.text;font.family:Theme.font;font.pixelSize:13;wrapMode:Text.Wrap;lineHeight:1.4}
+    QuickStartGuide {
+        id: helpDialog
+        objectName: "helpDialog"
+        onNavigate: function(destination) { app.navigateStudio(destination) }
     }
     AppDialog {
         id:aboutDialog;objectName:"aboutDialog";title:qsTranslate("Tingmu", "关于听幕");anchors.centerIn:parent;width:390;modal:true;standardButtons:Dialog.Close
