@@ -94,7 +94,7 @@ $version = & ./.venv/Scripts/python.exe -c "import tomllib; print(tomllib.load(o
 
 成功后，输出目录包含 ZIP、`SHA256SUMS.txt` 和记录实际体积与文件数的 `release-summary.json`。烟雾报告与构建日志在同目录的 `diagnostics/`。ZIP 收录首次运行前的干净目录。归档条目排序和时间戳固定，每个构建的清单会记录当次构建时间，请使用同次生成的校验和。
 
-工作流位于默认分支后，可在 Actions → Release → Run workflow 保留默认 `dry_run=true` 做全流程演练，下载保留七天的 Artifact。变更版本时同步更新 `pyproject.toml`、`src/tingmu/__init__.py` 和锁文件，本地烟雾测试会核对运行中的版本。正式发布时，从已核验的提交推送与 `project.version` 完全匹配的 `v<version>` 标签。带连字符的预发布版本自动标记为 prerelease。手动关闭 `dry_run` 时，可用 `draft` 创建草稿；同名 Release 已存在时任务会停止。[Release 工作流](../.github/workflows/release.yml)
+工作流位于默认分支后，可在 Actions → Release → Run workflow 保留默认 `dry_run=true` 做全流程演练，下载保留七天的 Artifact。变更版本时同步更新 `pyproject.toml`、`src/tingmu/__init__.py` 和锁文件，本地烟雾测试会核对运行中的版本。正式发布时，从已核验的提交推送与 `project.version` 完全匹配的 `v<version>` 标签。带连字符的预发布版本自动标记为 prerelease。手动关闭 `dry_run` 时，可用 `draft` 创建草稿；同名 Release 已存在时任务会停止。若标签已推送、构建通过但发布失败，可从包含工作流修复的分支手动运行 Release，将 `existing_tag` 填为原标签。工作流会重新检出、测试并打包标签指向的提交，再核实提交一致后发布。[Release 工作流](../.github/workflows/release.yml)
 
 ## 按问题找入口
 

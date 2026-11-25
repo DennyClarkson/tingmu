@@ -5,6 +5,10 @@ on:
     tags: ['v*.*.*']
   workflow_dispatch:
     inputs:
+      existing_tag:
+        description: '从指定的已有标签重新构建（如 v0.12.0）'
+        type: string
+        default: ''
       dry_run:
         description: '仅构建、验收并上传 Actions 构件'
         type: boolean
@@ -25,6 +29,8 @@ jobs:
   build:
     if: github.event_name != 'push' || !github.event.deleted
     uses: ./.github/workflows/windows-build.yml
+    with:
+      existing_tag: ${{ inputs.existing_tag || '' }}
 
   publish:
     needs: build
@@ -54,25 +60,33 @@ jobs:
           TAG: v${{ needs.build.outputs.version }}
           VERSION: ${{ needs.build.outputs.version }}
           TESTED_COMMIT: ${{ needs.build.outputs.commit }}
+          EXISTING_TAG: ${{ inputs.existing_tag }}
           DRAFT: ${{ inputs.draft || false }}
         run: |
           state=$(gh api graphql -f owner="$GITHUB_REPOSITORY_OWNER" -f repo="${GITHUB_REPOSITORY#*/}" \
             -f tag="$TAG" -f ref="refs/tags/$TAG" \
             -f query='query($owner:String!, $repo:String!, $tag:String!, $ref:String!) {
-              repository(owner:$owner, name:$repo) { release(tagName:$tag) { id } ref(qualifiedName:$ref) { id } }
-            }' --jq '.data.repository | if .release then "released" elif .ref then "tagged" else "new" end')
+              repository(owner:$owner, name:$repo) {
+                release(tagName:$tag) { id }
+                ref(qualifiedName:$ref) { target { __typename oid ... on Tag { target { __typename oid } } } }
+              }
+            }' --jq '.data.repository |
+              if .release then "released"
+              elif .ref == null then "new"
+              else .ref.target | (if .__typename == "Tag" then .target else . end) |
+                if .__typename == "Commit" then .oid else error("Tag must point to a commit") end
+              end')
           flags=(--target "$TESTED_COMMIT")
           if [[ "$state" == released ]]; then
             echo "Release $TAG already exists. Its assets have been preserved." >&2
             exit 1
-          elif [[ "$state" == tagged ]]; then
-            commit=$(gh api "repos/$GITHUB_REPOSITORY/commits/tags/$TAG" --jq .sha)
-            if [[ "$commit" != "$TESTED_COMMIT" ]]; then
-              echo "$TAG points to $commit, expected $TESTED_COMMIT." >&2
+          elif [[ "$state" != new ]]; then
+            if [[ "$state" != "$TESTED_COMMIT" ]]; then
+              echo "$TAG points to $state, expected $TESTED_COMMIT." >&2
               exit 1
             fi
             flags+=(--verify-tag)
-          elif [[ "$GITHUB_REF_TYPE" == tag ]]; then
+          elif [[ "$GITHUB_REF_TYPE" == tag || -n "$EXISTING_TAG" ]]; then
             echo "The triggering tag $TAG no longer exists." >&2
             exit 1
           fi
