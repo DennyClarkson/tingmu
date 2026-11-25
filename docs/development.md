@@ -72,7 +72,7 @@ uv lock --check --offline
 git diff --check
 ```
 
-日常提交和 PR 在本地运行以上检查，将结果写进 PR。仓库已关闭 GitHub 托管验证，工作流文件仅保留手动触发入口。`--require-ffmpeg` 让字幕集成测试在缺少工具时失败。本地暂时无法安装 FFmpeg 时，可去掉此选项运行其余用例，测试摘要会显示跳过项。测试运行器限制当前 Python 进程的外部 DNS/TCP，允许本机回环模拟服务。克隆源码就可以运行通用回归，无需开发机私人样片、便携包或服务密钥。[手动 Windows 工作流](../.github/workflows/ci.yml) · [离线测试入口](../.github/run_offline_tests.py)
+推送到 `main`、向 `main` 提交 PR 或手动运行 Windows 工作流时，CI 使用锁定的 CPU/开发依赖执行 Ruff、离线测试和便携包验证。引擎测试用本机回环服务，媒体测试用校验过的 FFmpeg 合成样片。`--require-ffmpeg` 会在工具缺失时让字幕集成测试失败。包体验收另外在含中文和空格的目录运行真实启动器，上传的预览 ZIP 来自原始干净目录。[Windows CI](../.github/workflows/ci.yml) · [离线测试入口](../.github/run_offline_tests.py)
 
 集中开发 0.12 的字幕决策、队列或语言切换时，可在同一窗口运行以下四个测试文件。
 
@@ -81,6 +81,20 @@ git diff --check
 ```
 
 改动影响普通窗口、全屏、焦点、语言菜单或可见播放时，另开使用正常 Qt 显示设置的终端，用自己的测试工作区和可分享素材检查实际操作。「帮助 → 开发者模式」可查看运行事件。所选工作区的 `logs/` 保存日志，`diagnostics/` 保存手动导出。界面快照、诊断与真实服务输出都留在本地审阅。
+
+## 在本地演练 GitHub Release
+
+在 Windows x64 的干净检出中用 `uv sync --locked --extra dev` 准备 Python 3.12 环境。下面的第一条命令会下载并校验锁表指定的 FFmpeg，现场合成五秒双音轨视频。发布构建随后在中文空格路径启动离屏播放器，断网验证解码、定位、切轨、倍速和暂停。
+
+```powershell
+& ./.venv/Scripts/python.exe .github/prepare_smoke_media.py --output .cache/qa/release-fixtures/dual-audio.mkv
+$version = & ./.venv/Scripts/python.exe -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])"
+& ./.venv/Scripts/python.exe packaging/build_release.py --expect-version $version --smoke-media .cache/qa/release-fixtures/dual-audio.mkv --output .cache/qa/release-dry-run
+```
+
+成功后，输出目录包含 ZIP、`SHA256SUMS.txt` 和记录实际体积与文件数的 `release-summary.json`。烟雾报告与构建日志在同目录的 `diagnostics/`。ZIP 收录首次运行前的干净目录。归档条目排序和时间戳固定，每个构建的清单会记录当次构建时间，请使用同次生成的校验和。
+
+工作流位于默认分支后，可在 Actions → Release → Run workflow 保留默认 `dry_run=true` 做全流程演练，下载保留七天的 Artifact。变更版本时同步更新 `pyproject.toml`、`src/tingmu/__init__.py` 和锁文件，本地烟雾测试会核对运行中的版本。正式发布时，从已核验的提交推送与 `project.version` 完全匹配的 `v<version>` 标签。带连字符的预发布版本自动标记为 prerelease。手动关闭 `dry_run` 时，可用 `draft` 创建草稿；同名 Release 已存在时任务会停止。[Release 工作流](../.github/workflows/release.yml)
 
 ## 按问题找入口
 

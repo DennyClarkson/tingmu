@@ -1,0 +1,99 @@
+name: Build and verify Windows portable
+
+on:
+  workflow_call:
+    outputs:
+      version:
+        description: Validated project version
+        value: ${{ jobs.build.outputs.version }}
+      commit:
+        description: Commit actually checked out and tested
+        value: ${{ jobs.build.outputs.commit }}
+      artifact:
+        description: ID of the validated portable artifact
+        value: ${{ jobs.build.outputs.artifact }}
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    # Windows Server 2022 x64 supplies .NET Framework 4.x csc.exe for Tingmu.exe.
+    # uv installs the pinned CPython build. FFmpeg comes from our runtime lock.
+    runs-on: windows-2022
+    timeout-minutes: 50
+    outputs:
+      version: ${{ steps.identity.outputs.version }}
+      commit: ${{ steps.identity.outputs.commit }}
+      artifact: ${{ steps.upload.outputs.artifact-id }}
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      PYTHONUTF8: "1"
+      QT_QPA_PLATFORM: offscreen
+      QT_QUICK_BACKEND: software
+      HF_HUB_OFFLINE: "1"
+      HF_DATASETS_OFFLINE: "1"
+      UV_MANAGED_PYTHON: "1"
+      UV_CACHE_DIR: ${{ github.workspace }}/.cache/uv
+      UV_PYTHON_INSTALL_DIR: ${{ github.workspace }}/.cache/python
+      TINGMU_CACHE_DIR: ${{ github.workspace }}/.cache/test-runtime
+      TINGMU_DATA_DIR: ${{ github.workspace }}/.cache/test-data
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: "0.12.10"
+          python-version: "3.12.14"
+          python-arch: x86_64
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+          cache-local-path: ${{ github.workspace }}/.cache/uv
+          cache-suffix: windows-py312-cpu
+      - name: Validate project and tag version
+        id: identity
+        run: uv run --no-project .github/release_metadata.py
+      - name: Install locked dependencies
+        run: uv sync --locked --extra dev
+      - name: Check lock offline
+        run: uv lock --check --offline
+      - name: Lint
+        run: .venv/Scripts/ruff.exe check src tests packaging .github
+      - name: Download verified FFmpeg and synthesize two audio tracks
+        run: .venv/Scripts/python.exe .github/prepare_smoke_media.py --output .cache/fixtures/dual-audio.mkv
+      - name: Offline regression tests
+        run: .venv/Scripts/python.exe .github/run_offline_tests.py -q --require-ffmpeg
+      - name: Build clean portable and smoke-test the relocated copy
+        env:
+          EXPECT_VERSION: ${{ steps.identity.outputs.version }}
+        run: >-
+          .venv/Scripts/python.exe packaging/build_release.py --expect-version $env:EXPECT_VERSION
+          --smoke-media .cache/fixtures/dual-audio.mkv --output .cache/release
+      - name: Prepare Chinese release notes
+        run: .venv/Scripts/python.exe .github/release_metadata.py --summary .cache/release/release-summary.json
+      - name: Upload smoke diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: portable-diagnostics-${{ github.run_attempt }}
+          path: .cache/release/diagnostics/
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Upload verified portable
+        id: upload
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-x64-portable-${{ github.run_attempt }}
+          path: |
+            .cache/release/Tingmu-${{ steps.identity.outputs.version }}-windows-x64-portable.zip
+            .cache/release/SHA256SUMS.txt
+            .cache/release/release-summary.json
+            .cache/release/release-notes.md
+          include-hidden-files: true
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7

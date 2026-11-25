@@ -1,3 +1,11 @@
+# Handoff — 2026-11-25 · Windows 发布演练
+
+`perf/bundle-and-startup` 在 `main@f39551e` 之上分两次本地提交。极简便携版和首次按需安装在同一提交，共用的 Windows CI、发布构建器与标签发布流程在下一提交。原有六个已合并的本地分支已清理。远程推送、分支清理与首次版本标签等候维护者确认。
+
+当前项目版本 `0.12.0` 在独立 CPython 3.12.14 CPU 开发环境完成干跑。解压 **253.30 MiB / 3,598 文件**，ZIP **110.40 MiB**，SHA-256 为 `baf85277e9b5467594837ab6fc31ccf29282c5b80325f135edaaa49cd3158da3`。实际解压复核了两份发行文档、68 个 PE 和 0 个模型载荷。搬迁副本和最终 ZIP 解压副本都通过原生 EXE 的离屏双音轨烟雾，首次启动可跳过下载。两轮均为 0 项 QML 警告、0 次被拦截的网络请求、0 个新增字节码文件。该离屏平台报告系统托盘不可用。
+
+本机全量与隔离环境离线门禁均为 **1,176 passed，113 subtests passed**。两次均有同一条 wordseg 的 pkg_resources 弃用提示。Ruff、离线锁检查和三个工作流的 actionlint 检查通过。ZIP、校验和、验收 JSON 与日志在忽略目录 `.cache/qa/release-dry-run/`。GitHub 托管运行和公开 Release 待推送后验证。[本地演练和发布步骤](docs/development.md#在本地演练-github-release)
+
 # Handoff — 2026-11-25 · 唯一极简便携版（待审阅）
 
 `perf/bundle-and-startup` 基于 `main@f39551e`。Windows 解压发行目录 **251.54 MiB / 3,596 文件 / 0 模型载荷**，上一版 7.81 GiB。Qt 播放器和四套字体随包就绪。首次引导离线检测可复用的媒体工具、Whisper、CUDA 和 Qwen，仅在用户确认后安装组件；工作区单独管理模型权重。中文空格路径原生双音轨烟雾通过，引导跳过、设置、托盘、零 QML 警告和零新增字节码均已验证。五次启动的首帧中位数为首次 1.177 s、回访 1.156 s。全量离线 **1,121 项通过，113 项子测试通过**，Ruff 与离线锁检查通过。现有正式安装及模型缓存保留，QA 仅留 JSON；工作树停在审阅点。[构件审计、取舍与原始验证](docs/bundle-and-startup-optimization.md)
