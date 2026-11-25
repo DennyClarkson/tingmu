@@ -6,6 +6,7 @@ import copy
 import json
 import re
 import threading
+import warnings
 from dataclasses import asdict, replace
 from urllib.parse import urlsplit
 
@@ -119,7 +120,7 @@ def _spaced_jyutping(reading: str | None) -> str:
 
 
 _CANTONESE_INIT_LOCK = threading.Lock()
-_CANTONESE_READY = False
+_CANTONESE_MODULE = None
 
 
 def _prepare_cantonese():
@@ -129,12 +130,14 @@ def _prepare_cantonese():
     shim is scoped to one cached corpus load and restores the inherited class method.
     Dictionary/segmentation data and the normal public API remain unchanged.
     """
-    global _CANTONESE_READY
-    import pycantonese
-
-    if not _CANTONESE_READY:
+    global _CANTONESE_MODULE
+    if _CANTONESE_MODULE is None:
         with _CANTONESE_INIT_LOCK:
-            if not _CANTONESE_READY:
+            if _CANTONESE_MODULE is None:
+                with warnings.catch_warnings():
+                    warnings.filterwarnings("ignore", message=r"^pkg_resources is deprecated as an API\.",
+                                            category=UserWarning, module=r"^wordseg$")
+                    import pycantonese
                 from pycantonese import corpus
 
                 reader = corpus._HKCanCorReader
@@ -150,13 +153,13 @@ def _prepare_cantonese():
                 try:
                     corpus.hkcancor()
                     pycantonese.characters_to_jyutping("你好")
-                    _CANTONESE_READY = True
+                    _CANTONESE_MODULE = pycantonese
                 finally:
                     if inherited:
                         delattr(reader, "from_dir")
                     else:
                         reader.from_dir = previous
-    return pycantonese
+    return _CANTONESE_MODULE
 
 
 def _local_tokens(text: str, target: str) -> list[Token]:

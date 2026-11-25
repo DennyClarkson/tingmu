@@ -6,6 +6,7 @@ import copy
 from collections import Counter
 from dataclasses import replace
 from difflib import SequenceMatcher
+from itertools import accumulate
 import unicodedata
 
 from .agent import (
@@ -15,9 +16,9 @@ from .agent import (
 from .language import learning_text
 from .llm_compat import legacy_learning_complete, legacy_learning_request
 from .models import Cue, LanguagePair
-from .timeline import MAX_LINE_WIDTH, display_width, split_display_text
+from .timeline import MAX_LINE_WIDTH, MIN_SPLIT_MS, display_width, readable_split_ends, split_display_text
 
-REVIEW_VERSION = "text-review-v4-natural-clauses"
+REVIEW_VERSION = "text-review-v4.1-readable-splits"
 REVIEW_SCHEMA = {
     "type": "object", "additionalProperties": False,
     "properties": {"cues": {"type": "array", "items": {
@@ -164,16 +165,16 @@ def _repair_display_parts(text: str, parts: list[str]):
     }
 
 
-def validate_review(content: str, cues: list[Cue], language: LanguagePair):
+def validate_review(content: str, cues: list[Cue], language: LanguagePair, *, enforce_split_duration=True):
     """Reject malformed batches; safely retain an individual excessive speculative edit."""
     payload = _json_loads(content)
     rows = payload.get("cues")
     if set(payload) != {"cues"} or not isinstance(rows, list) or len(rows) != len(cues):
         raise AnnotationValidationError("复核字幕条数或字段不匹配。")
-    return _validate_review_rows(rows, cues, language)
+    return _validate_review_rows(rows, cues, language, enforce_split_duration=enforce_split_duration)
 
 
-def _validate_review_rows(rows, cues, language):
+def _validate_review_rows(rows, cues, language, *, enforce_split_duration=True):
     result, metadata, seen = [], {}, set()
     for source, row in zip(cues, rows):
         if not isinstance(row, dict):
@@ -232,6 +233,13 @@ def _validate_review_rows(rows, cues, language):
                            "method": boundary_repair["method"] + "_then_" + repair["method"],
                            "reason_codes": boundary_repair["reason_codes"] + repair["reason_codes"],
                            "output_segment_count": len(parts)} if repair else boundary_repair)
+        short_split = enforce_split_duration and len(parts) > 1 and not readable_split_ends(source, parts)
+        if short_split:
+            # Retain the proposed boundaries for audit. The single timed event
+            # may wrap visually; a line-width preference must not cause flashes.
+            timing_guard = {"minimum_part_ms": MIN_SPLIT_MS,
+                            "proposed_end_offsets": list(accumulate(len(p) for p in parts))}
+            parts = [after]
         changed = before != after
         uncertain = source.uncertain or row["uncertain"] or changed or bool(rejected)
         state = "retained" if rejected else ("corrected" if changed else (
@@ -242,10 +250,10 @@ def _validate_review_rows(rows, cues, language):
             "segmentation": "deterministic_fallback" if rejected else ("deterministic_repair" if repair else "model"),
             "segment_count": len(parts),
             "timing_basis": "text_proportional" if len(parts) > 1 else "source",
-            "short_display_estimate": len(parts) > 1 and any(
-                (source.end - source.start) * display_width(part) / max(1, display_width(after)) < .35
-                for part in parts),
+            "short_display_estimate": short_split,
         }
+        if short_split:
+            metadata[source.id].update(segmentation="kept_whole_for_duration", timing_guard=timing_guard)
         if repair:
             metadata[source.id]["segmentation_repair"] = repair
         result.append(replace(source, text=after, translation="", explanation="", tokens=[],

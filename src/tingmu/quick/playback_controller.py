@@ -164,12 +164,7 @@ class PlaybackController:
     def _set_document(self, document):
         self.state.document = document
         self.state.source_cues = {cue.id: cue for cue in document.cues} if document else {}
-        review = document.metadata.get("translation_review", {}) if document else {}
-        self.state.timeline = SubtitleTimeline(
-            document.cues if document else [],
-            gap_fill_ms=self.ports.settings().subtitle_gap_ms,
-            translation_review=review,
-        )
+        self.state.timeline = SubtitleTimeline.for_document(document, self.ports.settings())
         self.state.cues = [self.ports.present_cue(segment) for segment in self.state.timeline.segments]
         self.state.cue_indices = {cue.id: i for i, cue in enumerate(self.state.timeline.cues)}
         self.state.active_cue = None
@@ -209,6 +204,8 @@ class PlaybackController:
         )
         value["sourceStart"] = min((c.start for c in originals), default=cue.start)
         value["sourceEnd"] = max((c.end for c in originals), default=cue.end)
+        value["displayStart"] = segment.start_ms / 1000
+        value["displayEnd"] = segment.end_ms / 1000
         value["timingBasis"] = segment.timing_basis
         return value
 

@@ -120,6 +120,14 @@ def test_qt_closure_resolves_plugins_data_and_optional_styles(bundle, tmp_path):
         bundle.validate_qt_directory(destination)
 
 
+@pytest.mark.parametrize("missing", ["QtQuick.pyd", "QtOpenGL.pyd"])
+def test_qt_requires_markdown_python_bindings(bundle, tmp_path, missing):
+    make_qt_tree(tmp_path)
+    (tmp_path / missing).unlink()
+    with pytest.raises(RuntimeError, match=missing):
+        bundle.validate_qt_directory(tmp_path)
+
+
 def test_qt_copies_referenced_icu_data(bundle, tmp_path):
     source = tmp_path / "full"
     make_qt_tree(source)
@@ -178,4 +186,5 @@ def test_shipped_python_imports_have_pyside_extensions(bundle):
     # Desktop development uses QQuickStyle; the portable bootstrap selects Basic
     # through the environment and loads the native QML plugins directly.
     assert {name + ".pyd" for name in imported - {"QtQuickControls2"}} <= set(QT_BINARIES)
-    assert not {"QtOpenGL.pyd", "QtMultimediaWidgets.pyd", "QtQuickControls2.pyd"} & set(QT_BINARIES)
+    assert {"QtQuick.pyd", "QtOpenGL.pyd"} <= set(QT_BINARIES)
+    assert not {"QtMultimediaWidgets.pyd", "QtQuickControls2.pyd"} & set(QT_BINARIES)

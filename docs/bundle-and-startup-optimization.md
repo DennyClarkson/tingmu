@@ -18,7 +18,7 @@
 
 根目录包含 `Tingmu.exe`、`app/`、`runtime/python/` 和发布清单。构建阶段校验 3,594 个程序及运行时文件，另有根目录的启动器和清单。主 Python 包含 NumPy、字幕和语言处理库、证书、filelock、Hugging Face Hub 及 wordseg 所需的 `setuptools<81`。发布闭包排除了本地 Whisper、ONNX、PyAV、tokenizers、hf_xet、NVIDIA 包以及 PyTorch。源码开发环境继续提供推理依赖。
 
-Qt 的 QML/PE 检查覆盖 13 个 QML 模块和 68 个 Windows 二进制文件。保留 `Qt6OpenGL.dll`、`opengl32sw.dll`、Qt 自带的 FFmpeg 媒体插件及其传递依赖。Python 的 `QQuickStyle` 会经 Shiboken 引入 QtQuick 和 OpenGL 绑定，便携启动时直接指定 Basic 样式，因而可以一并移出 `QtQuickControls2.pyd`、`QtQuick.pyd`、`QtOpenGL.pyd` 和旧 QWidget 用的 `QtMultimediaWidgets.pyd`。Qt Quick 实窗仍用原生插件播放视频。
+首发检查覆盖 13 个 QML 模块和 68 个 Windows 二进制文件。实机笔记渲染发现，Python 接收 QQuickTextDocument 需要 QtQuick.pyd 和随之导入的 QtOpenGL.pyd。修复后检查 70 个 PE，两个绑定合计 9,469,552 字节。搬迁烟雾同时检查 Markdown 的标题、表格、链接与代码。Qt Quick 保留 Qt6OpenGL.dll、软件渲染库和 FFmpeg 媒体插件。
 
 ## 本机检测与按需安装
 

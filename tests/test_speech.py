@@ -158,9 +158,9 @@ def test_model_status_rejects_truncated_files(tmp_path):
 def test_worker_exports_numpy_alignment_and_confidence_as_json(tmp_path, monkeypatch):
     import sys
     import json
-    words = [SimpleNamespace(start=np.float32(1), end=np.float32(1.5), word="你"),
-             SimpleNamespace(start=np.float32(2), end=np.float32(2.5), word="好")]
-    seg = SimpleNamespace(start=words[0].start, end=words[-1].end, words=words, text="你好",
+    words = [SimpleNamespace(start=np.float32(1), end=np.float32(1.5), word="你？"),
+             SimpleNamespace(start=np.float32(2), end=np.float32(2.5), word="好。")]
+    seg = SimpleNamespace(start=words[0].start, end=words[-1].end, words=words, text="你？好。",
                           avg_logprob=np.float32(-1.1), no_speech_prob=.2, compression_ratio=1)
     class Engine:
         supported_languages = ["yue"]
@@ -186,7 +186,7 @@ def test_worker_exports_numpy_alignment_and_confidence_as_json(tmp_path, monkeyp
     audit = json.loads((tmp_path / "raw.json").read_text("utf8"))["segments"]
     assert [c["uncertain"] for c in cues] == [True, True]
     assert [(c["start"], c["end"]) for c in cues] == [(181, 181.5), (182, 182.5)]
-    assert audit[0]["text"] == "你好" and audit[0]["cue_ids"] == [c["id"] for c in cues]
+    assert audit[0]["text"] == "你？好。" and audit[0]["cue_ids"] == [c["id"] for c in cues]
 
 
 @pytest.mark.parametrize("ext", ["vtt", "ass", "ssa"])

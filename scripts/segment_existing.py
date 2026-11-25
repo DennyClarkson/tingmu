@@ -76,7 +76,10 @@ def validate_boundaries(content: str, rows: list[dict]) -> dict[str, list[str]]:
     cues = [Cue(r["id"], r["start"], r["end"], r["text"]) for r in rows]
     # Validation in und bypasses script conversion: this pass must preserve exact
     # already-reviewed bytes, including any uncommon Cantonese spelling.
-    validated, records = validate_review(json.dumps({"cues": expanded}), cues, LanguagePair("en", "und"))
+    # Archive the model's proposed boundaries even on a rapid cue. Playback
+    # and SRT export decide whether these can be displayed sequentially.
+    validated, records = validate_review(json.dumps({"cues": expanded}), cues, LanguagePair("en", "und"),
+                                         enforce_split_duration=False)
     # This one-off migration promises model-authored boundaries and reports every
     # long source as model-reviewed. Live transcript review may now safely repair
     # layout, but silently accepting that repair here would mislabel provenance.

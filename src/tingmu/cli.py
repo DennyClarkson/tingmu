@@ -67,6 +67,7 @@ def main(argv=None) -> int:
         from .pipeline import prepare_media
         from .storage import Store
         from .media import save_srt
+        from .timeline import SubtitleTimeline
         from .runtime import data_root
         from .workspaces import WorkspaceCatalog
         from .export_paths import export_path
@@ -96,7 +97,7 @@ def main(argv=None) -> int:
             doc = prepare_media(args.path, settings, store, args.subtitle, args.start, args.duration,
                                 progress=lambda s: print(s, flush=True))
             if destination:
-                save_srt(doc.cues, destination)
+                save_srt(SubtitleTimeline.for_document(doc, settings).export_cues(), destination)
             print(f"材料：{store.save_document(doc)}")
             return 0
         except KeyboardInterrupt:

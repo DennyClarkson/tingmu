@@ -12,7 +12,9 @@ QML_MODULES = (
 )
 QT_BINARIES = (
     "QtCore.pyd", "QtGui.pyd", "QtWidgets.pyd", "QtNetwork.pyd", "QtSvg.pyd",
-    "QtQml.pyd", "QtMultimedia.pyd",
+    # QQuickTextDocument is handed to Python from QML. Shiboken imports
+    # QtOpenGL.pyd when registering QtQuick, outside the DLL import graph.
+    "QtQml.pyd", "QtQuick.pyd", "QtOpenGL.pyd", "QtMultimedia.pyd",
     "Qt6OpenGL.dll", "opengl32sw.dll",
     "Qt6Qml.dll", "Qt6Quick.dll", "Qt6QuickControls2.dll", "Qt6Multimedia.dll",
     "Qt6MultimediaQuick.dll", "plugins/platforms/qwindows.dll",

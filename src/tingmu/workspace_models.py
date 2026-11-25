@@ -151,9 +151,9 @@ def _require_engine(model):
         require(portable, "local-asr")
 
 
-def model_readiness(model) -> ModelReadiness:
+def weight_readiness(model) -> ModelReadiness:
+    """Check the installed files without importing or probing the inference runtime."""
     try:
-        _require_engine(model)
         if model.startswith("local:"):
             from .local_whisper import resolve_local_model
             try:
@@ -162,16 +162,24 @@ def model_readiness(model) -> ModelReadiness:
                 return ModelReadiness(False, "model_missing", str(exc))
             return ModelReadiness(True, "ready", "已就绪 · 使用共享目录中的本地模型")
         cache, repositories = _assets(model)
+        for repo in repositories:
+            if not _cached(cache, repo, model):
+                name = repo.split("/")[-1]
+                return ModelReadiness(False, "model_missing", f"缺少完整的 {name} 模型权重，请到工作区语音识别设置下载。")
         support = _support(model)
         if support and not support.inventory()["complete"]:
-            return ModelReadiness(False, "support_missing", "尚未检测到完整的识别模型支持文件")
-        if not all(_cached(cache, repo, model) for repo in repositories):
-            return ModelReadiness(False, "model_missing", "尚未检测到完整模型")
+            return ModelReadiness(False, "support_missing", "识别模型支持文件不完整，请到工作区语音识别设置补全下载。")
         return ModelReadiness(True, "ready", "已检测到本地模型文件")
     except (OSError, KeyError, ValueError):
         return ModelReadiness(False, "model_missing", "尚未检测到完整模型")
+
+
+def model_readiness(model) -> ModelReadiness:
+    try:
+        _require_engine(model)
     except RuntimeError as exc:
         return ModelReadiness(False, "runtime_missing", str(exc))
+    return weight_readiness(model)
 
 
 def model_status(model):

@@ -17,6 +17,7 @@ import threading
 from PySide6.QtCore import QObject, Property, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
+from PySide6.QtQuick import QQuickTextDocument
 from PySide6.QtWidgets import QFileDialog, QInputDialog, QMessageBox
 
 from tingmu import __version__
@@ -1050,7 +1051,7 @@ class Bridge(QObject):
     def _summarize(self):
         self._organize_notebook()
 
-    @Slot(str, "QVariantMap")
+    @Slot(str, "QVariantMap", result="QVariant")
     def command(self, name, payload):
         previous_domain = self._operation_domain
         self._operation_domain = command_domain(name)
@@ -1058,7 +1059,9 @@ class Bridge(QObject):
         self._set_state(error="", **({"status": ""} if clears_status(name) else {}))
         try:
             self.log.event("ui_action", "界面操作", "DEBUG", action=name)
-            self._command(name, payload or {})
+            result = self._command(name, payload or {})
+            if name == "saveModel":
+                return result
         except Exception as exc:
             self.log.exception(exc, "command_error")
             self._error(exc)
@@ -1067,7 +1070,7 @@ class Bridge(QObject):
         finally:
             self._operation_domain = previous_domain
 
-    @Slot(QObject, str, str)
+    @Slot(QQuickTextDocument, str, str)
     def formatMarkdown(self, document, accent, border):
         from .typography import format_document
         format_document(document, accent, border)

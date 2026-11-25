@@ -1,6 +1,7 @@
 """Exercise the v4 QML controls against an isolated real application bridge."""
 import os
 import json
+from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -363,3 +364,70 @@ def test_global_role_page_selects_model_independently_of_connection_form(quick, 
     invoke(find(manager, "newModelButton"), "clicked")
     assert not manager.property("showRoles") and find(manager, "modelBaseUrl").isVisible()
     assert not engine._tingmu_warnings
+
+
+@pytest.mark.parametrize("from_list", [True, False], ids=["discovered", "typed"])
+def test_assignment_saves_model_and_edits_or_shows_error(quick, monkeypatch, from_list):
+    from test_qml_v5 import visual_find
+
+    _, bridge, engine, window = quick
+    profile_id = bridge.command("saveModel", {"provider": "ollama", "label": "Local", "model": ""})
+    manager = find(window, "modelManagerWindow")
+    invoke(manager, "open")
+    roles = find(manager, "globalModelRoles")
+    invoke(roles, "clicked")
+    choice = visual_find(manager.contentItem(), "globalRole_companion")
+
+    def activate(item, index):
+        item.setProperty("currentIndex", index)
+        assert QMetaObject.invokeMethod(item, "activated", Q_ARG("int", index))
+
+    activate(choice, 1)
+    error = find(manager, "modelManagerError")
+    assert error.isVisible() and "模型 ID" in error.property("text")
+    assert choice.property("currentIndex") == 0 and not bridge.settings["companion_profile_id"]
+    invoke(find(manager, "editIncompleteModel"), "clicked")
+    assert manager.property("profileId") == profile_id and not manager.property("showRoles")
+    # A cached provider list is available independently of a saved selection.
+    bridge._model_profiles = [dict(bridge.modelProfiles[0], models=["local-a", "local-b"])]
+    bridge.modelsChanged.emit()
+    discovered = find(manager, "discoveredModelChoice")
+    assert discovered.property("currentIndex") == -1
+    model_id = "local-a" if from_list else "typed-model"
+    if from_list:
+        activate(discovered, 0)
+    else:
+        find(manager, "modelName").setProperty("text", model_id)
+    find(manager, "modelLabel").setProperty("text", "Edited")
+    endpoint = find(manager, "modelBaseUrl")
+    endpoint.setProperty("text", "invalid")
+    assert roles.property("text") == "保存并分配任务"
+    invoke(roles, "clicked")
+    assert not manager.property("showRoles") and error.isVisible()
+    assert bridge.modelProfiles[0]["model"] == ""
+    endpoint.setProperty("text", "http://127.0.0.1:11434/v1")
+    invoke(roles, "clicked")
+    assert manager.property("showRoles") and not error.isVisible()
+    assert bridge.modelProfiles[0]["model"] == model_id and bridge.modelProfiles[0]["label"] == "Edited"
+    activate(choice, 1)
+    assert bridge.store.load_settings().companion_profile_id == profile_id
+    assert bridge.store.load_settings().companion_model == model_id
+
+    def failed_assignment(*args):
+        raise ValueError("Synthetic assignment error")
+
+    monkeypatch.setattr(bridge.model_registry, "assign", failed_assignment)
+    activate(choice, 0)
+    assert error.isVisible() and error.property("text") == "Synthetic assignment error"
+    assert choice.property("currentIndex") == 1 and bridge.store.load_settings().companion_profile_id == profile_id
+    assert not engine._tingmu_warnings
+
+
+def test_portable_smoke_formats_real_notebook_preview(quick, qtbot, monkeypatch):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "packaging"))
+    from portable_smoke import notebook_is_formatted, open_smoke_notebook
+
+    _, bridge, engine, window = quick
+    open_smoke_notebook(window, bridge)
+    qtbot.waitUntil(lambda: notebook_is_formatted(window))
+    assert window.property("viewMode") == "learn" and not engine._tingmu_warnings

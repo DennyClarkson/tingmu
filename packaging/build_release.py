@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 MAX_BYTES = 350 * 1024**2
 REQUIRED_CHECKS = {
     "qml_window", "isolated_data", "portable_imports", "bundled_open_fonts", "first_run_guide",
-    "first_run_skip_persisted", "workspace_llm_concurrency", "no_new_bytecode",
+    "first_run_skip_persisted", "workspace_llm_concurrency", "notebook_markdown_preview", "no_new_bytecode",
 }
 MEDIA_CHECKS = {"decode", "seek", "rate", "audio_switch", "pause"}
 SMOKE_LOGS = ("portable-smoke.json", "application.log", "application.log.1", "application.log.2",

@@ -737,7 +737,9 @@ def test_model_protocol_selection_is_explicit_and_provider_scoped(quick, qtbot, 
     assert discovered.property("currentText") == ""
     invoke(manager, "populate", other)
     assert discovered.property("count") == 1
-    assert discovered.property("currentText") == "own-openai-model"
+    assert discovered.textAt(0) == "own-openai-model"
+    assert discovered.property("currentIndex") == -1  # The manually entered model is not in this provider list.
+    assert discovered.property("displayText") == "选择模型"
     assert manager.property("protocol") == "responses"
     assert find(manager, "modelName").property("text") == "typed-openai-model"
     invoke(manager, "populate", ds)

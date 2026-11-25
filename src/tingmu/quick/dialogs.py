@@ -132,7 +132,8 @@ class DialogService:
         if not self.ports.cues():
             raise ValueError("当前没有字幕")
         translation = name == "exportTranslation"
-        cues = translated_subtitles(self.ports.document()) if translation else self.ports.timeline().cues
+        timeline = self.ports.timeline()
+        cues = translated_subtitles(self.ports.document(), timeline=timeline) if translation else timeline.export_cues()
         if not cues:
             raise ValueError("请先补全逐句讲解与译稿，完成复核后可导出整片译稿。")
         filename = (

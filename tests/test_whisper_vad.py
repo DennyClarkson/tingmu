@@ -52,6 +52,9 @@ def test_whisper_worker_uses_installed_vad(tmp_path, monkeypatch, device, source
 @pytest.mark.parametrize("consented", [False, True])
 def test_clean_transcription_downloads_only_with_consent(tmp_path, monkeypatch, model, consented):
     downloads = []
+    monkeypatch.setattr(workspace_models, "weight_readiness",
+                        lambda _: workspace_models.ModelReadiness(True, "ready", ""))
+    monkeypatch.setattr("tingmu.runtime_deps.require", lambda *args: {"ready": True})
     monkeypatch.setattr(media, "is_clean_install", lambda: True)
     monkeypatch.setattr(media, "_qwen_python", lambda: sys.executable)
     monkeypatch.setattr(media, "_cache_root", lambda: tmp_path)

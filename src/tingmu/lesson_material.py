@@ -1,7 +1,5 @@
 """Describe available learning material, including documents from earlier releases."""
 
-from dataclasses import replace
-
 from .timeline import SubtitleTimeline
 from .translation_review import translation_provided, translation_verified
 
@@ -19,9 +17,9 @@ def lesson_counts(document):
     return counts
 
 
-def translated_subtitles(document):
+def translated_subtitles(document, *, timeline=None):
     counts = lesson_counts(document)
     if not counts["total"] or counts["verified"] + counts.get("provided", 0) != counts["total"]:
         return []
-    timeline = SubtitleTimeline(document.cues, translation_review=document.metadata["translation_review"])
-    return [replace(c, text=c.translation) for c in timeline.cues if c.end > c.start]
+    timeline = timeline or SubtitleTimeline.for_document(document)
+    return timeline.export_cues(translated=True)

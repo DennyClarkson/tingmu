@@ -1,11 +1,12 @@
 """Readable preview typography without HTML interpolation or Markdown mutations."""
-from PySide6.QtGui import QColor, QTextBlockFormat, QTextCursor, QTextLength, QTextTable
+from PySide6.QtGui import QColor, QTextBlockFormat, QTextCursor, QTextDocument, QTextLength, QTextTable
+from PySide6.QtQuick import QQuickTextDocument
 
 
 def format_document(document, accent="#8bbda1", border="#30393c"):
     """Style a parsed read-only document once per content/format revision."""
-    doc = document.textDocument() if hasattr(document, "textDocument") else document
-    if doc is None or doc.property("tingmu_format_busy"):
+    doc = document.textDocument() if isinstance(document, QQuickTextDocument) else document
+    if not isinstance(doc, QTextDocument) or doc.property("tingmu_format_busy"):
         return
     stamp = f"{doc.revision()}|{accent}|{border}"
     if doc.property("tingmu_format_stamp") == stamp:

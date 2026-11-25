@@ -1,6 +1,8 @@
 import copy
+import builtins
 import json
 import unittest
+import warnings
 from unittest.mock import patch
 
 from tingmu.agent import (
@@ -12,6 +14,30 @@ from tingmu.agent import (
     provider_status,
 )
 from tingmu.models import Cue, LanguagePair, Token
+
+
+def test_only_wordseg_pkg_resources_warning_is_suppressed_during_import(monkeypatch):
+    from tingmu import agent
+
+    original_import = builtins.__import__
+    known = "pkg_resources is deprecated as an API. See the setuptools documentation."
+
+    def probe_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "pycantonese" and not fromlist:
+            warnings.warn_explicit(known, UserWarning, "wordseg/__init__.py", 1, module="wordseg")
+            warnings.warn_explicit("another wordseg warning", UserWarning, "wordseg/__init__.py", 2, module="wordseg")
+            warnings.warn_explicit(known, UserWarning, "other.py", 1, module="other")
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(agent, "_CANTONESE_MODULE", None)
+    monkeypatch.setattr(builtins, "__import__", probe_import)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        assert agent._prepare_cantonese().characters_to_jyutping("食飯")
+        warnings.warn_explicit(known, UserWarning, "wordseg/__init__.py", 1, module="wordseg")
+    probes = [(w.filename, str(w.message)) for w in caught if w.filename in {"wordseg/__init__.py", "other.py"}]
+    assert probes == [("wordseg/__init__.py", "another wordseg warning"), ("other.py", known),
+                      ("wordseg/__init__.py", known)]
 
 
 def response(cue, **changes):

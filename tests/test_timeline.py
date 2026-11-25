@@ -96,3 +96,37 @@ def test_corrupt_saved_segments_fall_back_to_source_and_zero_duration_is_not_inv
     assert timeline.cues[0].id == "s"
     assert timeline.subtitle_at(1000) is None
     assert timeline.subtitle_at(1050) is None
+
+
+def test_reading_minimum_borrows_only_until_a_breath_before_the_next_cue():
+    cues = [Cue("first", 1, 1.08, "One"), Cue("second", 4.08, 4.16, "Two"),
+            Cue("last", 5.08, 5.28, "Three")]
+    timeline = SubtitleTimeline(cues, min_duration_ms=1200)
+    assert [(s.start_ms, s.end_ms) for s in timeline.segments] == [
+        (1000, 2200), (4080, 4980), (5080, 5280)]
+    for pos, expected in ((1080, "first"), (2200, None), (4979, "second"), (4980, None),
+                          (5079, None), (5080, "last"), (5280, None)):
+        assert getattr(timeline.subtitle_at(pos), "id", None) == expected
+        assert getattr(timeline.companion_at(pos), "id", None) == expected
+    assert [c.end for c in timeline.cues] == [1.08, 4.16, 5.28]
+    assert [c.end for c in timeline.export_cues()] == [2.2, 4.98, 5.28]
+    assert [c.end for c in SubtitleTimeline(cues, min_duration_ms=0).export_cues()] == [1.08, 4.16, 5.28]
+
+
+def test_legacy_reviewed_split_below_600ms_uses_source_text_and_verified_whole_translation():
+    from tingmu.translation_review import TRANSLATION_REVIEW_VERSION, lesson_digest
+
+    cue = Cue("s", 0, 2.39, "Xabc", "Raw original", translation="完整译文", explanation="why",
+              segmented_texts=["X", "abc"])
+    parts = ["片段一", "片段二"]
+    review = {"version": TRANSLATION_REVIEW_VERSION, "segments": {"s": parts},
+              "verified": {"s": lesson_digest(cue, parts)}}
+    before = asdict(cue)
+    timeline = SubtitleTimeline([cue], translation_review=review)
+    assert [(s.cue.id, s.source_ids, s.timing_basis) for s in timeline.segments] == [("s", ("s",), "source")]
+    assert [c.text for c in timeline.export_cues()] == ["Xabc"]
+    assert [c.text for c in timeline.export_cues(translated=True)] == ["完整译文"]
+    assert asdict(cue) == before
+    cue.end = 2.4
+    assert [(s.cue.id, s.end_ms) for s in SubtitleTimeline([cue]).segments] == [
+        ("s:part:1", 600), ("s:part:2", 2400)]

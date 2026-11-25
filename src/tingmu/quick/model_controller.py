@@ -140,9 +140,10 @@ class ModelController:
         key = payload.pop("apiKey", p.get("apiKey", None))
         if payload.get("key_source") != "manual":
             key = None
-        self.ports.model_registry().save_profile(payload, api_key=key or None)
+        saved = self.ports.model_registry().save_profile(payload, api_key=key or None)
         self.state.status = "模型配置已保存"
         self._refresh_models()
+        return saved["id"]
 
     def command_delete_model(self, name, p):
         profile_id = p["id"]

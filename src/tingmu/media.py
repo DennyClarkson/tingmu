@@ -43,7 +43,7 @@ def _qwen_python() -> Path:
     try:
         return Path(require(installation_root(), "qwen")["path"])
     except RuntimeError as exc:
-        raise MediaError(str(exc)) from exc
+        raise AsrSetupError(str(exc)) from exc
 
 
 def _qwen_snapshot(repo: str, cache: str, *, allow_model_downloads=True) -> str:
@@ -75,6 +75,10 @@ class MediaError(RuntimeError):
     """An actionable media or ASR failure safe to display in the UI."""
 
 
+class AsrSetupError(MediaError):
+    """Local, user-actionable preflight result, safe to show in queue status."""
+
+
 class TranscriptionCancelled(InterruptedError):
     pass
 
@@ -104,7 +108,7 @@ def _executable(name: str) -> str:
     try:
         return require(installation_root(), "ffmpeg")[name]
     except RuntimeError as exc:
-        raise MediaError(str(exc)) from exc
+        raise AsrSetupError(str(exc)) from exc
 
 
 def _run(command: list[str], cancelled=None, timeout=None) -> str:
@@ -362,40 +366,59 @@ def _read_pcm_audio(path: str):
         return np.frombuffer(audio.readframes(audio.getnframes()), dtype="<i2").astype(np.float32) / 32768.0
 
 
-def _whisper_turn_cues(cue, words, turns, offset):
-    """Only split where the model supplies matching raw words and real word times."""
-    if not turns or not words:
+def _whisper_turn_cues(cue, words, turns, offset, *, pauses=(), trace=None):
+    """Split only at boundaries supported by the timed words and the source text."""
+    if not words:
         return [cue]
     words = list(words)
-    if "".join(w.word for w in words).strip() != cue.original_text.strip():
+    raw = "".join(w.word for w in words)
+    if raw.strip() != cue.original_text.strip():
         return [cue]
-    groups = []
-    previous, group = None, []
-    for word in words:
-        if (not math.isfinite(word.start) or not math.isfinite(word.end)
-                or word.end <= word.start or (group and word.start < group[-1].end)):
-            return [cue]
-        turn = bisect_right(turns, (word.start + word.end) / 2)
-        if group and turn != previous:
-            groups.append(group)
-            group = []
-        group.append(word)
-        previous = turn
-    groups.append(group)
-    if len(groups) == 1:
+    pieces = [w.word for w in words]
+    pieces[0] = cue.original_text[:len(cue.original_text) - len(cue.original_text.lstrip())] + pieces[0].lstrip()
+    pieces[-1] = pieces[-1].rstrip() + cue.original_text[len(cue.original_text.rstrip()):]
+    times = [(float(w.start), float(w.end)) for w in words]
+    if any(not math.isfinite(t) for pair in times for t in pair):
         return [cue]
-    raw = ["".join(w.word for w in g) for g in groups]
-    # The provider occasionally attaches extra whitespace to either outer string.
-    raw[0] = cue.original_text[:len(cue.original_text) - len(cue.original_text.lstrip())] + raw[0].lstrip()
-    raw[-1] = raw[-1].rstrip() + cue.original_text[len(cue.original_text.rstrip()):]
-    parts = []
-    for i, (g, text) in enumerate(zip(groups, raw)):
-        start, end = max(cue.start, offset + float(g[0].start)), min(cue.end, offset + float(g[-1].end))
-        if not text.strip() or round(end, 3) <= round(start, 3):
-            return [cue]
-        parts.append(dataclasses.replace(cue, id=_cue_id(cue.id, i, start, end),
-                                         start=round(start, 3), end=round(end, 3),
-                                         text=text.strip(), original_text=text))
+    # Overlap between non-degenerate Whisper words makes the boundary ambiguous.
+    if any(a < prev_end - .001 and b > a for (_, prev_end), (a, b) in zip(times, times[1:])):
+        return [cue]
+    from .acoustic import repair_times, sentence_breaks
+    ends, separators, cursor = [], [], 0
+    for i, piece in enumerate(pieces):
+        cursor += len(piece)
+        ends.append(cursor)
+        tail = re.search(r"[^\w]*$", piece).group()
+        if i + 1 < len(pieces) and pieces[i+1][:1].isspace():
+            tail += " "
+        separators.append(tail)
+    lo, hi = cue.start-offset, cue.end-offset
+    relative = [(a-lo, b-lo) for a,b in times]
+    quiet = [(a-lo, b-lo) for a,b in pauses if a < hi and b > lo]
+    weights = [_acoustic_weight(w.word) for w in words]
+    preliminary = sentence_breaks(cue.original_text, ends, separators, relative, [t-lo for t in turns], quiet)
+    try:
+        relative, affected, repairs = repair_times(relative, weights, hi-lo, quiet, preliminary)
+    except ValueError:
+        if trace is not None:
+            trace.update(alignment_error="word_times_outside_monotonic_anchors")
+        return [dataclasses.replace(cue, uncertain=True)]
+    cuts = sentence_breaks(cue.original_text, ends, separators, relative, [t-lo for t in turns], quiet)
+    if trace is not None:
+        trace.update(timing_repairs=repairs, repair_time_origin=cue.start)
+    if len(cuts) == 1:
+        return [dataclasses.replace(cue, uncertain=cue.uncertain or bool(affected))]
+    parts, first = [], 0
+    for last in sorted(cuts):
+        text = "".join(pieces[first:last])
+        start = round(cue.start + relative[first][0], 3)
+        end = round(cue.start + relative[last-1][1], 3)
+        if not text.strip() or end <= start:
+            return [dataclasses.replace(cue, uncertain=True)]
+        parts.append(dataclasses.replace(cue, id=_cue_id(cue.id, first, start, end),
+                                         start=start, end=end, text=text.strip(), original_text=text,
+                                         uncertain=cue.uncertain or any(i in affected for i in range(first,last))))
+        first = last
     return parts
 
 
@@ -444,9 +467,13 @@ def _asr_worker(request_path: Path) -> int:
                 vad_filter = True
         if not vad_filter:
             _worker_emit({"progress": "未安装 Silero 语音活动检测模型，Whisper 将直接转写完整音轨。"})
-        segments, info = engine.transcribe(_read_pcm_audio(request["audio"]), language=language, task="transcribe",
+        from .acoustic import frame_energy, quiet_intervals
+        audio = _read_pcm_audio(request["audio"])
+        pauses = quiet_intervals(frame_energy(audio)) if audio is not None and len(audio) else []
+        pause_ends = [end for _, end in pauses]
+        segments, info = engine.transcribe(audio, language=language, task="transcribe",
                                           beam_size=5, vad_filter=vad_filter,
-                                          word_timestamps=bool(turns),
+                                          word_timestamps=True,
                                           initial_prompt=request.get("initial_prompt"),
                                           condition_on_previous_text=False,
                                           vad_parameters={"min_silence_duration_ms": 500})
@@ -467,10 +494,15 @@ def _asr_worker(request_path: Path) -> int:
             cue = Cue(id=_cue_id(request["source"], index, start, end), start=round(float(start), 3),
                       end=round(float(end), 3), text=raw_text.strip(), original_text=raw_text, uncertain=bool(uncertain))
             words = getattr(segment, "words", None)
-            parts = _whisper_turn_cues(cue, words, turns, request["start"])
+            trace = {}
+            local_turns = turns[bisect_right(turns, segment.start-.6):bisect_right(turns, segment.end+.6)]
+            start_index = bisect_right(pause_ends, segment.start)
+            stop_index = bisect_right(pause_ends, segment.end) + 1
+            parts = _whisper_turn_cues(cue, words, local_turns, request["start"],
+                                       pauses=pauses[start_index:stop_index], trace=trace)
             cues.extend(dataclasses.asdict(part) for part in parts)
             if request.get("raw_output"):
-                raw_segments.append({"source_id": cue.id, "start": cue.start, "end": cue.end, "text": raw_text,
+                raw_segments.append({**trace, "source_id": cue.id, "start": cue.start, "end": cue.end, "text": raw_text,
                                      "cue_ids": [part.id for part in parts],
                                      "words": [{"text": w.word, "start": float(request["start"] + w.start),
                                                 "end": float(request["start"] + w.end)} for w in (words or [])]})
@@ -490,13 +522,16 @@ def _asr_worker(request_path: Path) -> int:
         return 1
 
 
-def _alignment_to_cues(text: str, items, *, source: str, offset: float,
-                       duration: float, chunk_index: int, speaker_changes=()) -> list[Cue]:
-    """Group acoustically aligned units while retaining every raw character.
+def _acoustic_weight(token):
+    # A Chinese character is usually one syllable. A Latin word, even a long
+    # spelling, is a single aligner unit and should not get a per-letter floor.
+    return max(1, sum("\u3400" <= c <= "\u9fff" or "\U00020000" <= c <= "\U0002ffff" for c in token))
 
-    No equal-duration interpolation: a missing/mismatched alignment is an error.
-    Punctuation stays attached to the exact ASR text, not the aligner's cleaned text.
-    """
+
+def _alignment_to_cues(text: str, items, *, source: str, offset: float,
+                       duration: float, chunk_index: int, speaker_changes=(), pauses=(), trace=None) -> list[Cue]:
+    """Preserve all raw text; estimate collapsed spans only between acoustic anchors."""
+    from .acoustic import repair_times, sentence_breaks
     if not text.strip():
         return []
     units = list(items)
@@ -516,43 +551,58 @@ def _alignment_to_cues(text: str, items, *, source: str, offset: float,
         cursor += len(token)
     if cursor != len(normalized):
         raise MediaError("Qwen 时间对齐遗漏了原始转写字符，无法安全生成字幕。")
-    cues, first, raw_start = [], 0, 0
-    for i, item in enumerate(units):
-        boundary = locations[i + 1][0] if i + 1 < len(units) else len(text)
-        punctuation = text[locations[i][1]:boundary]
-        span = float(item.end_time) - float(units[first].start_time)
-        gap = float(units[i + 1].start_time) - float(item.end_time) if i + 1 < len(units) else 0
-        change = False
-        if speaker_changes and i + 1 < len(units):
-            following = units[i + 1]
-            here = (item.start_time + item.end_time) / 2
-            there = (following.start_time + following.end_time) / 2
-            change = bisect_right(speaker_changes, there) > bisect_right(speaker_changes, here)
-        should_break = (change or i == len(units) - 1 or any(c in punctuation for c in "。！？!?；;")
-                        or gap > 0.65 or boundary - raw_start >= 38 or span >= 7)
-        if not should_break:
-            continue
-        start = max(0.0, min(duration, float(units[first].start_time)))
-        end = max(0.0, min(duration, float(item.end_time)))
+    boundaries = [location[0] for location in locations[1:]] + [len(text)]
+    ends = [end for _, end in locations]
+    punctuation = [text[end:boundary] for end, boundary in zip(ends, boundaries)]
+    times = [(float(u.start_time), float(u.end_time)) for u in units]
+    if any(not math.isfinite(t) for pair in times for t in pair):
+        raise MediaError("Qwen 返回非有限时间，无法定位字幕。")
+    if all(b <= a for a, b in times):
+        raise MediaError("Qwen 对齐只返回零时长，缺少可信声学锚点。")
+    cuts = sentence_breaks(text, ends, punctuation, times, speaker_changes, pauses)
+    try:
+        times, affected, repairs = repair_times(times, [_acoustic_weight(u.text) for u in units],
+                                                duration, pauses, cuts)
+    except ValueError as exc:
+        raise MediaError(str(exc)) from exc
+    cuts = sentence_breaks(text, ends, punctuation, times, speaker_changes, pauses)
+    limited = {i for repair in repairs if repair["method"] in {"anchor_limited", "no_supported_span"}
+               for i in range(repair["unit_start"], repair["unit_end"])}
+    cues, cue_timings = [], []
+    first = raw_start = 0
+    for last in sorted(cuts):
+        start, end = round(offset + times[first][0], 3), round(offset + times[last-1][1], 3)
+        boundary = boundaries[last-1]
         if end <= start:
-            # Let a later real acoustic span absorb a zero-length unit; never invent duration.
-            if i < len(units) - 1:
+            # A measured span may follow contiguous collapsed units. Keep the
+            # words together when the anchors leave no support for a separate cue.
+            if last < len(units) and times[last][0] - times[last-1][1] < .24:
                 continue
-            if cues:
-                cues[-1].text += text[raw_start:boundary]
+            if cues and 0 <= start-cues[-1].end < .24:
                 cues[-1].original_text += text[raw_start:boundary]
+                cues[-1].text = cues[-1].original_text.strip()
                 cues[-1].uncertain = True
-                break
-            raise MediaError("Qwen 对齐只返回零时长，无法安全生成字幕。")
+                cue_timings[-1].update(unit_end=last, timing_basis="anchor_limited")
+            else:
+                if trace is None:
+                    raise MediaError("缺少相邻声学锚点，无法安全定位零时长原文。")
+                trace.setdefault("unplaced_unit_ranges", []).append([first, last])
+            first, raw_start = last, boundary
+            continue
+        estimated = any(i in affected for i in range(first,last))
         raw = text[raw_start:boundary]
-        # Qwen does not provide calibrated per-cue confidence through this API.
-        # Flag invalid unit durations, long spans and boundary-cut chunks for review.
-        bad_alignment = any(float(u.end_time) <= float(u.start_time) for u in units[first:i + 1])
-        cues.append(Cue(id=_cue_id(source, chunk_index * 100000 + len(cues), offset + start, offset + end),
-                        start=round(offset + start, 3), end=round(offset + end, 3),
-                        text=raw.strip(), original_text=raw,
-                        uncertain=bad_alignment or end - start > 15 or start < 0.05 or end > duration - 0.05))
-        first, raw_start = i + 1, boundary
+        cue = Cue(id=_cue_id(source, chunk_index * 100000 + len(cues), start, end),
+                  start=start, end=end, text=raw.strip(), original_text=raw,
+                  uncertain=estimated or end-start > 15 or start-offset < .05 or end-offset > duration-.05)
+        cues.append(cue)
+        basis = "bounded_estimate" if estimated else "aligned"
+        if any(i in limited for i in range(first,last)):
+            basis = "anchor_limited"
+        cue_timings.append({"cue_id": cue.id, "unit_start": first, "unit_end": last,
+                            "start": start, "end": end, "timing_basis": basis})
+        first, raw_start = last, boundary
+    if trace is not None:
+        trace.update(timing_repairs=repairs, cue_timings=cue_timings)
     return cues
 
 
@@ -589,35 +639,45 @@ def _qwen_worker(request: dict) -> int:
         max_inference_batch_size=1, max_new_tokens=512,
     )
     audio = _read_pcm_audio(request["audio"])
+    from .acoustic import frame_energy, quiet_intervals
+    align_audio = audio if request.get("alignment_audio", request["audio"]) == request["audio"] else _read_pcm_audio(request["alignment_audio"])
     sample_rate, chunk_samples = 16000, 30 * 16000
     if request.get("duration") is not None:
         audio = audio[:round(request["duration"] * sample_rate)]
     cues, raw_chunks = [], []
-    for chunk_index, (begin, finish) in enumerate(_audio_windows(len(audio), chunk_samples)):
+    energy = frame_energy(align_audio[:len(audio)])
+    for chunk_index, (begin, finish) in enumerate(_audio_windows(len(audio), chunk_samples, energy)):
         chunk = audio[begin:finish]
         offset, duration = begin / sample_rate, len(chunk) / sample_rate
         _worker_emit({"progress": f"Qwen 正在识别与对齐 {offset:.1f}–{offset + duration:.1f}/{len(audio)/sample_rate:.1f} 秒",
                       "metrics": {"activity": "识别与对齐", "done": offset, "total": len(audio)/sample_rate, "unit": "秒"}})
+        align_chunk = align_audio[begin:finish]
+        pauses = quiet_intervals(frame_energy(align_chunk))
         with torch.inference_mode():
             result = engine.transcribe(audio=(chunk, sample_rate), language=language,
-                                       context=context, return_time_stamps=True)[0]
+                                       context=context, return_time_stamps=False)[0]
+            alignment = (engine.forced_aligner.align(audio=(align_chunk, sample_rate), text=result.text,
+                         language=result.language or language)[0] if result.text.strip() else [])
+        trace = {}
         alignment_error = None
         try:
             changes = request.get("speaker_changes", [])
             local = [t - offset for t in changes[bisect_right(changes, offset):bisect_right(changes, offset + duration)]]
-            batch = _alignment_to_cues(result.text, result.time_stamps or [], source=request["source"],
+            batch = _alignment_to_cues(result.text, alignment, source=request["source"],
                                        offset=request["start"] + offset, duration=duration, chunk_index=chunk_index,
-                                       speaker_changes=local)
+                                       speaker_changes=local, pauses=pauses, trace=trace)
+            if trace.get("unplaced_unit_ranges"):
+                alignment_error = "部分零时长原文缺少相邻声学锚点，已保留在审计记录。"
         except MediaError as exc:
             # Keep the actual transcript and alignment in the audit artifact, but
             # never manufacture acoustic times or discard all preceding work.
             alignment_error, batch = str(exc), []
             _worker_emit({"progress": f"Qwen {offset:.1f}–{offset+duration:.1f} 秒无法可靠对齐；保留原文记录，不生成猜测时间字幕。"})
         cues.extend(dataclasses.asdict(cue) for cue in batch)
-        raw_chunks.append({"start": request["start"] + offset, "duration": duration,
+        raw_chunks.append({**trace, "quiet_intervals": pauses, "start": request["start"] + offset, "duration": duration,
                            "text": result.text, "language": result.language,
                            "alignment_error": alignment_error,
-                           "alignment": [dataclasses.asdict(item) for item in (result.time_stamps or [])]})
+                           "alignment": [dataclasses.asdict(item) for item in alignment]})
         if request.get("raw_output"):
             Path(request["raw_output"]).write_text(json.dumps({"model": repo, "complete": False,
                                                                 "chunks": raw_chunks}, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -628,7 +688,9 @@ def _qwen_worker(request: dict) -> int:
     if request.get("raw_output"):
         from importlib.metadata import version
         runtime = {p: version(p) for p in ("torch", "qwen-asr", "transformers", "accelerate")}
-        runtime.update({"device": device, "dtype": str(dtype), "torch_cuda": torch.version.cuda,
+        runtime.update({"alignment_input": request.get("alignment_input", "recognition_audio"),
+                        "recognition_input": request.get("recognition_input", "off"),
+                        "device": device, "dtype": str(dtype), "torch_cuda": torch.version.cuda,
                         "context": context, "model_revision": Path(paths[0]).name,
                         "aligner_revision": Path(paths[1]).name})
         if device == "cuda":
@@ -641,8 +703,11 @@ def _qwen_worker(request: dict) -> int:
     return 0
 
 
-def _audio_windows(sample_count: int, chunk_samples: int) -> list[tuple[int, int]]:
-    """Keep every sample, merging tiny decoder/resampler tails into the last window."""
+def _audio_windows(sample_count: int, chunk_samples: int, energy=None) -> list[tuple[int, int]]:
+    """Prefer quiet window edges. Legacy callers without PCM keep fixed windows."""
+    if energy is not None:
+        from .acoustic import pcm_windows
+        return list(pcm_windows(sample_count, chunk_samples, energy))
     windows = [(start, min(start + chunk_samples, sample_count))
                for start in range(0, sample_count, chunk_samples)]
     if len(windows) > 1 and windows[-1][1] - windows[-1][0] < 1600:
@@ -756,7 +821,7 @@ def _transcription_metadata(request: dict) -> dict:
         safe_runtime = {"device": request["device"]}
         if isinstance(runtime, dict):
             for key in ("torch", "qwen-asr", "transformers", "accelerate", "dtype", "torch_cuda",
-                        "context", "model_revision", "aligner_revision", "gpu_name", "peak_cuda_allocated_bytes_scope"):
+                        "context", "model_revision", "aligner_revision", "recognition_input", "alignment_input", "gpu_name", "peak_cuda_allocated_bytes_scope"):
                 value = runtime.get(key)
                 if isinstance(value, str):
                     safe_runtime[key] = value[:256]
@@ -771,9 +836,18 @@ def _transcription_metadata(request: dict) -> dict:
         chunks = audit.get("chunks")
         if isinstance(chunks, list):
             warnings, warning_count = [], 0
+            estimated_cues = limited_cues = 0
             for chunk in chunks:
                 if not isinstance(chunk, dict):
                     continue
+                timings = chunk.get("cue_timings")
+                if isinstance(timings, list):
+                    for timing in timings:
+                        basis = timing.get("timing_basis") if isinstance(timing, dict) else None
+                        if basis in ("bounded_estimate", "anchor_limited"):
+                            estimated_cues += 1
+                        if basis == "anchor_limited":
+                            limited_cues += 1
                 error = chunk.get("alignment_error")
                 if not isinstance(error, str) or not error:
                     continue
@@ -786,6 +860,8 @@ def _transcription_metadata(request: dict) -> dict:
                     warnings.append({"start": start, "duration": duration, "error": error[:256]})
             result.update(alignment_warnings=warnings, alignment_warning_count=warning_count,
                           alignment_warnings_truncated=warning_count > len(warnings))
+            if estimated_cues:
+                result.update(alignment_estimated_cue_count=estimated_cues, alignment_limited_cue_count=limited_cues)
     except (OSError, ValueError, TypeError, RecursionError, OverflowError):
         # Metadata is optional: successful, validated cues must remain usable.
         pass
@@ -811,14 +887,21 @@ def transcribe(media_path: Path, language: str = "yue", model: str = "large-v3-t
     if device not in {"auto", "cuda", "cpu"}:
         raise ValueError("设备须为 auto、cuda 或 cpu")
     _check_cancelled(cancelled)
-    if _qwen_model_id(model):
+    from .workspace_models import WHISPER_MODELS, weight_readiness
+    qwen_model = _qwen_model_id(model)
+    selected = model.lower().removeprefix("qwen/") if qwen_model else model
+    if not allow_model_downloads and (qwen_model or selected in WHISPER_MODELS):
+        readiness = weight_readiness(selected)
+        if not readiness.ready:
+            raise AsrSetupError(readiness.message)
+    if qwen_model:
         _qwen_python()  # Fail before extracting the media if optional environment is absent.
-    elif portable_root():
+    else:
         from .runtime_deps import require
         try:
             require(installation_root(), "local-asr")
         except RuntimeError as exc:
-            raise MediaError(str(exc)) from exc
+            raise AsrSetupError(str(exc)) from exc
     if portable_root():
         _executable("ffmpeg")  # Surface setup before a consented weight download.
         if device == "cuda":
@@ -826,10 +909,9 @@ def transcribe(media_path: Path, language: str = "yue", model: str = "large-v3-t
             is_qwen = bool(_qwen_model_id(model))
             check = cached_probe(installation_root(), "qwen" if is_qwen else "whisper-cuda")
             if not check.get("cuda_usable"):
-                raise MediaError("Qwen CUDA 不可用，可在语音识别设置中选择 CPU 或自动。" if is_qwen else check["detail"])
+                raise AsrSetupError("Qwen CUDA 不可用，可在语音识别设置中选择 CPU 或自动。" if is_qwen else check["detail"])
     if allow_model_downloads and is_clean_install():
-        from .workspace_models import WHISPER_MODELS, download_model
-        selected = model.lower().removeprefix("qwen/") if _qwen_model_id(model) else model
+        from .workspace_models import download_model
         if selected in QWEN_MODELS or selected in WHISPER_MODELS:
             download_model(selected, progress or (lambda _: None), cancelled or (lambda: False))
             allow_model_downloads = False
@@ -848,6 +930,10 @@ def transcribe(media_path: Path, language: str = "yue", model: str = "large-v3-t
                          suppress_bgm=suppress_bgm, progress=progress, cancelled=cancelled,
                          metadata_out=audio_metadata) as audio):
         folder = Path(temporary)
+        align_audio = audio
+        if _qwen_model_id(model) and suppress_bgm:
+            align_audio = extract_audio(media_path, folder / "original.wav", audio_track, start, duration,
+                                        cancelled=cancelled)
         changes = []
         if speaker_turns:
             from .speech import detect_speaker_changes, speech_model_status
@@ -860,7 +946,8 @@ def transcribe(media_path: Path, language: str = "yue", model: str = "large-v3-t
                                                  lambda: _check_cancelled(cancelled), progress)
             audio_metadata.update(speaker_method=method, speaker_change_count=len(changes),
                                   speaker_changes=[round(start + t, 3) for t in changes])
-        request = {"audio": str(audio), "model": model, "language": _normalise_language(language),
+        request = {"audio": str(audio), "alignment_audio": str(align_audio), "alignment_input": "original_track",
+                   "recognition_input": audio_metadata.get("bgm_method", "off"), "model": model, "language": _normalise_language(language),
                    "model_cache": str(confined_path(cache, "models")), "start": start, "result": str(folder / "result.json"),
                    "duration": duration, "speaker_changes": changes, "allow_model_downloads": allow_model_downloads,
                    "initial_prompt": initial_prompt,
@@ -883,7 +970,8 @@ def transcribe(media_path: Path, language: str = "yue", model: str = "large-v3-t
                     # A reused output dict must not retain a prior run's Qwen warnings.
                     for key in ("asr_device", "asr_model", "asr_backend", "asr_runtime", "asr_audit_path",
                                 "asr_audit_metadata_available", "alignment_warnings", "alignment_warning_count",
-                                "alignment_warnings_truncated", "bgm_method", "speaker_method",
+                                "alignment_warnings_truncated", "alignment_estimated_cue_count",
+                                "alignment_limited_cue_count", "bgm_method", "speaker_method",
                                 "speaker_change_count", "speaker_changes"):
                         metadata_out.pop(key, None)
                     metadata_out.update(metadata)

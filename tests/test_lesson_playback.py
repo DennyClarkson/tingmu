@@ -78,3 +78,33 @@ def test_legacy_draft_opens_text_model_settings(quick, qtbot):
     setup = find(window, "workspaceSetup")
     qtbot.waitUntil(lambda: setup.property("visible") and setup.property("section") == "text")
     assert engine._tingmu_warnings == []
+
+
+def test_short_caption_exports_match_configured_playback_while_document_keeps_acoustic_time(quick):
+    from tingmu.media import load_subtitles
+
+    _, bridge, _, _ = quick
+    bridge.setting("subtitle_min_ms", 900)
+    doc, translation_file = load_lesson(bridge, reviewed=True)
+    first = doc.cues[0]
+    first.end = .2  # A legacy verified split cannot be shown sequentially here.
+    next_cue = Cue("next", 3.2, 4.5, "Buenas.", translation="Bonjour.", explanation="Salutation.")
+    doc.cues.append(next_cue)
+    doc.metadata["translation_review"]["verified"][next_cue.id] = lesson_digest(next_cue, [])
+    source_file = bridge.store.save_document(doc, replace_existing=True).with_suffix(".srt")
+    bridge._load_document()
+    bridge._sync_cue(899, force=True)
+    assert bridge.activeCue["id"] == first.id
+    assert bridge.activeCue["sourceEnd"] == .2
+    assert bridge.activeCue["displayEnd"] == .9
+    assert bridge.activeCue["translationVerified"]
+    bridge._sync_cue(900, force=True)
+    assert not bridge.activeCue
+    for command, path, text in (("exportSubtitle", source_file, first.text),
+                                ("exportTranslation", translation_file, first.translation)):
+        bridge.command(command, {"path": path.name})
+        exported = bridge.store.data_dir / "exports" / path.name
+        assert exported.read_bytes() == path.read_bytes()
+        saved, following = load_subtitles(path)
+        assert (saved.text, saved.start, saved.end, following.start) == (text, 0, .9, 3.2)
+    assert bridge.store.load_document(doc.media_path, doc.language).cues[0] == first

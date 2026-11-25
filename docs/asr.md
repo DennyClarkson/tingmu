@@ -31,7 +31,7 @@ pwsh -File scripts/setup_qwen.ps1 -DownloadModels
 
 `scripts/qwen-requirements.lock.txt` 固定本次实际通过 GPU 验证的隔离环境包版本；安装器先从 PyTorch 官方 cu128 索引安装对应 Torch，再安装这些固定版本。大型下载缓存设在项目 `.cache/uv-qwen`，Python 下载、Hugging Face、Torch、pip 与临时目录也都在项目 `.cache` 内，不修改系统环境变量或主环境。早期安装遗留 C 盘缓存已迁移，详见 `disk-space.md`。
 
-Qwen 的输入按 30 秒窗口切开以限制显存；每个字/词的时间来自 ForcedAligner，再按标点、声学间隙和长度合并。合并保留原始字词、语气词和标点，不把平均分配的时间伪装成声学对齐。如果某窗口原文与对齐单位不匹配或只有零时长，则明确提示，保留该窗口原始文字和单位供复核，并略过无法可靠定时的字幕；其余窗口继续。默认审计文件在 `.cache/qwen-audit`，探针可指定 `reports/private/*.alignment.json`。分窗边界可能截词，零时长单位、长句和边缘片段会提示复核。当前接入仅允许 ForcedAligner 支持的 11 种语言。
+Qwen 在约 24–30 秒的窗口尾部寻找持续静音；连续语音取平滑能量谷。启用人声分离时，以人声轨识别、原轨对齐。句末标点优先，其次为有停顿或换人支持的子句标点。坍缩单元只在可信边界内重分配，估算句标为 uncertain。审计保留原始文本、对齐单位、实际切窗和修复依据。ForcedAligner 支持 11 种语言。
 
 `.alignment.json` 保存每个原始识别窗口及其完整对齐单位，供审计对比。`original_text` 保留模型原始字形；繁体显示转换是后续显示层操作，**不能恢复模型漏掉的语气词，也不能证明听写正确**。不通过提示词硬塞“喎、啫、㗎”等字来伪造识别改善。
 

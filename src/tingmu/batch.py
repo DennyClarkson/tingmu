@@ -28,7 +28,7 @@ def find_subtitle(media_path: Path, target_language: str) -> Path | None:
 
 def _failure_details(error, document):
     """Expose our safe validation errors, never arbitrary upstream payloads."""
-    from .media import MediaError
+    from .media import AsrSetupError, MediaError
     from .providers import ProviderError
 
     metadata = document.metadata if document else {}
@@ -50,6 +50,8 @@ def _failure_details(error, document):
             reason = f"第 {number} 句（{seconds // 60:02d}:{seconds % 60:02d}） · {reason}"
     elif isinstance(error, FileNotFoundError):
         reason = "找不到视频或所需文件，请检查原文件位置。"
+    elif isinstance(error, AsrSetupError):
+        reason = redact_text(str(error))[:300]
     elif isinstance(error, MediaError):
         reason = "请检查工作区的语音识别方式、所选音轨和模型安装状态。"
     else:

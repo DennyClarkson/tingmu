@@ -45,8 +45,37 @@ Window {
         anchors.margins: 20
         requested: root.visible
         sourceComponent: RowLayout {
+            id:editor
             spacing:20
             readonly property bool blank: !label.text
+            property string savedFields: ""
+            property string formError: ""
+            property string incompleteProfileId: ""
+            readonly property bool dirty: JSON.stringify(fields()) !== savedFields || !!secret.text
+            readonly property bool valid: !!label.text.trim() && !!endpoint.text.trim() && maxTokens.acceptableInput
+            function fields() {
+                return {label:label.text.trim(), provider:root.provider, protocol:root.protocol,
+                        base_url:endpoint.text.trim(), model:modelName.text.trim(),
+                        key_source:["environment", "manual", "none"][keySource.currentIndex],
+                        env_var:envName.text.trim(), max_tokens:Number(maxTokens.text),
+                        reasoning_effort:reasoning.values[reasoning.currentIndex]}
+            }
+            function saveConnection() {
+                formError = ""
+                if (!valid) {
+                    formError = qsTranslate("Tingmu", "请补全显示名称、API 地址和有效的输出上限。")
+                    return false
+                }
+                const payload = fields()
+                payload.id = root.profileId
+                if (secret.text) payload.apiKey = secret.text
+                const savedId = backend.command("saveModel", payload)
+                if (!savedId) return false
+                root.profileId = savedId
+                secret.clear()
+                savedFields = JSON.stringify(fields())
+                return true
+            }
             function clearSecret() { secret.clear() }
             function populate(p){
                 showRoles=false;advanced=false
@@ -55,13 +84,14 @@ Window {
                 envName.text=p.env_var || "";keySource.currentIndex=p.key_source==="manual" ? 1 : p.key_source==="none" ? 2 : 0
                 maxTokens.text=String(p.max_tokens || 4096);reasoning.currentIndex=Math.max(0,reasoning.values.indexOf(p.reasoning_effort || ""))
                 secret.clear()
+                formError="";incompleteProfileId="";savedFields=JSON.stringify(fields())
             }
-            Connections{target:backend;function onModelsChanged(){if(!root.profileId && label.text){var p=(backend.modelProfiles || []).find(function(p){return p.label===label.text.trim() && p.base_url.replace(/\/$/,"")===endpoint.text.trim().replace(/\/$/,"") && p.model===modelName.text.trim()});if(p)root.profileId=p.id}}}
 
             ColumnLayout {
                 Layout.preferredWidth:root.width < 760 ? 180 : 210;Layout.maximumWidth:222;Layout.fillHeight:true;spacing:10
                 Text{Layout.fillWidth:true;wrapMode:Text.Wrap;text:qsTranslate("Tingmu", "全局文本模型");color:Theme.text;font.family:Theme.serif;font.pixelSize:22}
-                NavButton{objectName:"globalModelRoles";text:qsTranslate("Tingmu", "任务分配");Layout.fillWidth:true;checked:root.showRoles;onClicked:root.showRoles=true}
+                NavButton{objectName:"globalModelRoles";text:!root.showRoles && editor.dirty ? qsTranslate("Tingmu", "保存并分配任务") : qsTranslate("Tingmu", "任务分配");Layout.fillWidth:true;checked:root.showRoles;enabled:!backend.modelState.modelBusy;onClicked:{if(!editor.dirty || editor.saveConnection())root.showRoles=true}}
+                Text{objectName:"modelManagerError";Layout.fillWidth:true;visible:!!text;text:editor.formError || qsTranslate("TingmuStatus", backend.modelState.error || "");color:Theme.error;font.family:Theme.font;font.pixelSize:12;wrapMode:Text.Wrap}
                 Text{text:qsTranslate("Tingmu", "连接");color:Theme.muted;font.family:Theme.font;font.pixelSize:13}
                 TButton{objectName:"newModelButton";text:qsTranslate("Tingmu", "＋ 新建连接");Layout.fillWidth:true;onClicked:root.populate((backend.modelPresets || [])[0] || {})}
                 ListView {
@@ -122,17 +152,16 @@ Window {
                     Choice{id:keySource;objectName:"modelKeySource";Layout.fillWidth:true;translateOptions:true;model:["环境变量","输入密钥 · 本机保护","无需密钥 · 本地服务"]}
                     Field{id:envName;objectName:"modelEnvName";Layout.fillWidth:true;visible:keySource.currentIndex===0;placeholderText:["ollama","lmstudio","local_compatible"].includes(root.provider) ? qsTranslate("Tingmu", "本机服务的环境变量名") : "OPENAI_API_KEY"}
                     Field{id:secret;objectName:"modelSecret";Layout.fillWidth:true;visible:keySource.currentIndex===1;echoMode:TextInput.Password;placeholderText:root.profileId ? qsTranslate("Tingmu", "输入新密钥以替换；留空保留原密钥") : qsTranslate("Tingmu", "API 密钥（保存后不再显示）")}
-                    Text{Layout.fillWidth:true;visible:!!backend.modelState.error;text:qsTranslate("TingmuStatus", backend.modelState.error || "") || "";color:Theme.error;font.family:Theme.font;font.pixelSize:12;wrapMode:Text.Wrap}
                     Text{text:qsTranslate("Tingmu", "模型名称（可先留空，保存后加载列表）");color:Theme.muted;font.family:Theme.font;font.pixelSize:12}
                     Field{id:modelName;objectName:"modelName";Layout.fillWidth:true;placeholderText:qsTranslate("Tingmu", "手动输入模型 ID")}
                     RowLayout {
                         Layout.fillWidth:true
-                        Choice{objectName:"discoveredModelChoice";Layout.fillWidth:true;model:root.discoveredChoices;onActivated:modelName.text=currentText}
+                        Choice{objectName:"discoveredModelChoice";Layout.fillWidth:true;model:root.discoveredChoices;currentIndex:model.indexOf(modelName.text);displayText:currentIndex < 0 ? qsTranslate("Tingmu", "选择模型") : currentText;onActivated:(index)=>modelName.text=model[index]}
                         TButton{text:backend.modelState.modelBusy ? qsTranslate("Tingmu", "加载中…") : qsTranslate("Tingmu", "加载列表");enabled:!!root.profileId && !backend.modelState.modelBusy;onClicked:backend.command("discoverModels",{id:root.profileId})}
                     }
                     Text{Layout.fillWidth:true;text:!root.profileId ? qsTranslate("Tingmu", "先保存连接，再加载模型列表；也可直接手填模型。") : root.discoveredChoices.length ? qsTranslate("Tingmu", "此连接已缓存 ")+root.discoveredChoices.length+qsTranslate("Tingmu", " 个模型；可选择或手动输入模型 ID。") : qsTranslate("Tingmu", "此连接还没有模型列表，可加载列表或直接手填模型。");color:Theme.muted;font.family:Theme.font;font.pixelSize:11;wrapMode:Text.Wrap}
                     RowLayout{
-                        TButton{objectName:"saveModelButton";text:qsTranslate("Tingmu", "保存连接");primary:true;enabled:label.text.trim() && endpoint.text.trim() && maxTokens.acceptableInput && !backend.modelState.modelBusy;onClicked:{var payload={id:root.profileId,label:label.text.trim(),provider:root.provider,protocol:root.protocol,base_url:endpoint.text.trim(),model:modelName.text.trim(),key_source:["environment","manual","none"][keySource.currentIndex],env_var:envName.text.trim(),max_tokens:Number(maxTokens.text),reasoning_effort:reasoning.values[reasoning.currentIndex]};if(secret.text)payload.apiKey=secret.text;backend.command("saveModel",payload);secret.clear()}}
+                        TButton{objectName:"saveModelButton";text:qsTranslate("Tingmu", "保存连接");primary:true;enabled:editor.valid && !backend.modelState.modelBusy;onClicked:editor.saveConnection()}
                         TButton{danger:true;text:qsTranslate("Tingmu", "删除连接");enabled:!!root.profileId && !backend.modelState.modelBusy;onClicked:deleteConfirm.open()}
                     }
                     TButton{text:root.advanced ? qsTranslate("Tingmu", "收起高级选项") : qsTranslate("Tingmu", "高级选项");quiet:true;onClicked:root.advanced=!root.advanced}
@@ -156,10 +185,26 @@ Window {
                         required property var modelData
                         Layout.fillWidth:true
                         Text{Layout.preferredWidth:98;wrapMode:Text.Wrap;text:modelData.label;color:Theme.muted;font.family:Theme.font;font.pixelSize:12}
-                        Choice{objectName:"globalRole_"+modelData.role;Layout.fillWidth:true;optionLabel:(i,value)=>i===0 ? qsTranslate("Tingmu",value) : value;model:[{id:"",label:"沿用默认设置"}].concat(backend.modelProfiles || []);textRole:"label";currentIndex:Math.max(0,model.findIndex(function(p){return p.id===backend.settings[modelData.role+"_profile_id"]}));onActivated:backend.command("selectModel",{role:modelData.role,id:model[currentIndex].id})}
+                        Choice{
+                            objectName:"globalRole_"+modelData.role;Layout.fillWidth:true
+                            optionLabel:(i,value)=>i===0 ? qsTranslate("Tingmu",value) : value
+                            model:[{id:"",label:"沿用默认设置"}].concat(backend.modelProfiles || []);textRole:"label"
+                            function assignedIndex(){return Math.max(0,model.findIndex(p=>p.id===backend.settings[modelData.role+"_profile_id"]))}
+                            currentIndex:assignedIndex()
+                            onActivated:function(index){
+                                const profile=model[index]
+                                editor.incompleteProfileId="";editor.formError=""
+                                if(profile.id && !(profile.model || "").trim()){
+                                    editor.incompleteProfileId=profile.id
+                                    editor.formError=qsTranslate("Tingmu", "请先为连接选择或填写模型 ID 并保存，再分配用途。")
+                                }else backend.command("selectModel",{role:modelData.role,id:profile.id})
+                                currentIndex=Qt.binding(assignedIndex)
+                            }
+                        }
                         Text{Layout.preferredWidth:84;wrapMode:Text.Wrap;text:root.roleStatus(modelData.role);color:Theme.muted;font.family:Theme.font;font.pixelSize:11}
                     }
                 }
+                TButton{objectName:"editIncompleteModel";visible:!!editor.incompleteProfileId;text:qsTranslate("Tingmu", "编辑连接");onClicked:{const p=(backend.modelProfiles || []).find(p=>p.id===editor.incompleteProfileId);if(p)root.populate(p)}}
                 Item{Layout.fillHeight:true}
             }
         }

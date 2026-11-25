@@ -4,6 +4,10 @@ function time(ms) {
     var h = Math.floor(n / 3600), m = Math.floor(n / 60) % 60, s = n % 60
     return (h ? h + ":" : "") + (m < 10 ? "0" : "") + m + ":" + (s < 10 ? "0" : "") + s
 }
+function subtitleTime(seconds) {
+    var ms = Math.max(0, Math.round((seconds || 0) * 1000))
+    return time(ms) + "." + String(ms % 1000).padStart(3, "0")
+}
 var statuses = {
     cleared: "已清除", queued: "等待", running: "处理中", paused: "已暂停", failed: "失败",
     completed: "已完成", ready: "已准备", subtitleOnly: "仅有原文字幕", lessonDraft: "译稿待复核",

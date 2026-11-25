@@ -99,6 +99,9 @@ def test_running_subprocess_cancelled_promptly():
 
 
 def test_auto_cuda_failure_retries_cpu_without_duplicate_cues(tmp_path, monkeypatch):
+    from tingmu.workspace_models import ModelReadiness
+    monkeypatch.setattr("tingmu.workspace_models.weight_readiness", lambda _: ModelReadiness(True, "ready", ""))
+    monkeypatch.setattr("tingmu.runtime_deps.require", lambda *args: {"ready": True})
     monkeypatch.setattr(media, "_cache_root", lambda: tmp_path)
     monkeypatch.setattr(media, "extract_audio", lambda *a, **k: tmp_path / "audio.wav")
     attempts = []

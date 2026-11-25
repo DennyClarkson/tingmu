@@ -10,6 +10,52 @@ import time
 import uuid
 
 
+def open_smoke_notebook(window, bridge):
+    """Write a synthetic note in the isolated workspace and open its real QML preview."""
+    from PySide6.QtCore import QMetaObject, QObject
+
+    bridge.command("saveNotebook", {
+        "revision": bridge.notebooks["revision"],
+        "markdown": "## Smoke heading\n\n[Smoke link](https://example.invalid/)\n\n"
+                    "| Word | Meaning |\n|---|---|\n| One | First |\n\n```text\n<literal>\n```\n",
+    })
+    QMetaObject.invokeMethod(window.findChild(QObject, "learningViewButton"), "click")
+    QMetaObject.invokeMethod(window.findChild(QObject, "notesTab"), "click")
+
+
+def notebook_is_formatted(window):
+    from PySide6.QtCore import QObject
+    from PySide6.QtGui import QTextDocument, QTextTable
+
+    preview = window.findChild(QObject, "notebookPreview")
+    if not preview or not preview.isVisible():
+        return False
+    # Repeater delegates are visual children, not QObject children of the preview.
+    items = [preview]
+    heading = link = table = code = False
+    while items:
+        item = items.pop()
+        items.extend(item.childItems())
+        if item.objectName() != "markdownBody" or not item.isVisible():
+            continue
+        wrapper = item.property("textDocument")
+        doc = wrapper.textDocument() if hasattr(wrapper, "textDocument") else None
+        if not isinstance(doc, QTextDocument):
+            return False
+        stamp = doc.property("tingmu_format_stamp")
+        if not stamp:
+            code |= doc.toPlainText().rstrip("\n") == "<literal>"
+            continue
+        accent = stamp.split("|")[1]
+        formats = doc.find("Smoke heading").blockFormat()
+        heading |= formats.headingLevel() == 2 and formats.lineHeight() == 125
+        anchor = doc.find("Smoke link").charFormat()
+        link |= anchor.anchorHref() == "https://example.invalid/" and anchor.foreground().color().name() == accent
+        table |= any(isinstance(frame, QTextTable) and frame.rows() == 2 and frame.format().cellPadding() == 7
+                     for frame in doc.rootFrame().childFrames())
+    return heading and link and table and code
+
+
 def check_workspace(window, bridge, checks):
     """Observe initial visibility before requesting the lazily loaded settings form."""
     from PySide6.QtCore import QMetaObject, QObject
@@ -75,6 +121,7 @@ def run_smoke(root: Path, media: Path | None = None) -> int:
         "Source Han Sans SC", "Source Han Serif SC", "Source Sans 3", "Source Code Pro"))
     report["checks"]["v4_learning_workspace"] = bool(bridge.notebooks.get("revision")) and bool(bridge.activeSessionId)
     report["checks"]["model_presets"] = len(bridge.modelPresets) >= 7
+    report["checks"]["notebook_markdown_preview"] = False
     poll_workspace = None
     expect_first_run = is_clean_install()
     skipped = False
@@ -155,6 +202,14 @@ def run_smoke(root: Path, media: Path | None = None) -> int:
         elif poll_workspace:
             poll_workspace()
         if phase == "waiting_for_ui" and report["checks"].get("workspace_llm_concurrency"):
+            open_smoke_notebook(windows[0], bridge)
+            phase = "formatting_notebook"
+        elif phase == "formatting_notebook" and notebook_is_formatted(windows[0]):
+            from PySide6.QtCore import Q_ARG
+            report["checks"]["notebook_markdown_preview"] = True
+            QMetaObject.invokeMethod(windows[0], "changeView", Q_ARG("QVariant", "watch"))
+            phase = "waiting_for_video"
+        elif phase == "waiting_for_video":
             sink = player.videoSink()
             if sink:
                 sink.videoFrameChanged.connect(frame_arrived, Qt.ConnectionType.QueuedConnection)

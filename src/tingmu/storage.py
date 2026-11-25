@@ -91,6 +91,9 @@ class Store:
         return ModelRegistry(self.data_dir)
 
     def load_settings(self) -> AppSettings:
+        return self.model_registry.load_roles(self._workspace_settings())
+
+    def _workspace_settings(self) -> AppSettings:
         from .runtime import is_clean_install
 
         settings = AppSettings()
@@ -103,7 +106,7 @@ class Store:
         except (OSError, ValueError, TypeError):
             if is_clean_install():
                 settings.text_models_enabled = settings.cloud_text_enabled = False
-        return self.model_registry.load_roles(settings)
+        return settings
 
     def save_settings(self, settings: AppSettings) -> None:
         from .global_models import workspace_preferences
@@ -149,15 +152,14 @@ class Store:
                     os.fsync(stream.fileno())
         return backup
 
-    @staticmethod
-    def _render_srt(document, path):
+    def _render_srt(self, document, path):
         from .lesson_material import translated_subtitles
         from .media import save_srt
         from .timeline import SubtitleTimeline
-        # Zero-length source markers have no playable caption interval.
-        save_srt([cue for cue in SubtitleTimeline(document.cues).cues if cue.end > cue.start], path)
+        timeline = SubtitleTimeline.for_document(document, self._workspace_settings())
+        save_srt(timeline.export_cues(), path)
         translated = path.with_suffix(".translation.srt")
-        cues = translated_subtitles(document)
+        cues = translated_subtitles(document, timeline=timeline)
         if cues:
             save_srt(cues, translated)
         else:

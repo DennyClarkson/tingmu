@@ -108,6 +108,7 @@ class SettingsController:
                 if name in ("asr_backend", "asr_endpoint", "local_asr_endpoint") and value != before:
                     self.ports.set_state(speechModelChoices=[])
             limits = {
+                "subtitle_min_ms": (0, 10000),
                 "subtitle_gap_ms": (0, 1500),
                 "subtitle_offset_ms": (-600000, 600000),
                 "overlay_opacity": (0.15, 1.0),
@@ -153,7 +154,7 @@ class SettingsController:
                 self.ports.load_document()
                 self.ports.load_personal()
                 self.ports.refresh_library()
-            elif name == "subtitle_gap_ms":
+            elif name in ("subtitle_min_ms", "subtitle_gap_ms"):
                 self.ports.set_document(self.ports.document())
             elif name == "subtitle_offset_ms":
                 self.ports.sync_cue(self.ports.player_position())

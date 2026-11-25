@@ -120,8 +120,10 @@ Item {
             Text { textFormat:Text.PlainText; text:qsTranslate("Tingmu", "字幕时间轴"); color:Theme.text; font.family:Theme.font; font.pixelSize:16 }
             Text { textFormat:Text.PlainText; text:qsTranslate("Tingmu", "字幕偏移 · 毫秒"); color:Theme.muted; font.family:Theme.font; font.pixelSize:11 }
             Field { Layout.fillWidth:true; text:String(backend.settings.subtitle_offset_ms || 0); validator:IntValidator{bottom:-600000;top:600000} onEditingFinished:backend.setting("subtitle_offset_ms",Number(text)) }
+            Text { textFormat:Text.PlainText; text:qsTranslate("Tingmu", "字幕最短展示 · 毫秒"); color:Theme.muted; font.family:Theme.font; font.pixelSize:11 }
+            Field { Layout.fillWidth:true; text:String(backend.settings.subtitle_min_ms); validator:IntValidator{bottom:0;top:10000} onEditingFinished:backend.setting("subtitle_min_ms",Number(text)) }
             Text { textFormat:Text.PlainText; text:qsTranslate("Tingmu", "短句间隙衔接 · 毫秒"); color:Theme.muted; font.family:Theme.font; font.pixelSize:11 }
-            Field { Layout.fillWidth:true; text:String(backend.settings.subtitle_gap_ms || 500); validator:IntValidator{bottom:0;top:1500} onEditingFinished:backend.setting("subtitle_gap_ms",Number(text)) }
+            Field { Layout.fillWidth:true; text:String(backend.settings.subtitle_gap_ms); validator:IntValidator{bottom:0;top:1500} onEditingFinished:backend.setting("subtitle_gap_ms",Number(text)) }
             TButton { text:qsTranslate("Tingmu", "导出字幕"); onClicked:backend.command("exportSubtitle",{}) }
             TButton { text:qsTranslate("Tingmu", "导出")+qsTranslate("TingmuLanguage", backend.lessonModel.language || "")+qsTranslate("Tingmu", "译稿…");enabled:!!backend.mediaState.lessonCounts && backend.mediaState.lessonCounts.total>0 && (backend.mediaState.lessonCounts.verified + (backend.mediaState.lessonCounts.provided || 0))===backend.mediaState.lessonCounts.total;onClicked:backend.command("exportTranslation",{}) }
             Text { textFormat:Text.PlainText; Layout.fillWidth:true; text:qsTranslate("Tingmu", "显示衔接不会覆盖源字幕与原始声学时间。"); color:Theme.muted; font.family:Theme.font; font.pixelSize:11; wrapMode:Text.Wrap }

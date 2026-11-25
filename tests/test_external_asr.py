@@ -145,13 +145,16 @@ def test_endpoint_and_secret_validation(tmp_path):
     assert not (tmp_path / "audio-credential.json").exists()
 
 
-def test_teaching_only_reuses_user_correction_without_audio_upload(tmp_path, monkeypatch):
+@pytest.mark.parametrize("seconds,expected_display", [
+    (2, ["Come ", "on!"]), (1, ["Come on!"]),
+])
+def test_teaching_only_reuses_user_correction_without_audio_upload(tmp_path, monkeypatch, seconds, expected_display):
     from tingmu.timeline import SubtitleTimeline
 
     movie = tmp_path / "lesson.mp4"
     movie.write_bytes(b"video")
     sidecar = movie.with_suffix(".srt")
-    sidecar.write_text("1\n00:00:00,000 --> 00:00:01,000\nCome in!\n", encoding="utf-8")
+    sidecar.write_text(f"1\n00:00:00,000 --> 00:00:0{seconds},000\nCome in!\n", encoding="utf-8")
     store = Store(tmp_path / "workspace")
     settings = AppSettings(asr_backend="external", allow_audio_upload=False, cloud_text_enabled=False,
                            target_language="en")
@@ -168,4 +171,6 @@ def test_teaching_only_reuses_user_correction_without_audio_upload(tmp_path, mon
     assert queue.run()[0]["status"] == "completed"
     updated = store.load_document(str(movie), settings.language)
     assert updated.cues[0].original_text == "Come in!"
-    assert [c.text for c in SubtitleTimeline(updated.cues).cues] == ["Come ", "on!"]
+    assert updated.cues[0].text == "Come on!"
+    assert updated.cues[0].segmented_texts == ["Come ", "on!"]
+    assert [c.text for c in SubtitleTimeline(updated.cues).cues] == expected_display

@@ -90,7 +90,7 @@ def test_size_and_document_gates(release, monkeypatch):
 
 @pytest.mark.parametrize("missing", [
     "qml_window", "isolated_data", "portable_imports", "bundled_open_fonts", "first_run_guide",
-    "first_run_skip_persisted", "workspace_llm_concurrency", "no_new_bytecode",
+    "first_run_skip_persisted", "workspace_llm_concurrency", "notebook_markdown_preview", "no_new_bytecode",
     "decode", "seek", "rate", "audio_switch", "pause",
 ])
 def test_missing_smoke_check_blocks_publication(release, missing):

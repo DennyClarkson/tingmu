@@ -9,6 +9,9 @@ from tingmu import media
 
 @pytest.fixture
 def isolated_transcribe(tmp_path, monkeypatch):
+    from tingmu.workspace_models import ModelReadiness
+    monkeypatch.setattr("tingmu.workspace_models.weight_readiness", lambda _: ModelReadiness(True, "ready", ""))
+    monkeypatch.setattr("tingmu.runtime_deps.require", lambda *args: {"ready": True})
     monkeypatch.setattr(media, "_cache_root", lambda: tmp_path)
     monkeypatch.setattr(media, "_qwen_python", lambda: Path(sys.executable))
     monkeypatch.setattr(media, "extract_audio", lambda *args, **kwargs: tmp_path / "audio.wav")

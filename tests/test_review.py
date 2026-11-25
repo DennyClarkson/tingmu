@@ -99,6 +99,9 @@ class ReviewValidationTests(unittest.TestCase):
         row = dict(id="fast", text=source.text, uncertain=False, reason="", segmented_texts=["字" * 15] * 2)
         out, metadata = validate_review(json.dumps({"cues": [row]}), [source], LanguagePair())
         self.assertTrue(metadata["fast"]["short_display_estimate"])
+        self.assertEqual(out[0].segmented_texts, [source.text])
+        self.assertEqual(metadata["fast"]["timing_guard"]["proposed_end_offsets"], [15, 30])
+        self.assertEqual(metadata["fast"]["timing_basis"], "source")
         self.assertEqual((out[0].start, out[0].end), (1, 1.2))
 
     def test_exact_layout_repairs_preserve_text_identity_raw_and_time(self):

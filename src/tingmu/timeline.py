@@ -5,9 +5,14 @@ from dataclasses import dataclass, replace
 from itertools import accumulate
 import unicodedata
 
-from .models import Cue, Token
+from .models import AppSettings, Cue, Token
 
 MAX_LINE_WIDTH = 42
+MIN_SPLIT_MS = 600
+# Preserve a visible pause when borrowing time outside the short-gap bridge.
+BREATHING_GAP_MS = 100
+# Treat a pause longer than six seconds as a break in dialogue.
+MAX_DIALOGUE_PAUSE_MS = 6000
 
 
 def display_width(text: str) -> int:
@@ -66,38 +71,53 @@ def _slice_tokens(cue: Cue, start: int, end: int) -> list[Token]:
     return result
 
 
+def readable_split_ends(source: Cue, parts: list[str]) -> list[float]:
+    """Return the proportional boundaries only if every displayed part is readable."""
+    if len(parts) < 2:
+        return []
+    widths = [display_width(part) for part in parts]
+    total = sum(widths)
+    if not total:
+        return []
+    ends = [source.start + (source.end - source.start) * columns / total
+            for columns in accumulate(widths[:-1])]
+    ends.append(source.end)
+    boundaries_ms = [round(t * 1000) for t in (source.start, *ends)]
+    if any(right - left < MIN_SPLIT_MS for left, right in zip(boundaries_ms, boundaries_ms[1:])):
+        return []
+    return ends
+
+
 def _display_parts(source: Cue, translated_segments=()):
     parts = source.segmented_texts
     valid = (isinstance(parts, list) and bool(parts)
              and all(isinstance(p, str) and p.strip() and display_width(p) <= MAX_LINE_WIDTH for p in parts)
              and "".join(parts) == source.text)
-    if not valid or len(parts) == 1:
+    ends = readable_split_ends(source, parts) if valid else []
+    if not ends:
         yield replace(source, tokens=list(source.tokens)), "source"
         return
-    total = sum(display_width(p) for p in parts)
-    elapsed, offset = 0, 0
-    for index, part in enumerate(parts):
-        next_elapsed = elapsed + display_width(part)
-        start = source.start + (source.end - source.start) * elapsed / total
-        end = source.end if index == len(parts) - 1 else source.start + (source.end - source.start) * next_elapsed / total
+    start, offset = source.start, 0
+    for index, (part, end) in enumerate(zip(parts, ends)):
         translation = translated_segments[index] if len(translated_segments) == len(parts) else source.translation
         yield replace(source, id=f"{source.id}:part:{index + 1}", start=start, end=end, text=part, translation=translation,
                       tokens=_slice_tokens(source, offset, offset + len(part)), segmented_texts=[]), "text_proportional"
-        elapsed, offset = next_elapsed, offset + len(part)
+        start, offset = end, offset + len(part)
 
 
 class SubtitleTimeline:
-    """Keep every source separate and bridge only an actual short blank gap.
+    """Derive readable intervals without changing replay times or delaying the next cue."""
 
-    min_duration_ms and companion_hold_ms are accepted for old saved settings but
-    deliberately do not extend or delay a cue. Split display times are estimates
-    within the untouched source interval, explicitly marked text_proportional.
-    Both surfaces look up the current position directly, including backward seeks.
-    """
+    @classmethod
+    def for_document(cls, document, settings=None):
+        settings = settings or AppSettings()
+        return cls(document.cues if document else [], min_duration_ms=settings.subtitle_min_ms,
+                   gap_fill_ms=settings.subtitle_gap_ms,
+                   translation_review=document.metadata.get("translation_review") if document else None)
 
     def __init__(self, cues: list[Cue], min_duration_ms: int = 1200, gap_fill_ms: int = 500,
                  companion_hold_ms: int = 2200, *, translation_review=None):
-        self.minimum = int(min_duration_ms)
+        self.minimum = max(0, int(min_duration_ms))
         self.hold = int(companion_hold_ms)
         self.gap = max(0, min(1500, int(gap_fill_ms)))
         from .translation_review import translation_verified
@@ -117,14 +137,27 @@ class SubtitleTimeline:
         for index, segment in enumerate(self.segments):
             if segment.end_ms <= segment.start_ms:
                 continue
-            if owner is not None and 0 < segment.start_ms - covered_until <= self.gap:
-                self.segments[owner] = replace(self.segments[owner], end_ms=segment.start_ms)
+            gap_ms = segment.start_ms - covered_until
+            if owner is not None and 0 < gap_ms <= MAX_DIALOGUE_PAUSE_MS:
+                previous = self.segments[owner]
+                if gap_ms <= self.gap:
+                    self.segments[owner] = replace(previous, end_ms=segment.start_ms)
+                else:
+                    end_ms = min(previous.start_ms + self.minimum, segment.start_ms - BREATHING_GAP_MS)
+                    if end_ms > covered_until:
+                        self.segments[owner] = replace(previous, end_ms=end_ms)
             if segment.end_ms >= covered_until:
                 covered_until, owner = segment.end_ms, index
         self._starts = [s.start_ms for s in self.segments]
         self._ends = [s.end_ms for s in self.segments]
         self._max_ends = list(accumulate(self._ends, max))
         self._source_ids = {s.cue.id: s.source_ids for s in self.segments}
+
+    def export_cues(self, *, translated=False) -> list[Cue]:
+        """Export the same intervals and split decisions that the player shows."""
+        return [replace(s.cue, start=s.start_ms / 1000, end=s.end_ms / 1000,
+                        text=s.cue.translation if translated else s.cue.text)
+                for s in self.segments if s.end_ms > s.start_ms]
 
     def _at(self, position_ms: int) -> Cue | None:
         index = bisect_right(self._starts, position_ms) - 1

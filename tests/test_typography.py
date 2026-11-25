@@ -1,6 +1,12 @@
+from PySide6.QtCore import QObject
 from PySide6.QtGui import QTextDocument, QTextTable
 
 from tingmu.quick.typography import format_document
+
+
+def test_unavailable_editor_document_is_ignored():
+    for document in (None, QObject()):
+        format_document(document)
 
 
 def test_preview_typography_is_readable_idempotent_and_keeps_text(qapp):
