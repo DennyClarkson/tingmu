@@ -70,13 +70,16 @@ def test_notebook_full_read_revision_and_target_note(actions):
         actions("save_notebook", {"markdown": "overwrite", "revision": page["revision"]})
     assert error.value.code == "incomplete_read"
     complete = actions("read_notebook", {})
+    target_id = complete["notes"][0]["id"]
     actions.notebooks.append_note("en", "concurrent", "new prose")
     with pytest.raises(ActionError) as error:
-        actions("update_learning_note", {"note_id": complete["notes"][0]["id"], "title": "changed", "text": "bad overwrite", "revision": complete["revision"]})
+        actions("update_learning_note", {"note_id": target_id, "title": "changed", "text": "bad overwrite", "revision": complete["revision"]})
     assert error.value.code == "revision_conflict"
     fresh = actions("read_notebook", {})
-    actions("update_learning_note", {"note_id": fresh["notes"][0]["id"], "title": "changed", "text": "new note", "revision": fresh["revision"]})
-    assert "new prose" in actions.notebooks.snapshot("en")["markdown"]
+    actions("update_learning_note", {"note_id": target_id, "title": "changed", "text": "new note", "revision": fresh["revision"]})
+    markdown = actions.notebooks.snapshot("en")["markdown"]
+    assert "new note" in markdown
+    assert "new prose" in markdown
 
 
 def test_chat_recollect_requires_user_followup_for_the_same_word_and_cue(actions):
