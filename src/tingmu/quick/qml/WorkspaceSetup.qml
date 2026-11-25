@@ -7,6 +7,7 @@ AppDialog {
     id: root
     objectName: "workspaceSetup"
     signal modelsRequested()
+    signal runtimeRequested()
     anchors.centerIn: parent
     width: Math.min(850, parent.width - 32)
     height: Math.min(660, parent.height - 20)
@@ -20,6 +21,7 @@ AppDialog {
     property string savedSource: ""
     property string savedTarget: ""
     property string section: "general"
+    onSectionChanged: if (section === "models" && runtimeSetup.available) runtimeSetup.detect()
     property var reuseOffer: ({roles:[], signature:""})
     readonly property bool cantonese: /^(yue(?:[-_]|$)|zh-hk$|cantonese$)/i.test(backend.settings.target_language)
     property var current: workspaces.info
@@ -204,6 +206,10 @@ AppDialog {
                             }
                             ColumnLayout {
                                 visible: !root.creating && root.section === "models"; Layout.fillWidth: true; spacing: 10
+                                TButton {
+                                    objectName: "workspaceRuntimeSetup"; visible: runtimeSetup.available
+                                    text: qsTranslate("Tingmu", "运行环境与依赖管理…"); onClicked: root.runtimeRequested()
+                                }
                                 Hint { text: root.cantonese
                                     ? qsTranslate("Tingmu", "粤语原声可选 Qwen3-ASR，下载时会一并取得对齐模型。Whisper 可选 large-v3-turbo 或 large-v3；small 不支持指定粤语。")
                                     : qsTranslate("Tingmu", "多语种识别可先试 Whisper small。选择 Qwen 或转写接口前，请确认模型支持当前学习语言 ") + backend.settings.target_language + "。" }
@@ -211,7 +217,8 @@ AppDialog {
                                 ColumnLayout {
                                     visible: backend.settings.asr_backend === "local"; Layout.fillWidth: true; spacing: 7
                                     Hint {
-                                        text: root.current && qsTranslate("TingmuStatus", workspaces.readinessFor(backend.settings.asr_model) || "")
+                                        text: root.section === "models" && root.current
+                                              ? qsTranslate("TingmuStatus", workspaces.readinessFor(backend.settings.asr_model) || "") : ""
                                         color: Theme.accent
                                     }
                                     Hint { text: qsTranslate("Tingmu", "设备选 cpu 可用处理器识别；有兼容的 NVIDIA GPU 可选 cuda。auto 会根据运行环境选择设备。\n同一模型供所有工作区共用，缓存位于 ") + root.current.cache; wrapMode: Text.WrapAnywhere }

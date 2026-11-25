@@ -9,20 +9,24 @@ import tempfile
 
 def portable_root() -> Path | None:
     """Find the release marker from shipped code / executable, independent of cwd."""
-    candidates = [Path(__file__).resolve().parents[2], Path(sys.executable).resolve().parent]
-    return next((p for p in candidates if (p / "tingmu-portable.json").is_file()), None)
+    root = Path(__file__).resolve().parents[2]
+    if (root / "tingmu-portable.json").is_file():
+        return root
+    root = Path(sys.executable).resolve().parent
+    return root if (root / "tingmu-portable.json").is_file() else None
 
 
-def installation_root() -> Path:
-    portable = portable_root()
-    if portable:
-        return portable
+def _source_root() -> Path:
     source = Path(__file__).resolve()
     for parent in source.parents:
         if (parent / "pyproject.toml").is_file() and (parent / "src/tingmu").is_dir():
             return parent
     # A standalone installed wheel owns its package directory, not the user's home.
     return source.parent
+
+
+def installation_root() -> Path:
+    return portable_root() or _source_root()
 
 
 def is_clean_install() -> bool:
@@ -38,7 +42,11 @@ def is_clean_install() -> bool:
 
 def confined_path(root: Path, path: Path | str) -> Path:
     """Resolve links before admitting an output. Relative paths are rooted at root."""
-    root = Path(root).resolve()
+    return _confined(Path(root).resolve(), path)
+
+
+def _confined(root: Path, path: Path | str) -> Path:
+    """Check a candidate against an already resolved root, including child junctions."""
     path = (root / Path(path).expanduser()).resolve()
     if not path.is_relative_to(root):
         raise ValueError("生成的文件必须位于应用目录内")
@@ -53,39 +61,48 @@ def _directory(allowed: Path, default: Path, variable: str) -> Path:
     inherited = os.environ.get(variable)
     if inherited:
         try:
-            return confined_path(allowed, inherited)
+            return _confined(allowed, inherited)
         except (ValueError, OSError, RuntimeError):
             pass
-    return confined_path(allowed, default)
+    return _confined(allowed, default)
 
 
-def data_root() -> Path:
-    root = installation_root()
-    if portable_root():
-        return confined_path(root, "data")
+def _data_dir(root: Path, portable: bool) -> Path:
+    if portable:
+        return _confined(root, "data")
     return _directory(root, root / ".data", "TINGMU_DATA_DIR")
 
 
+def _cache_dir(root: Path, portable: bool) -> Path:
+    cache = _confined(root, ".cache")
+    if portable or not os.environ.get("TINGMU_CACHE_DIR"):
+        return cache
+    return _directory(cache, cache, "TINGMU_CACHE_DIR")
+
+
+def data_root() -> Path:
+    portable = portable_root()
+    return _data_dir(portable or _source_root(), bool(portable))
+
+
 def cache_root() -> Path:
-    root = inside_installation(".cache")
-    if portable_root():
-        return root
-    # Test/source runs may isolate their cache inside the shared project cache.
-    return _directory(root, root, "TINGMU_CACHE_DIR")
+    portable = portable_root()
+    return _cache_dir(portable or _source_root(), bool(portable))
 
 
 def configure_local_caches() -> Path:
     """Set process-only paths before SDK imports without affecting host settings."""
-    root = cache_root()
     portable = portable_root()
+    installation = portable or _source_root()
+    root = _cache_dir(installation, bool(portable))
     os.environ["TINGMU_CACHE_DIR"] = str(root)
-    os.environ["TINGMU_DATA_DIR"] = str(data_root())
+    os.environ["TINGMU_DATA_DIR"] = str(_data_dir(installation, bool(portable)))
     if portable:
-        os.environ["TINGMU_QWEN_PYTHON"] = str(confined_path(portable, "runtime/asr/python.exe"))
-        binary_dir = str(confined_path(portable, "bin"))
+        os.environ["TINGMU_QWEN_PYTHON"] = str(_confined(portable, "runtime/asr/python.exe"))
+        binary_dir = str(_confined(portable, "bin"))
         if os.environ.get("PATH", "").split(os.pathsep)[0] != binary_dir:
             os.environ["PATH"] = binary_dir + os.pathsep + os.environ.get("PATH", "")
-        os.environ["QT_PLUGIN_PATH"] = str(confined_path(portable, "runtime/python/Lib/site-packages/PySide6/plugins"))
+        os.environ["QT_PLUGIN_PATH"] = str(_confined(portable, "runtime/python/Lib/site-packages/PySide6/plugins"))
     folders = {
         "UV_CACHE_DIR": "uv", "UV_PYTHON_INSTALL_DIR": "python", "PIP_CACHE_DIR": "pip",
         "XDG_CACHE_HOME": "xdg", "HF_HOME": "huggingface", "HF_HUB_CACHE": "huggingface/hub",
@@ -104,7 +121,7 @@ def configure_local_caches() -> Path:
     for legacy in ("HUGGINGFACE_HUB_CACHE", "HUGGINGFACE_ASSETS_CACHE", "TRANSFORMERS_CACHE",
                    "PYTORCH_TRANSFORMERS_CACHE", "PYTORCH_PRETRAINED_BERT_CACHE"):
         os.environ.pop(legacy, None)
-    os.environ["HF_TOKEN_PATH"] = str(confined_path(root, "huggingface/token"))
+    os.environ["HF_TOKEN_PATH"] = str(_confined(root, "huggingface/token"))
     for redirect in ("HF_XET_LOG_DEST", "HF_XET_SYSTEM_MONITOR_LOG_PATH", "HF_XET_SESSION_DIR_NAME",
                      "HF_XET_SHARD_CACHE_SUBDIR", "HF_XET_DATA_STAGING_SUBDIR", "HF_XET_LOG_PREFIX",
                      "FFREPORT", "TORCH_LOGS_OUT", "TORCH_TRACE"):
@@ -117,5 +134,13 @@ def configure_local_caches() -> Path:
     os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
     os.environ.pop("PYTHONPYCACHEPREFIX", None)
     sys.dont_write_bytecode = True
+    # A pip --target install is outside CPython's isolated ._pth. Make it visible
+    # without importing recognition libraries during player startup. Qwen owns a
+    # different interpreter/ABI and must retain its own packages.
+    if portable and not os.environ.get("TINGMU_QWEN_WORKER"):
+        target = _confined(portable, ".cache/runtime-deps/local-asr")
+        if target.is_dir():
+            from .runtime_probe_worker import activate_site
+            activate_site(target)
     tempfile.tempdir = os.environ["TEMP"]
     return root

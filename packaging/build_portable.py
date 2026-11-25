@@ -9,15 +9,16 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import tempfile
 
-from qml_runtime import qml_asset_manifest, validate_qml_runtime
+from filelock import FileLock
+
+from build_clean_install import (
+    RELEASE_DOCUMENTS, copy_app, copy_release_documents, ignore_runtime, release_manifest, validate_core_release,
+)
+from bundle_files import compile_launcher, copy_packages, launcher_hash, precompile
 
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT / "src"))
-from tingmu import __version__  # noqa: E402
-from tingmu.runtime import configure_local_caches  # noqa: E402
-
-configure_local_caches()
 OUT = ROOT / "dist" / "Tingmu"
 
 
@@ -37,8 +38,8 @@ def copy_runtime(environment, target):
     copy_tree(base / "Lib", target / "Lib", ignore=ignore)
     copy_tree(base / "DLLs", target / "DLLs", ignore=shutil.ignore_patterns("tcl*", "tk*", "_tkinter*"))
     packages = target / "Lib/site-packages"
-    copy_tree(environment / "Lib/site-packages", packages,
-              ignore=shutil.ignore_patterns("__pycache__", "_editable_impl_tingmu*", "_virtualenv*", "*.pyc"))
+    copy_packages(environment / "Lib/site-packages", packages, target.name,
+                  clean_ignore=ignore_runtime)
     # CPython's ._pth mode isolates this runtime from registry, PYTHONPATH and user packages.
     (target / "python312._pth").write_text(".\nDLLs\nLib\nLib/site-packages\n../../app\nimport site\n", encoding="utf-8")
     for path in packages.glob("*.pth"):
@@ -47,62 +48,55 @@ def copy_runtime(environment, target):
             raise RuntimeError(f"Nonportable package search path: {path}")
 
 
-def copy_models(source, target):
-    # HF Windows caches can contain duplicate blobs, snapshots and download chunks.
-    # Actual resolved snapshot files + refs suffice for offline snapshot resolution.
-    for model in source.glob("models--*"):
-        for name in ("refs", "snapshots"):
-            if (model / name).exists():
-                copy_tree(model / name, target / model.name / name,
-                          ignore=shutil.ignore_patterns("*.incomplete", "*.lock"))
+def unlinked(path):
+    if path.resolve() != Path(os.path.abspath(path)) or path.is_symlink() or path.is_junction():
+        raise ValueError(f"Unexpected linked build destination: {path}")
+    return path
 
 
-def patch_nagisa(portable):
-    """DyNet's narrow filename API cannot read a Unicode absolute Windows path.
-
-    Keep the pinned model/tokenizer intact; only load its ASCII filename relative
-    to a Unicode-safe Python chdir. Qwen is imported in its isolated ASR process.
-    """
-    path = portable / "runtime/asr/Lib/site-packages/nagisa/model.py"
-    source = path.read_text(encoding="utf-8")
-    marker = "# Tingmu portable: Unicode-safe DyNet model loading."
-    if marker in source:
-        return
-    original = "            model.populate(params)"
-    if source.count(original) != 1:
-        raise RuntimeError("Unexpected Nagisa version; review Unicode model loading patch")
-    replacement = "\n".join([
-        "            " + marker,
-        "            import os",
-        "            previous_directory = os.getcwd()",
-        "            model_path = os.path.abspath(params)",
-        "            try:",
-        "                os.chdir(os.path.dirname(model_path))",
-        "                model.populate(os.path.basename(model_path))",
-        "            finally:",
-        "                os.chdir(previous_directory)",
-    ])
-    path.write_text(source.replace(original, replacement), encoding="utf-8")
+def copy_missing_tree(source, target):
+    """Add complete cache files while preserving every existing destination file."""
+    unlinked(target).mkdir(parents=True, exist_ok=True)
+    for item in source.iterdir():
+        if item.name.endswith((".incomplete", ".lock")):
+            continue
+        destination = unlinked(target / item.name)
+        if item.is_dir():
+            copy_missing_tree(item, destination)
+        elif not destination.exists():
+            # Publish only after the complete weight has been copied. A download
+            # completing concurrently wins the final name without being replaced.
+            with tempfile.TemporaryDirectory(prefix=".tingmu-copy-", dir=target) as staging:
+                temporary = Path(staging) / item.name
+                shutil.copy2(item, temporary)
+                try:
+                    if os.name == "nt":
+                        temporary.rename(destination)  # Windows refuses an existing target.
+                    else:
+                        os.link(temporary, destination)
+                except FileExistsError:
+                    pass
 
 
 def import_data():
     source = Path(os.environ["LOCALAPPDATA"]) / "Tingmu"
-    target = OUT / "data"
+    target = unlinked(OUT / "data")
     target.mkdir(parents=True, exist_ok=True)
-    if (target / "import-manifest.json").exists():
+    if unlinked(target / "import-manifest.json").exists():
         print("Existing imported user data retained; import already recorded.", flush=True)
         return
     for name in ("study.db", "settings.json", "documents"):
-        if (target / name).exists():
+        if unlinked(target / name).exists():
             raise RuntimeError("Refusing to overwrite existing portable user data: " + name)
     files = []
     for item in source.iterdir():
         if item.name.startswith("study.db"):
             continue
+        destination = unlinked(target / item.name)
         if item.is_dir():
-            copy_tree(item, target / item.name)
-        elif item.is_file():
-            shutil.copy2(item, target / item.name)
+            copy_missing_tree(item, destination)
+        elif item.is_file() and not destination.exists():
+            shutil.copy2(item, destination)
         if item.is_file():
             files.append({"file": item.name, "sha256": hashlib.sha256(item.read_bytes()).hexdigest()})
     db_source = source / "study.db"
@@ -117,61 +111,102 @@ def import_data():
     }, indent=2), encoding="utf-8")
 
 
+def publish(stage, destination, names):
+    """Roll back the whole program on a failed rename; keep blocked recovery copies."""
+    for name in names:
+        unlinked(destination / name)
+        if not (stage / name).exists():
+            raise FileNotFoundError(stage / name)
+    # A rollback blocked by a Windows file lock must survive stage cleanup.
+    backup = Path(tempfile.mkdtemp(prefix=".tingmu-previous-", dir=destination))
+    saved = []
+    installed = []
+    try:
+        for name in names:
+            target = destination / name
+            if target.exists():
+                (backup / name).parent.mkdir(parents=True, exist_ok=True)
+                target.rename(backup / name)
+                saved.append(name)
+            (stage / name).rename(target)
+            installed.append(name)
+    except BaseException:
+        failures = []
+        for name in reversed(installed):
+            try:
+                (destination / name).rename(stage / name)
+            except OSError as exc:
+                failures.append(exc)
+        for name in reversed(saved):
+            try:
+                (backup / name).rename(destination / name)
+            except OSError as exc:
+                failures.append(exc)
+        if failures:
+            raise RuntimeError(f"Rollback blocked. Previous program files are in {backup}") from failures[0]
+        shutil.rmtree(backup)
+        raise
+    shutil.rmtree(backup)
+
+
+def build(refresh_app):
+    marker_name = "tingmu-portable.json"
+    marker_path = unlinked(OUT / marker_name)
+    previous = json.loads(marker_path.read_text("utf-8")) if marker_path.is_file() else {}
+    with tempfile.TemporaryDirectory(prefix=".tingmu-build-", dir=OUT) as folder:
+        stage = Path(folder)
+        names = []
+        runtime_root = OUT if refresh_app else stage
+        python = runtime_root / "runtime/python"
+        named_exe = python / "TingmuRuntime.exe"
+        if refresh_app:
+            if not previous or not unlinked(named_exe).is_file():
+                raise ValueError("Refresh requires an existing portable runtime and manifest")
+        else:
+            copy_runtime(ROOT / ".venv", python)
+            shutil.copy2(python / "pythonw.exe", named_exe)
+            # runtime/asr is owned by the on-demand installer.
+            unlinked(OUT / "runtime").mkdir(exist_ok=True)
+            names.append("runtime/python")
+        copy_app(stage)
+        copy_release_documents(ROOT, stage)
+        source = ROOT / "packaging/Launcher.cs"
+        digest = launcher_hash(source)
+        launcher = unlinked(OUT / "Tingmu.exe")
+        if previous.get("launcher_source_sha256") == digest and launcher.is_file():
+            shutil.copy2(launcher, stage / launcher.name)
+        else:
+            compile_launcher(source, stage / launcher.name)
+        bytecode = precompile(stage / "app", unlinked(python / "python.exe"), include_runtime=not refresh_app)
+        marker = {**(previous if refresh_app else {"clean_install": True}), "format": 2, "name": "听幕",
+                  "python": sys.version.split()[0], "launcher_source_sha256": digest,
+                  "startup_bytecode": bytecode, "entry": "Tingmu.exe", "frontend": "Qt Quick/QML",
+                  "data": "data", "cache": ".cache", "runtime": "runtime/python"}
+        if not refresh_app:
+            marker["weight_audit"] = validate_core_release(stage)
+        manifest = release_manifest(marker, stage, runtime_root)
+        (stage / marker_name).write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+        publish(stage, OUT, (*names, "app", launcher.name, *RELEASE_DOCUMENTS, marker_name))
+
+
 def main():
+    global OUT
     parser = argparse.ArgumentParser()
+    parser.add_argument("--destination", type=Path, default=OUT)
     parser.add_argument("--refresh-app", action="store_true")
     parser.add_argument("--import-user-data", action="store_true")
     args = parser.parse_args()
+    if args.import_user_data and not args.refresh_app:
+        parser.error("--import-user-data is available only when refreshing an existing installation")
+    sys.path.insert(0, str(ROOT / "src"))
+    from tingmu.runtime import configure_local_caches
+    configure_local_caches()
+    OUT = unlinked(Path(os.path.abspath(args.destination)))
     OUT.mkdir(parents=True, exist_ok=True)
-    if not args.refresh_app:
-        copy_runtime(ROOT / ".venv", OUT / "runtime/python")
-        copy_runtime(ROOT / ".cache/qwen-venv", OUT / "runtime/asr")
-        copy_models(ROOT / ".cache/qwen-models", OUT / ".cache/qwen-models")
-        copy_models(ROOT / ".cache/models", OUT / ".cache/models")
-        (OUT / "bin").mkdir(exist_ok=True)
-        for executable in ("ffmpeg", "ffprobe"):
-            source = shutil.which(executable)
-            if not source:
-                raise RuntimeError(f"Missing {executable}")
-            shutil.copy2(source, OUT / "bin" / f"{executable}.exe")
-        ffmpeg_folder = Path(shutil.which("ffmpeg")).parent.parent
-        for filename in ("LICENSE", "LICENSE.txt"):
-            if (ffmpeg_folder / filename).exists():
-                shutil.copy2(ffmpeg_folder / filename, OUT / "bin" / "FFmpeg-LICENSE.txt")
-    speech_models = ROOT / ".cache/speech-models"
-    if speech_models.is_dir():
-        copy_tree(speech_models, OUT / ".cache/speech-models")
-    copy_tree(ROOT / "src/tingmu", OUT / "app/tingmu", ignore=shutil.ignore_patterns("__pycache__"))
-    patch_nagisa(OUT)
-    shutil.copy2(ROOT / "packaging/bootstrap.py", OUT / "app/bootstrap.py")
-    shutil.copy2(ROOT / "packaging/bootstrap_logging.py", OUT / "app/bootstrap_logging.py")
-    shutil.copy2(ROOT / "packaging/qml_runtime.py", OUT / "app/qml_runtime.py")
-    shutil.copy2(ROOT / "packaging/portable_smoke.py", OUT / "app/portable_smoke.py")
-    qml_runtime = validate_qml_runtime(OUT)
-    qml_assets = qml_asset_manifest(OUT)
-    # A distinct process filename keeps Windows from grouping this app with IDLE
-    # and makes native accessibility/window ownership unambiguous.
-    runtime_source = OUT / "runtime/python/pythonw.exe"
-    runtime_target = OUT / "runtime/python/TingmuRuntime.exe"
-    if not runtime_target.exists() or runtime_target.read_bytes() != runtime_source.read_bytes():
-        shutil.copy2(runtime_source, runtime_target)
-    launcher_hash = hashlib.sha256((ROOT / "packaging/Launcher.cs").read_bytes()).hexdigest()
-    prior_manifest = OUT / "tingmu-portable.json"
-    prior = json.loads(prior_manifest.read_text("utf-8")) if prior_manifest.exists() else {}
-    if not args.refresh_app or not (OUT / "Tingmu.exe").is_file() or prior.get("launcher_source_sha256") != launcher_hash:
-        compiler = Path(os.environ["WINDIR"]) / "Microsoft.NET/Framework64/v4.0.30319/csc.exe"
-        subprocess.run([str(compiler), "/nologo", "/target:winexe", "/platform:x64", "/optimize+",
-                        "/r:System.Windows.Forms.dll", f"/out:{OUT / 'Tingmu.exe'}",
-                        str(ROOT / "packaging/Launcher.cs")], check=True)
-    if args.import_user_data:
-        import_data()
-    manifest = {"format": 2, "name": "听幕", "version": __version__, "python": sys.version.split()[0],
-                "launcher_source_sha256": launcher_hash,
-                "built": datetime.now(timezone.utc).isoformat(), "entry": "Tingmu.exe",
-                "data": "data", "cache": ".cache", "runtime": "runtime/python", "asr": "runtime/asr",
-                "frontend": "Qt Quick/QML", "qml_runtime": qml_runtime, "qml_assets": qml_assets}
-    (OUT / "tingmu-portable.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-    shutil.copy2(ROOT / "docs/portable.md", OUT / "使用说明.md")
+    with FileLock(unlinked(OUT / ".tingmu-build.lock"), timeout=0):
+        build(args.refresh_app)
+        if args.import_user_data:
+            import_data()
     print(f"Portable folder ready: {OUT}", flush=True)
 
 

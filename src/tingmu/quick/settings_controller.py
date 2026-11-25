@@ -173,17 +173,18 @@ class SettingsController:
         self.ports.refresh_library()
 
     def _read_lesson_model_status(self):
-        from tingmu.agent import provider_status
         from tingmu.providers import ProviderError
 
         settings = self.ports.settings()
         try:
             enabled, profile = self.ports.model_registry().text_role(settings, "annotation")
-            usable = enabled and (
-                (profile.get("key_source") == "none" or profile.get("has_key", False))
-                if profile
-                else provider_status().get(settings.provider, {}).get("available", False)
-            )
+            usable = False
+            if enabled:
+                if profile:
+                    usable = profile.get("key_source") == "none" or profile.get("has_key", False)
+                else:
+                    from tingmu.agent import provider_status
+                    usable = provider_status().get(settings.provider, {}).get("available", False)
         except ProviderError:
             usable = False
         return {"configured": usable, "language": display_language(settings.source_language)}

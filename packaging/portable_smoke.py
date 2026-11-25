@@ -10,16 +10,49 @@ import time
 import uuid
 
 
+def check_workspace(window, bridge, checks):
+    """Observe initial visibility before requesting the lazily loaded settings form."""
+    from PySide6.QtCore import QMetaObject, QObject
+
+    picker = window.findChild(QObject, "workspacePicker")
+    manager = window.findChild(QObject, "workspaceSetup")
+    checks["workspace_switcher"] = bool(picker and picker.property("visible"))
+    checks["opens_in_player"] = bool(manager and not manager.property("visible"))
+    checks["workspace_llm_concurrency"] = False
+    if checks["opens_in_player"]:
+        QMetaObject.invokeMethod(manager, "openTextSettings")
+
+    def poll():
+        if manager and manager.property("opened"):
+            limit = manager.findChild(QObject, "llmConcurrencyCount")
+            if (manager.property("section") == "text" and limit
+                    and limit.property("count") == bridge.llmConcurrencyLimit
+                    and limit.property("currentText") == str(bridge.store.load_settings().llm_workers)):
+                checks["workspace_llm_concurrency"] = True
+                QMetaObject.invokeMethod(manager, "close")
+
+    return poll
+
+
 def run_smoke(root: Path, media: Path | None = None) -> int:
+    # Smoke is a local acceptance test, including first use of the runtime manager.
+    blocked_network_events = []
+
+    def offline(event, args):
+        if event in {"socket.connect", "socket.getaddrinfo"}:
+            blocked_network_events.append(event)
+            raise RuntimeError("Portable smoke must run offline")
+
+    sys.addaudithook(offline)
+    bytecode = {path for name in ("app", "runtime/python") for path in (root / name).rglob("*.pyc")}
     import tingmu
-    from PySide6.QtCore import QObject, QTimer, qVersion
+    from PySide6.QtCore import QMetaObject, QObject, Qt, QTimer, qVersion
     from PySide6.QtGui import QFontDatabase
     from tingmu.quick.main import create_qml_app
-    from tingmu.runtime import cache_root, data_root
+    from tingmu.runtime import cache_root, data_root, is_clean_install
 
     isolated_data = cache_root() / "portable-smoke" / uuid.uuid4().hex / "data"
-    app, bridge, engine = create_qml_app(data_dir=isolated_data,
-                                         initial_path=str(media) if media else None)
+    app, bridge, engine = create_qml_app(data_dir=isolated_data, runtime_setup_dir=isolated_data)
     windows = engine.rootObjects()
     player = bridge.player
     if player.audioOutput():
@@ -28,12 +61,12 @@ def run_smoke(root: Path, media: Path | None = None) -> int:
         "ready": False, "frontend": "Qt Quick/QML", "version": tingmu.__version__,
         "python": sys.version, "executable": sys.executable, "prefix": sys.prefix,
         "sys_path": sys.path, "data": str(data_root()), "cache": str(cache_root()),
-        "smoke_data": str(isolated_data), "qwen_python": os.environ["TINGMU_QWEN_PYTHON"],
+        "smoke_data": str(isolated_data), "qwen_python": os.environ.get("TINGMU_QWEN_PYTHON"),
         "ffmpeg": shutil.which("ffmpeg"), "ffprobe": shutil.which("ffprobe"),
         "qt": qVersion(), "platform": app.platformName(), "qml_root_count": len(windows),
         "window_visible": bool(windows and windows[0].isVisible()),
         "window_class": windows[0].metaObject().className() if windows else None,
-        "frames": 0, "errors": [], "checks": {},
+        "frames": 0, "errors": [], "blocked_network_events": blocked_network_events, "checks": {},
     }
     report["checks"]["qml_window"] = report["window_visible"] and bool(windows)
     report["checks"]["isolated_data"] = bridge.store.data_dir == isolated_data
@@ -42,83 +75,119 @@ def run_smoke(root: Path, media: Path | None = None) -> int:
         "Source Han Sans SC", "Source Han Serif SC", "Source Sans 3", "Source Code Pro"))
     report["checks"]["v4_learning_workspace"] = bool(bridge.notebooks.get("revision")) and bool(bridge.activeSessionId)
     report["checks"]["model_presets"] = len(bridge.modelPresets) >= 7
-    if windows:
-        picker = windows[0].findChild(QObject, "workspacePicker")
-        manager = windows[0].findChild(QObject, "workspaceSetup")
-        report["checks"]["workspace_switcher"] = bool(picker and picker.property("visible"))
-        report["checks"]["opens_in_player"] = bool(manager and not manager.property("visible"))
-        limit = manager.findChild(QObject, "llmConcurrencyCount") if manager else None
-        report["checks"]["workspace_llm_concurrency"] = bool(
-            limit and limit.property("count") == bridge.llmConcurrencyLimit
-            and limit.property("currentText") == str(bridge.store.load_settings().llm_workers))
+    poll_workspace = None
+    expect_first_run = is_clean_install()
+    skipped = False
+    if media:
+        report["checks"].update(dict.fromkeys(("decode", "seek", "rate", "audio_switch", "pause"), False))
     report["checks"]["shared_model_cache"] = cache_root() == root / ".cache"
     report["speech_preprocessing"] = bridge.speechModels
-    engine.warnings.connect(lambda errors: report["errors"].extend(error.toString() for error in errors))
     player.errorOccurred.connect(lambda error, message: report["errors"].append(message))
     began = time.monotonic()
-    stage = [0]
-    changed_at = [0.0]
-    seek_target = [0]
+    phase = "waiting_for_ui"
+    seek_target = 0
+    target_track = 0
+    latest_frame_ms = -1
     output = root / "data/logs/portable-smoke.json"
 
     def frame_arrived(frame):
+        nonlocal latest_frame_ms
         if frame.isValid():
             report["frames"] += 1
+            latest_frame_ms = frame.startTime() // 1000
 
     def finish():
         timer.stop()
         player.pause()
         tray = app._tingmu_tray
+        report["tray_available"] = tray.available
         if tray.available:
             tray.hideToTray()
             hidden = not windows[0].isVisible() and not bridge._closed
             tray.restore()
             report["checks"]["system_tray"] = tray._tray.isVisible() and hidden and windows[0].isVisible()
         if windows and app.platformName() != "offscreen" and os.environ.get("TINGMU_SMOKE_CAPTURE") == "1":
-            screenshot = windows[0].grabWindow()
+            window = windows[0]
+            screenshot = window.screen().grabWindow(window.winId())
             if not screenshot.isNull():
                 capture_path = isolated_data.parent / "window.png"
                 screenshot.save(str(capture_path))
                 report["window_capture"] = str(capture_path)
-        report["ready"] = all(report["checks"].values()) and not report["errors"]
+        report["qml_warnings"] = list(engine._tingmu_warnings)
+        added = {p for name in ("app", "runtime/python") for p in (root / name).rglob("*.pyc")} - bytecode
+        report["new_bytecode"] = sorted(p.relative_to(root).as_posix() for p in added)
+        report["checks"]["no_new_bytecode"] = not added
+        report["ready"] = (all(report["checks"].values()) and not report["errors"]
+                           and not report["qml_warnings"] and not blocked_network_events)
         report["wall_seconds"] = round(time.monotonic() - began, 3)
         output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
         app.quit()
 
     def tick():
+        nonlocal poll_workspace, skipped, phase, seek_target, target_track
         elapsed = time.monotonic() - began
-        if stage[0] == 0:
+        if elapsed > 30:
+            report["checks"]["completed_before_timeout"] = False
+            finish()
+            return
+        if expect_first_run and not skipped and windows:
+            dialog = windows[0].findChild(QObject, "runtimeSetupDialog")
+            button = dialog.findChild(QObject, "skipRuntimeSetup") if dialog else None
+            if button and dialog.property("opened"):
+                report["checks"]["first_run_guide"] = True
+                QMetaObject.invokeMethod(button, "click")
+                skipped = True
+                return  # Allow the first modal's close transition to finish.
+            elif elapsed < 10:
+                return
+            else:
+                report["checks"]["first_run_guide"] = False
+                skipped = True
+        if skipped and "first_run_skip_persisted" not in report["checks"]:
+            dialog = windows[0].findChild(QObject, "runtimeSetupDialog")
+            if dialog and dialog.property("visible") and elapsed < 10:
+                return
+            marker = isolated_data / "runtime-setup.json"
+            report["checks"]["first_run_skip_persisted"] = (
+                marker.is_file() and json.loads(marker.read_text("utf-8")).get("status") == "skipped")
+        if poll_workspace is None and windows:
+            poll_workspace = check_workspace(windows[0], bridge, report["checks"])
+        elif poll_workspace:
+            poll_workspace()
+        if phase == "waiting_for_ui" and report["checks"].get("workspace_llm_concurrency"):
             sink = player.videoSink()
             if sink:
-                sink.videoFrameChanged.connect(frame_arrived)
+                sink.videoFrameChanged.connect(frame_arrived, Qt.ConnectionType.QueuedConnection)
                 report["checks"]["qml_video_sink"] = True
-                stage[0] = 1
-                if media:
-                    player.play()
-        if not media and elapsed > 1.5:
-            report["checks"]["qml_video_sink"] = player.videoSink() is not None
-            finish()
-        elif media and stage[0] == 1 and report["frames"] >= 3 and player.duration() > 0:
+                if not media:
+                    finish()
+                    return
+                bridge.open_media(str(media))
+                phase = "decoding"
+        elif phase == "decoding" and report["frames"] >= 3 and player.duration() > 0:
             report["duration_ms"] = player.duration()
             report["audio_tracks"] = len(player.audioTracks())
             report["checks"]["decode"] = True
-            if report["audio_tracks"] > 1:
-                player.setActiveAudioTrack(1)
-            player.setPlaybackRate(1.25)
-            seek_target[0] = min(180000, player.duration() // 2)
-            player.setPosition(seek_target[0])
-            changed_at[0] = time.monotonic()
-            stage[0] = 2
-        elif media and stage[0] == 2 and time.monotonic() - changed_at[0] > 1.5:
-            report["checks"]["seek"] = abs(player.position() - seek_target[0] - 1875) < 4000
-            report["checks"]["rate"] = player.playbackRate() == 1.25
-            if report["audio_tracks"] > 1:
-                report["checks"]["audio_switch"] = player.activeAudioTrack() == 1
             player.pause()
             report["checks"]["pause"] = player.playbackState().name == "PausedState"
-            finish()
-        elif elapsed > 30:
-            report["checks"]["completed_before_timeout"] = False
+            if report["audio_tracks"] > 1:
+                target_track = 0 if player.activeAudioTrack() == 1 else 1
+                player.setActiveAudioTrack(target_track)
+            player.setPlaybackRate(1.25)
+            seek_target = min(180000, player.duration() // 2)
+            report["seek_target_ms"] = seek_target
+            player.setPosition(seek_target)
+            phase = "seeking"
+        elif (phase == "seeking" and abs(player.position() - seek_target) <= 100
+              and abs(latest_frame_ms - seek_target) <= 250):
+            # A decoded frame at the requested timestamp confirms the demuxer actually sought.
+            report["seek_frame_ms"] = latest_frame_ms
+            report["checks"]["seek"] = True
+            player.play()
+            phase = "resuming"
+        elif phase == "resuming" and latest_frame_ms >= seek_target + 200:
+            report["checks"]["rate"] = player.playbackRate() == 1.25 and player.position() > seek_target
+            report["checks"]["audio_switch"] = report["audio_tracks"] > 1 and player.activeAudioTrack() == target_track
             finish()
 
     timer = QTimer()

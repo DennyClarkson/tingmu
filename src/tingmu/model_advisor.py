@@ -14,10 +14,10 @@ from pathlib import Path
 import platform
 import shutil
 import subprocess
-import sys
 
-from .media import _normalise_language, _qwen_python
-from .runtime import cache_root, portable_root
+from .media import _normalise_language
+from .runtime import cache_root, installation_root, portable_root
+from .runtime_deps import _python_check, cached_probe
 from .workspace_models import QWEN_MODELS, model_inventory
 
 GIB = 1024 ** 3
@@ -36,85 +36,8 @@ MODEL_BUDGETS = {
     "qwen3-asr-1.7b": ("Qwen3-ASR 1.7B + 对齐器", 14, 6, 8),
 }
 
-# A standalone script deliberately imports packages from the worker interpreter,
-# never from a different activated environment or the host's nvidia-smi verdict.
-_PROBE_SCRIPT = r'''
-import ctypes, json, os, pathlib, site, sys
-result = {"cpu_usable": False, "cuda_usable": False, "error": "", "cuda_error": ""}
-try:
-    if sys.argv[1] == "whisper":
-        handles = []
-        if os.name == "nt":
-            paths = [p for root in site.getsitepackages()
-                     for p in (pathlib.Path(root) / "nvidia").glob("*/bin") if p.is_dir()]
-            handles = [os.add_dll_directory(str(p)) for p in paths]
-            os.environ["PATH"] = os.pathsep.join(map(str, paths)) + os.pathsep + os.environ.get("PATH", "")
-        import ctranslate2
-        from faster_whisper import WhisperModel
-        result["version"] = ctranslate2.__version__
-        result["cpu_usable"] = "int8" in ctranslate2.get_supported_compute_types("cpu")
-        try:
-            if ctranslate2.get_cuda_device_count() < 1:
-                raise RuntimeError("no_cuda_device")
-            if "float16" not in ctranslate2.get_supported_compute_types("cuda"):
-                raise RuntimeError("float16_unavailable")
-            # Opening real library handles catches the common portable-build
-            # case: a GPU exists, but cuBLAS/cuDNN were not shipped.
-            for library, create, destroy in (
-                ("cublas64_12.dll" if os.name == "nt" else "libcublas.so.12", "cublasCreate_v2", "cublasDestroy_v2"),
-                ("cudnn64_9.dll" if os.name == "nt" else "libcudnn.so.9", "cudnnCreate", "cudnnDestroy")):
-                lib = ctypes.CDLL(library)
-                handle = ctypes.c_void_p()
-                if getattr(lib, create)(ctypes.byref(handle)) != 0:
-                    raise RuntimeError("cuda_library_initialization_failed")
-                getattr(lib, destroy)(handle)
-            driver = ctypes.CDLL("nvcuda.dll" if os.name == "nt" else "libcuda.so.1")
-            free, total = ctypes.c_size_t(), ctypes.c_size_t()
-            if driver.cuMemGetInfo_v2(ctypes.byref(free), ctypes.byref(total)) == 0:
-                result.update(cuda_free_bytes=free.value, cuda_total_bytes=total.value)
-            result["cuda_usable"] = True
-        except Exception as exc:
-            result["cuda_error"] = type(exc).__name__
-    else:
-        import torch
-        from qwen_asr import Qwen3ASRModel
-        result["version"] = torch.__version__
-        result["cpu_usable"] = bool(torch.ones(1).sum().item() == 1)
-        try:
-            if not torch.cuda.is_available() or not torch.cuda.is_bf16_supported():
-                raise RuntimeError("cuda_bfloat16_unavailable")
-            value = torch.ones((2, 2), device="cuda", dtype=torch.bfloat16)
-            (value @ value).sum().item()
-            torch.cuda.synchronize()
-            free, total = torch.cuda.mem_get_info()
-            result.update(cuda_usable=True, cuda_free_bytes=free, cuda_total_bytes=total,
-                          gpu_name=torch.cuda.get_device_name())
-        except Exception as exc:
-            result["cuda_error"] = type(exc).__name__
-except Exception as exc:
-    result["error"] = type(exc).__name__
-print(json.dumps(result))
-'''
-
-
 def _probe_runtime(executable, engine):
-    result = {"interpreter": str(executable), "cpu_usable": False, "cuda_usable": False,
-              "error": "runtime_missing"}
-    if not Path(executable).is_file():
-        return result
-    try:
-        completed = subprocess.run([str(executable), "-c", _PROBE_SCRIPT, engine],
-                                   capture_output=True, text=True, encoding="utf-8", errors="replace",
-                                   env={**os.environ, "HF_HUB_OFFLINE": "1", "TRANSFORMERS_OFFLINE": "1",
-                                        "HF_HUB_DISABLE_TELEMETRY": "1"},
-                                   timeout=35, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        if completed.returncode == 0:
-            result.update(json.loads(completed.stdout.strip().splitlines()[-1]))
-        else:
-            result["error"] = "runtime_probe_failed"
-    except (OSError, subprocess.TimeoutExpired, ValueError, IndexError):
-        result["error"] = "runtime_probe_failed_or_timed_out"
-    return result
+    return _python_check(installation_root(), executable, engine)
 
 
 def _memory():
@@ -147,11 +70,15 @@ def probe_hardware():
         disk_free = shutil.disk_usage(existing).free
     except OSError:
         disk_free = None
-    whisper = _probe_runtime(sys.executable, "whisper")
-    try:
-        qwen = _probe_runtime(_qwen_python(), "qwen")
-    except (OSError, ValueError, RuntimeError):
-        qwen = {"cpu_usable": False, "cuda_usable": False, "error": "runtime_missing"}
+    root = installation_root()
+    whisper = cached_probe(root, "local-asr")
+    accelerator = cached_probe(root, "whisper-cuda")
+    whisper["cuda_usable"] = bool(whisper.get("cuda_float16") and accelerator["ready"])
+    if whisper["cuda_usable"]:
+        for key in ("cuda_free_bytes", "cuda_total_bytes"):
+            if key in accelerator:
+                whisper[key] = accelerator[key]
+    qwen = cached_probe(root, "qwen")
     gpus = []
     # Inventory is separate from runtime eligibility: nvidia-smi reporting a GPU
     # does not establish that either of our packaged inference runtimes can use it.

@@ -2,8 +2,6 @@
 
 import uuid
 
-from tingmu import workspace_text as text
-
 
 class TextSetupService:
     def __init__(self, controller):
@@ -15,6 +13,7 @@ class TextSetupService:
         return self.proposal.get("status") == "pending"
 
     def propose(self, workspace_id, context):
+        from tingmu import workspace_text as text
         controller = self.controller
         bridge = controller.bridge
         destination = controller.store_for(workspace_id)
@@ -45,6 +44,7 @@ class TextSetupService:
         return {"applied": False, "requires_human_confirmation": True, "roles": public}
 
     def decide(self, ident, approved):
+        from tingmu import workspace_text as text
         controller = self.controller
         bridge = controller.bridge
         proposal = self.proposal

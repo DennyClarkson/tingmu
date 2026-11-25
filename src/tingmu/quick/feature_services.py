@@ -4,14 +4,10 @@ Only this binding layer knows historical Bridge member names. Domain services
 receive typed callback ports and owned state; no service forwards unknown attrs.
 """
 
+from functools import cached_property
 from types import SimpleNamespace
 
-from .chat_controller import ChatController, ChatPorts
-from .learning_controller import LearningController, LearningPorts
-from .model_controller import ModelController, ModelPorts
-from .ui_actions import UiActionController, UiActionPorts
 from .feature_state import FeatureState
-from .application_controller import ApplicationController, ApplicationPorts
 
 _PORT_SPECS = {
     "models": {
@@ -211,16 +207,25 @@ def _legacy_state(host, group):
     return type("Legacy" + group.title() + "State", (), namespace)()
 
 
-def _build_services(host, state):
-    return SimpleNamespace(
-        application_controller=ApplicationController(
+class _FeatureServices:
+    def __init__(self, host, state):
+        from .application_controller import ApplicationController, ApplicationPorts
+        from .chat_controller import ChatController, ChatPorts
+        from .learning_controller import LearningController, LearningPorts
+        from .model_controller import ModelController, ModelPorts
+
+        self.host = host
+        self.application_controller = ApplicationController(
             None, _ports(host, "application_controller", ApplicationPorts)
-        ),
-        chat=ChatController(state.chat, _ports(host, "chat", ChatPorts)),
-        models=ModelController(state.models, _ports(host, "models", ModelPorts)),
-        learning=LearningController(state.learning, _ports(host, "learning", LearningPorts)),
-        actions=UiActionController(None, _ports(host, "actions", UiActionPorts)),
-    )
+        )
+        self.chat = ChatController(state.chat, _ports(host, "chat", ChatPorts))
+        self.models = ModelController(state.models, _ports(host, "models", ModelPorts))
+        self.learning = LearningController(state.learning, _ports(host, "learning", LearningPorts))
+
+    @cached_property
+    def actions(self):
+        from .ui_actions import UiActionController, UiActionPorts
+        return UiActionController(None, _ports(self.host, "actions", UiActionPorts))
 
 
 def services_for(host):
@@ -228,7 +233,7 @@ def services_for(host):
     if existing is not None:
         return existing
     state = SimpleNamespace(**{group: _legacy_state(host, group) for group in ("chat", "models", "learning")})
-    return _build_services(host, state)
+    return _FeatureServices(host, state)
 
 
 def initialize_features(host):
@@ -241,9 +246,9 @@ def initialize_features(host):
     host.conversations = ConversationStore(host.store)
     host.feature_state.models.presets = host.model_registry.presets()
     host.feature_state.learning.language = host._settings.target_language
-    host.feature_services = _build_services(host, host.feature_state)
+    host.feature_services = _FeatureServices(host, host.feature_state)
     host.chat, host.models = host.feature_services.chat, host.feature_services.models
-    host.learning, host.actions = host.feature_services.learning, host.feature_services.actions
+    host.learning = host.feature_services.learning
     host.application_controller = host.feature_services.application_controller
     host._appActionRequested.connect(host._dispatch_app_action)
     host._chatActionProgress.connect(host._chat_action_progress)

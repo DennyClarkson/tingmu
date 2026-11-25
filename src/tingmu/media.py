@@ -10,31 +10,23 @@ from bisect import bisect_right
 from contextlib import contextmanager
 import hashlib
 import html
-from importlib.metadata import distribution
 import json
 import math
 import os
 from pathlib import Path
 import queue
 import re
-import shutil
 import subprocess
 import sys
 import tempfile
 import threading
 from typing import Callable
 
+from .media_files import MEDIA_EXTENSIONS, SUBTITLE_EXTENSIONS as SUBTITLE_EXTENSIONS
 from .models import Cue
 from .task_progress import Progress
-from .runtime import cache_root as _cache_root, confined_path, inside_installation, is_clean_install, portable_root
+from .runtime import cache_root as _cache_root, confined_path, installation_root, is_clean_install, portable_root
 
-MEDIA_EXTENSIONS = frozenset({
-    ".mp4", ".mkv", ".avi", ".mov", ".webm", ".m4v", ".wmv", ".flv",
-    ".ts", ".mts", ".m2ts", ".mpg", ".mpeg", ".3gp", ".ogv",
-    ".mp3", ".wav", ".flac", ".m4a", ".aac", ".ogg", ".opus", ".wma",
-})
-SUBTITLE_EXTENSIONS = frozenset({".srt", ".vtt", ".ass", ".ssa"})
-_DLL_HANDLES: list = []
 QWEN_MODELS = {
     "qwen3-asr-1.7b": "Qwen/Qwen3-ASR-1.7B",
     "qwen3-asr-0.6b": "Qwen/Qwen3-ASR-0.6B",
@@ -47,20 +39,11 @@ def _qwen_model_id(model: str) -> str | None:
 
 
 def _qwen_python() -> Path:
-    portable = portable_root()
-    if portable:
-        path = confined_path(portable, "runtime/asr/python.exe")
-    else:
-        path = confined_path(_cache_root(), "qwen-venv/" + ("Scripts/python.exe" if os.name == "nt" else "bin/python"))
-        override = os.environ.get("TINGMU_QWEN_PYTHON")
-        if override:
-            try:
-                path = inside_installation(override)
-            except (ValueError, OSError, RuntimeError):
-                pass
-    if not path.is_file():
-        raise MediaError("Qwen3-ASR 本地环境未安装。请运行 scripts/setup_qwen.ps1 安装项目内的识别运行环境。")
-    return path.resolve()
+    from .runtime_deps import require
+    try:
+        return Path(require(installation_root(), "qwen")["path"])
+    except RuntimeError as exc:
+        raise MediaError(str(exc)) from exc
 
 
 def _qwen_snapshot(repo: str, cache: str, *, allow_model_downloads=True) -> str:
@@ -117,10 +100,11 @@ def scan_media(folder: Path) -> list[Path]:
 
 
 def _executable(name: str) -> str:
-    binary = shutil.which(name)
-    if not binary:
-        raise MediaError(f"找不到 {name}。请安装 FFmpeg，并将其 bin 目录加入 PATH 后重启听幕。")
-    return binary
+    from .runtime_deps import require
+    try:
+        return require(installation_root(), "ffmpeg")[name]
+    except RuntimeError as exc:
+        raise MediaError(str(exc)) from exc
 
 
 def _run(command: list[str], cancelled=None, timeout=None) -> str:
@@ -349,19 +333,10 @@ def prepared_audio(media_path: Path, *, audio_track=0, start=0, duration=None, s
 
 
 def _register_cuda_dlls():
-    """Windows NVIDIA wheels are not automatically visible to LoadLibrary."""
-    if os.name != "nt":
-        return
-    import site
-    directories = []
-    for root in site.getsitepackages():
-        nvidia = Path(root) / "nvidia"
-        if nvidia.is_dir():
-            directories.extend(p for p in nvidia.glob("*/bin") if p.is_dir())
-    for path in directories:
-        _DLL_HANDLES.append(os.add_dll_directory(str(path)))
-    if directories:
-        os.environ["PATH"] = os.pathsep.join(map(str, directories)) + os.pathsep + os.environ.get("PATH", "")
+    """Use only the directories that passed native library checks."""
+    from .runtime_deps import require
+    from .runtime_probe_worker import add_dll_dirs
+    add_dll_dirs(require(installation_root(), "whisper-cuda")["directories"])
 
 
 def _normalise_language(language: str) -> str | None:
@@ -424,13 +399,25 @@ def _whisper_turn_cues(cue, words, turns, offset):
     return parts
 
 
+def distribution(name):
+    """Look up worker assets only when Whisper needs them."""
+    from importlib.metadata import distribution as lookup
+    return lookup(name)
+
+
 def _asr_worker(request_path: Path) -> int:
     """Internal child entry point. Never uploads audio; model downloads only."""
     request = json.loads(request_path.read_text(encoding="utf-8"))
     try:
         if _qwen_model_id(request["model"]):
             return _qwen_worker(request)
-        _register_cuda_dlls()
+        from .runtime_probe_worker import activate_site, add_dll_dirs
+        activate_site(request.get("asr_site"))
+        if request["device"] == "cuda":
+            if "cuda_directories" in request:
+                add_dll_dirs(request["cuda_directories"])
+            else:
+                _register_cuda_dlls()
         import ctranslate2
         from faster_whisper import WhisperModel
         device = request["device"]
@@ -665,11 +652,22 @@ def _audio_windows(sample_count: int, chunk_samples: int) -> list[tuple[int, int
 
 
 def _run_worker(request: dict, temp_dir: Path, progress, cancelled) -> tuple[bool, str]:
+    from .runtime_deps import require, worker_command
+    is_qwen = bool(_qwen_model_id(request["model"]))
+    if not is_qwen:
+        try:
+            request["asr_site"] = require(installation_root(), "local-asr")["path"]
+            if request["device"] == "cuda":
+                request["cuda_directories"] = require(installation_root(), "whisper-cuda")["directories"]
+        except RuntimeError as exc:
+            return False, str(exc)
     request_path = temp_dir / "request.json"
     request_path.write_text(json.dumps(request), encoding="utf-8")
     environment = os.environ.copy()
     # Supports source checkout and installed package without relying on caller CWD.
-    environment["PYTHONPATH"] = str(Path(__file__).resolve().parents[1])
+    app_path = str(Path(__file__).resolve().parents[1])
+    if is_qwen:
+        environment["TINGMU_QWEN_WORKER"] = "1"
     environment["PYTHONNOUSERSITE"] = "1"
     environment["PYTHONIOENCODING"] = "utf-8"
     if not request.get("allow_model_downloads", False):
@@ -678,9 +676,10 @@ def _run_worker(request: dict, temp_dir: Path, progress, cancelled) -> tuple[boo
     error, done = "", False
     with tempfile.TemporaryFile() as stderr:
         executable = _qwen_python() if _qwen_model_id(request["model"]) else Path(sys.executable)
-        if executable.stem.lower() == "pythonw":
-            executable = executable.with_name("python.exe")
-        proc = subprocess.Popen([str(executable), "-m", "tingmu.media", "--asr-worker", str(request_path)],
+        executable = worker_command(executable, environment)
+        entry = ("import sys; sys.path.insert(0, sys.argv[1]); from pathlib import Path; "
+                 "from tingmu.media import _asr_worker; sys.exit(_asr_worker(Path(sys.argv[2])))")
+        proc = subprocess.Popen([str(executable), "-I", "-B", "-c", entry, app_path, str(request_path)],
                                 stdout=subprocess.PIPE, stderr=stderr, text=True, encoding="utf-8",
                                 env=environment, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         def read_events():
@@ -814,6 +813,20 @@ def transcribe(media_path: Path, language: str = "yue", model: str = "large-v3-t
     _check_cancelled(cancelled)
     if _qwen_model_id(model):
         _qwen_python()  # Fail before extracting the media if optional environment is absent.
+    elif portable_root():
+        from .runtime_deps import require
+        try:
+            require(installation_root(), "local-asr")
+        except RuntimeError as exc:
+            raise MediaError(str(exc)) from exc
+    if portable_root():
+        _executable("ffmpeg")  # Surface setup before a consented weight download.
+        if device == "cuda":
+            from .runtime_deps import cached_probe
+            is_qwen = bool(_qwen_model_id(model))
+            check = cached_probe(installation_root(), "qwen" if is_qwen else "whisper-cuda")
+            if not check.get("cuda_usable"):
+                raise MediaError("Qwen CUDA 不可用，可在语音识别设置中选择 CPU 或自动。" if is_qwen else check["detail"])
     if allow_model_downloads and is_clean_install():
         from .workspace_models import WHISPER_MODELS, download_model
         selected = model.lower().removeprefix("qwen/") if _qwen_model_id(model) else model
@@ -881,7 +894,7 @@ def transcribe(media_path: Path, language: str = "yue", model: str = "large-v3-t
             if device == "auto" and attempt == "cuda" and progress:
                 progress(f"CUDA 转写失败，改用 CPU（速度较慢）：{error[:500]}")
         if _qwen_model_id(model):
-            raise MediaError("Qwen 本地转写失败。请运行 scripts/setup_qwen.ps1 检查隔离环境，确认 CUDA 12.8 版 PyTorch、"
+            raise MediaError("Qwen 本地转写失败。请打开「运行环境与依赖管理」检测 Qwen，确认 PyTorch、"
                              "显存和 ASR/ForcedAligner 权重完整；也可在设置中选择 CPU（较慢）。\n" + "\n".join(errors))
         raise MediaError("本地转写失败。请检查工作区语音设置中的模型是否已下载完整；CUDA 需要兼容的 NVIDIA 驱动、"
                          "CUDA 12 cuBLAS 与 cuDNN 9 DLL，可在设置中改用 CPU。\n" + "\n".join(errors))

@@ -26,7 +26,6 @@ from tingmu.drafts import DraftStorage
 from tingmu.export_paths import export_path
 from tingmu.library import MediaLibrary
 from tingmu.media_inbox import InboxScanner
-from tingmu.media import load_subtitles
 from tingmu.models import MAX_LLM_CONCURRENCY, StudyDocument
 from tingmu.storage import Store, atomic_json, canonical_path, word_key
 from tingmu.timeline import SubtitleTimeline
@@ -469,6 +468,10 @@ class Bridge(QObject):
         self.libraryChanged.emit()
 
     @property
+    def actions(self):
+        return self.feature_services.actions
+
+    @property
     def is_closed(self):
         return self._closed
 
@@ -594,7 +597,7 @@ class Bridge(QObject):
     @Property("QVariantMap", notify=settingsChanged)
     def speechModels(self):
         from tingmu.runtime import cache_root
-        from tingmu.speech import speech_model_status
+        from tingmu.speech_assets import speech_model_status
         return speech_model_status(cache_root())
 
     @Slot(str, result=bool)
@@ -1023,10 +1026,11 @@ class Bridge(QObject):
             raise ValueError("请先打开字幕对应的视频")
         if "queue" in self._workers:
             raise ValueError("请先暂停处理队列，再导入字幕")
-        from tingmu.agent import annotate_local
         media, language = self.media_path, replace(self._settings.language)
 
         def work(progress, cancelled):
+            from tingmu.agent import annotate_local
+            from tingmu.media import load_subtitles
             cues = load_subtitles(Path(path))
             if not cues:
                 raise ValueError("字幕文件中没有有效内容")

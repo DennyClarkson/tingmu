@@ -7,7 +7,7 @@ from pathlib import Path
 import shutil
 import tempfile
 
-from .media import MEDIA_EXTENSIONS, SUBTITLE_EXTENSIONS, scan_media
+from .media_files import MEDIA_EXTENSIONS, SUBTITLE_EXTENSIONS
 from .storage import Store, atomic_json, canonical_path, media_fingerprint
 
 
@@ -117,6 +117,7 @@ class MediaLibrary:
         return result
 
     def add(self, paths) -> list[str]:
+        from .media import scan_media
         incoming = []
         for raw in paths:
             path = Path(raw).expanduser().resolve()

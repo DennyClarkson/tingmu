@@ -1,12 +1,15 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Text;
-using System.Windows.Forms;
 
 // Framework 4.x is included with supported Windows 10/11 installations.
 internal static class Launcher
 {
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, ExactSpelling = true)]
+    private static extern int MessageBoxW(IntPtr owner, string message, string title, uint flags);
+
     private static string Quote(string value)
     {
         var output = new StringBuilder("\"");
@@ -27,7 +30,7 @@ internal static class Launcher
         string root = AppDomain.CurrentDomain.BaseDirectory;
         try
         {
-            var command = new StringBuilder(Quote(Path.Combine(root, "app", "bootstrap.py")));
+            var command = new StringBuilder("-B ").Append(Quote(Path.Combine(root, "app", "bootstrap.py")));
             foreach (string arg in args) command.Append(" ").Append(Quote(arg));
             var info = new ProcessStartInfo(Path.Combine(root, "runtime", "python", "TingmuRuntime.exe"), command.ToString());
             info.UseShellExecute = false;
@@ -47,8 +50,7 @@ internal static class Launcher
         }
         catch (Exception error)
         {
-            MessageBox.Show("听幕无法启动。请保留完整的便携文件夹。\n\n" + error.Message,
-                            "听幕", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageBoxW(IntPtr.Zero, "听幕无法启动。请保留完整的便携文件夹。\n\n" + error.Message, "听幕", 0x10);
             return 1;
         }
     }

@@ -4,7 +4,9 @@
 
 ## 开始使用
 
-**已有便携包**　保留整个文件夹，双击其中的 `Tingmu.exe`。首次打开时，点顶部工作区名称，选择你熟悉的语言和视频里要学的语言。简体中文、繁體中文和 English 可在「视图 → 界面语言 / Language」随时切换。界面语言整份安装共用，字幕和讲解使用工作区的语言组合。[便携版与首次设置](docs/portable.md)
+**Windows x64 便携版**　在 GitHub Releases 选择 Windows x64 便携 ZIP，完整解压到可写目录，双击 `Tingmu/Tingmu.exe`。首次启动会离线检测本机组件。点「暂不下载，直接进入」，即可用 **0 B 下载**播放视频和使用外挂字幕。需要转写时，再到「运行环境与依赖管理」配置所需组件。[GitHub Releases](https://github.com/DennyClarkson/tingmu/releases) · [便携版与首次设置](docs/portable.md)
+
+点顶部工作区名称，选择你熟悉的语言和视频里要学的语言。简体中文、繁體中文和 English 可在「视图 → 界面语言 / Language」随时切换。界面语言整份安装共用，字幕和讲解使用工作区的语言组合。
 
 **从源码运行**　在 Windows 上安装 Git 和 uv，克隆仓库后进入含 `pyproject.toml` 的目录。在 PowerShell 执行下面的命令即可启动 CPU 开发环境。首次安装需要下载依赖，语音模型按需配置。[开发环境与检查](docs/development.md)
 

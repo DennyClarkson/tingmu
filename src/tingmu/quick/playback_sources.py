@@ -9,7 +9,6 @@ from pathlib import Path
 from PySide6.QtCore import QObject, Property, Signal, Slot
 from PySide6.QtMultimedia import QMediaDevices
 
-from tingmu.media import load_subtitles
 from tingmu.storage import atomic_json
 
 
@@ -115,6 +114,7 @@ class PlaybackSources(QObject):
         self.install(track)
 
     def import_file(self, media, path):
+        from tingmu.media import load_subtitles
         path = Path(path)
         rows = [(round(cue.start * 1000), round(cue.end * 1000), cue.text) for cue in load_subtitles(path)]
         if not rows:

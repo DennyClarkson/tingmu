@@ -12,6 +12,11 @@ from .speech_assets import speech_model_status as speech_model_status
 
 
 def _session(path: Path):
+    from .runtime import portable_root
+    if portable := portable_root():
+        from .runtime_deps import require
+        from .runtime_probe_worker import activate_site
+        activate_site(require(portable, "local-asr")["path"])
     import onnxruntime as ort
     options = ort.SessionOptions()
     options.inter_op_num_threads = 1

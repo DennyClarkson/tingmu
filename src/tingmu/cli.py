@@ -3,7 +3,6 @@
 import argparse
 import json
 from pathlib import Path
-import shutil
 import sys
 
 
@@ -51,10 +50,13 @@ def main(argv=None) -> int:
             parser.error(str(exc))
     if args.command == "doctor":
         from .agent import provider_status
-        from .media import probe_media
-        report = {"python": sys.version.split()[0], "ffmpeg": shutil.which("ffmpeg"),
-                  "ffprobe": shutil.which("ffprobe"), "providers": provider_status()}
+        from .runtime import installation_root
+        from .runtime_deps import cached_probe
+        tools = cached_probe(installation_root(), "ffmpeg")
+        report = {"python": sys.version.split()[0], "ffmpeg": tools.get("ffmpeg"),
+                  "ffprobe": tools.get("ffprobe"), "providers": provider_status()}
         if args.media:
+            from .media import probe_media
             info = probe_media(args.media)
             report["media"] = {"duration": info.get("format", {}).get("duration"),
                                "streams": [{k: s[k] for k in ("index", "codec_name", "codec_type", "tags") if k in s}
@@ -103,7 +105,7 @@ def main(argv=None) -> int:
         except Exception as exc:
             print(f"准备失败：{exc}", file=sys.stderr)
             return 1
-    from .ui import run_app
+    from .quick.main import run_app
     return run_app(getattr(args, "path", None), args.data_dir)
 
 

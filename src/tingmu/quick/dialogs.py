@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from typing import Any, Callable
 from pathlib import Path
-from tingmu.media import MEDIA_EXTENSIONS, save_srt
+from tingmu.media_files import MEDIA_EXTENSIONS
 from tingmu.lesson_material import translated_subtitles
 from tingmu.storage import canonical_path
 from .localization import ui_text
@@ -142,5 +142,6 @@ class DialogService:
         )
         path = self.ports.export_destination(p.get("path"), filename, (".srt",))
         if path:
+            from tingmu.media import save_srt
             save_srt(cues, path)
             self.ports.set_state(status=f"字幕已导出：{path}")

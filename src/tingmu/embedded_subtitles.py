@@ -12,14 +12,13 @@ from itertools import groupby
 import json
 import os
 from pathlib import Path
-import shutil
 import subprocess
 import time
 from tempfile import TemporaryDirectory
 
 from PySide6.QtGui import QImage
 
-from .runtime import cache_root, confined_path, installation_root, portable_root
+from .runtime import cache_root, confined_path, installation_root
 
 
 PAGE_MS = 30000
@@ -81,16 +80,11 @@ class BitmapTrack:
 
 
 def _binary(name):
-    suffix = ".exe" if os.name == "nt" else ""
-    release = portable_root()
-    folder = release or installation_root() / "dist/Tingmu"
-    local = confined_path(folder, f"bin/{name}{suffix}")
-    if local.is_file():
-        return str(local)
-    executable = None if release else shutil.which(name)
-    if not executable:
-        raise SubtitleError("缺少 FFmpeg 工具，请检查安装目录。")
-    return executable
+    from .runtime_deps import require
+    try:
+        return require(installation_root(), "ffmpeg")[name]
+    except RuntimeError as exc:
+        raise SubtitleError(str(exc)) from exc
 
 
 def _run(args, folder, stop, *, images=False):

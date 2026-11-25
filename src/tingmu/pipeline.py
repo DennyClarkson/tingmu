@@ -7,6 +7,7 @@ from .agent import ANNOTATION_VERSION, LearningAgent, annotate_local
 from .agent import AnnotationValidationError as AnnotationValidationError
 from .language import normalize_cues
 from .media import load_subtitles, transcribe
+from .media_files import find_subtitle
 from .models import AppSettings, StudyDocument
 from .review import REVIEW_VERSION, TranscriptReviewer
 from .storage import Store
@@ -16,16 +17,6 @@ from .preparation import PreparationCancelled as PreparationCancelled
 from .preparation import _compatible_asr_cache as _compatible_asr_cache
 from .preparation import _evidence_progress as _evidence_progress
 from .preparation import _needs_text_configuration as _needs_text_configuration
-
-
-def find_subtitle(media_path: Path, target_language: str) -> Path | None:
-    for stem in (f"{media_path.stem}.{target_language}", media_path.stem):
-        for extension in (".srt", ".ass", ".vtt", ".ssa"):
-            candidate = media_path.with_name(stem + extension)
-            if candidate.is_file():
-                return candidate
-    return None
-
 
 
 def _ports():

@@ -14,7 +14,7 @@ from filelock import FileLock, Timeout
 
 from . import qwen_support, whisper_support
 from .media import QWEN_MODELS, _qwen_python
-from .runtime import cache_root, confined_path, is_clean_install
+from .runtime import cache_root, confined_path, is_clean_install, portable_root
 from .task_progress import TransferMeter
 
 WHISPER_MODELS = {
@@ -143,8 +143,17 @@ class ModelReadiness:
     message: str
 
 
+def _require_engine(model):
+    if model in QWEN_MODELS:
+        _qwen_python()
+    elif portable := portable_root():
+        from .runtime_deps import require
+        require(portable, "local-asr")
+
+
 def model_readiness(model) -> ModelReadiness:
     try:
+        _require_engine(model)
         if model.startswith("local:"):
             from .local_whisper import resolve_local_model
             try:
@@ -153,8 +162,6 @@ def model_readiness(model) -> ModelReadiness:
                 return ModelReadiness(False, "model_missing", str(exc))
             return ModelReadiness(True, "ready", "已就绪 · 使用共享目录中的本地模型")
         cache, repositories = _assets(model)
-        if model in QWEN_MODELS:
-            _qwen_python()
         support = _support(model)
         if support and not support.inventory()["complete"]:
             return ModelReadiness(False, "support_missing", "尚未检测到完整的识别模型支持文件")
@@ -169,7 +176,23 @@ def model_readiness(model) -> ModelReadiness:
 
 def model_status(model):
     """Compatibility display adapter; decisions must use model_readiness()."""
+    if portable := portable_root():
+        from .runtime_deps import last_probe
+        engine = "qwen" if model in QWEN_MODELS else "local-asr"
+        state = last_probe(portable, engine)
+        if state is None:
+            return "请在「运行环境与依赖管理」中检测识别运行环境"
+        if not state["ready"]:
+            return state["detail"]
     return model_readiness(model).message
+
+
+def _download_python():
+    # The Windows venv redirector spawns a second process. Launch CPython with
+    # the same venv identity so killing the monitored PID closes the Hub files.
+    if os.name == "nt" and sys.prefix != sys.base_prefix:
+        return [sys._base_executable, "-B"], {**os.environ, "__PYVENV_LAUNCHER__": sys.executable}
+    return [sys.executable, "-B"], None
 
 
 def _download_repo(model, repo, progress, cancelled):
@@ -178,9 +201,10 @@ def _download_repo(model, repo, progress, cancelled):
     with tempfile.TemporaryDirectory(dir=cache_root()) as temp:
         events = os.path.join(temp, "transfer.jsonl")
         ledger = Path(temp) / "partial-files.txt"
-        argv = [sys.executable, "-m", "tingmu.workspace_models", model, repo, str(ledger)]
+        python, environment = _download_python()
+        argv = [*python, "-m", "tingmu.workspace_models", model, repo, str(ledger)]
         with open(events, "wb") as writer, open(events, "rb") as reader, subprocess.Popen(
-            argv, stdin=subprocess.DEVNULL, stdout=writer, stderr=subprocess.DEVNULL,
+            argv, stdin=subprocess.DEVNULL, stdout=writer, stderr=subprocess.DEVNULL, env=environment,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         ) as child:
             partial = b""
@@ -220,8 +244,7 @@ def _download_repo(model, repo, progress, cancelled):
 
 def download_model(model, progress, cancelled):
     cache, repositories = _assets(model)
-    if model in QWEN_MODELS:
-        _qwen_python()
+    _require_engine(model)
     support = _support(model)
     if support:
         support.install(progress, cancelled)

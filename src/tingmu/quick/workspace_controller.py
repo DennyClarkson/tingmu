@@ -14,10 +14,23 @@ from PySide6.QtGui import QDesktopServices
 
 from tingmu.runtime import cache_root, confined_path
 from tingmu.workspaces import language_code, pair_label
-from tingmu.app_actions import ActionError
-from tingmu.workspace_text import effective_text_roles, enable_global_text, text_reuse_offer
+from .runtime_setup import RuntimeSetup
 from .workspace_text import TextSetupService
-from tingmu.workspace_models import download_model, model_status, model_inventory
+
+
+def download_model(model, progress, cancelled):
+    from tingmu.workspace_models import download_model as download
+    return download(model, progress, cancelled)
+
+
+def model_status(model):
+    from tingmu.workspace_models import model_status as status
+    return status(model)
+
+
+def model_inventory(model):
+    from tingmu.workspace_models import model_inventory as inventory
+    return inventory(model)
 
 
 class _DeferredCheckTrigger:
@@ -42,7 +55,7 @@ class WorkspaceController(QObject):
     _settingsSnapshotRequested = Signal(object)
     _deferredCheckRequested = Signal()
 
-    def __init__(self, bridge, catalog, workspace_id, show_setup, switch, initial_path):
+    def __init__(self, bridge, catalog, workspace_id, show_setup, switch, initial_path, *, runtime_setup_dir=None):
         super().__init__(bridge)
         self.bridge = bridge
         self.catalog = catalog
@@ -54,6 +67,8 @@ class WorkspaceController(QObject):
         self.items = catalog.summaries()
         self.model = ""
         self.readiness = ""
+        self.runtime_setup = RuntimeSetup(bridge, runtime_setup_dir)
+        self.runtime_setup.detectionFinished.connect(self._runtime_updated)
         self.proposal = {}
         self.text_setup = TextSetupService(self)
         self.recommendations = {}
@@ -206,6 +221,7 @@ class WorkspaceController(QObject):
             self.bridge.chat.activate_context_session()
 
     def _workspace_public(self, workspace_id):
+        from tingmu.workspace_text import effective_text_roles
         row = next((row for row in self.catalog.summaries() if row["id"] == workspace_id), None)
         if row is None:
             raise ValueError("工作区不存在，请重新列出工作区")
@@ -290,6 +306,8 @@ class WorkspaceController(QObject):
         self.changed.emit()
 
     def handle_agent_action(self, name, args, context):
+        from tingmu.app_actions import ActionError
+
         if context.workspace_id and context.workspace_id != self.workspace_id:
             raise ActionError("请求属于另一个学习工作区，请在原工作区继续。", "workspace_changed")
         handlers = {
@@ -325,6 +343,8 @@ class WorkspaceController(QObject):
         return self.propose_text_models(workspace_id, context)
 
     def configure_study_workspace(self, args, context):
+        from tingmu.app_actions import ActionError
+
         workspace_id = args["workspace_id"]
         if workspace_id == self.workspace_id and set(self.bridge.task_keys()) - {"chat"}:
             raise ActionError("当前工作区有后台任务，请完成后再调整学习设置。", "workspace_busy")
@@ -347,6 +367,8 @@ class WorkspaceController(QObject):
                 "switch_pending": self.pending_switch == workspace_id}
 
     def propose_workspace_model(self, args, context):
+        from tingmu.app_actions import ActionError
+
         workspace_id = args["workspace_id"]
         result = self.recommendations.get(workspace_id, {})
         settings = self._settings_for(workspace_id)
@@ -355,6 +377,9 @@ class WorkspaceController(QObject):
         candidate = next((item for item in result.get("candidates", []) if item["model"] == args["model"]), None)
         if not candidate or not candidate.get("available"):
             raise ActionError("此模型不可用于当前电脑，请选择本次推荐中的可用模型。", "model_unavailable")
+        missing = self.runtime_setup.model_message(candidate["model"], candidate.get("device", "auto"))
+        if missing:
+            raise ActionError(missing, "runtime_missing")
         inventory = model_inventory(candidate["model"])
         if inventory["installed"]:
             if self.proposal.get("workspace_id") == workspace_id and self.proposal.get("status") != "downloading":
@@ -419,11 +444,14 @@ class WorkspaceController(QObject):
     def downloadPlan(self, kind):
         try:
             if kind == "downloadSpeech":
+                self._check_model_runtime("small", "cpu")
                 from tingmu.speech_assets import ARCHIVE_BYTES, planned_download_bytes
                 size = planned_download_bytes(cache_root())
                 return {"kind": kind, "label": "人声分离与换人检测", "bytes": float(size),
                         "packageBytes": float(sum(ARCHIVE_BYTES.values()))}
-            model = self.bridge.settings_snapshot().asr_model
+            settings = self.bridge.settings_snapshot()
+            model = settings.asr_model
+            self._check_model_runtime(model, settings.device)
             inventory = model_inventory(model)
             return {"kind": "download", "label": model, "model": model, "bytes": float(inventory["download_bytes"]),
                     "packageBytes": float(inventory["estimated_download_bytes"]), "installed": inventory["installed"]}
@@ -453,10 +481,12 @@ class WorkspaceController(QObject):
                 raise ValueError("工作区设置已改变，请重新推荐并确认")
             if "model-download" in self.bridge.task_keys():
                 raise ValueError("已有模型下载正在执行")
+            self._check_model_runtime(proposal["model"], proposal["device"])
             proposal.update(status="downloading", error="", progress="已确认，开始下载")
             frozen = deepcopy(proposal)
             def fetch(progress, cancel):
                 try:
+                    self.runtime_setup.check_before_transfer(frozen["model"], frozen["device"])
                     download_model(frozen["model"], progress, cancel)
                     if not model_inventory(frozen["model"])["installed"]:
                         raise ValueError("模型文件仍不完整，请重新确认后重试")
@@ -537,10 +567,23 @@ class WorkspaceController(QObject):
 
     @Slot(str, result=str)
     def readinessFor(self, model):
+        message = self.runtime_setup.model_message(model, self.bridge.settings_snapshot().device)
+        if message:
+            return message
         if self.model != model or not self.readiness:
             self.model = model
             self.readiness = model_status(model)
         return self.readiness
+
+    def _runtime_updated(self):
+        self.readiness = ""
+        self.changed.emit()
+
+    def _check_model_runtime(self, model, device):
+        message = self.runtime_setup.model_message(model, device)
+        if message:
+            self.runtime_setup.detect()
+            raise ValueError(message)
 
     def _idle(self):
         if self.bridge.task_keys():
@@ -548,6 +591,7 @@ class WorkspaceController(QObject):
 
     @Slot(result="QVariantMap")
     def textReuseOffer(self):
+        from tingmu.workspace_text import text_reuse_offer
         return text_reuse_offer(self.bridge.store.data_dir, self.bridge.settings_snapshot())
 
     @Slot(str, "QVariantMap", result=bool)
@@ -566,6 +610,7 @@ class WorkspaceController(QObject):
         return True
 
     def _ui_create(self, values):
+        from tingmu.workspace_text import enable_global_text
         from tingmu.models import AppSettings
         self._idle()
         signature = values.get("textReuseSignature")
@@ -615,9 +660,12 @@ class WorkspaceController(QObject):
         self._download_assets("downloadSpeech", values)
 
     def _download_assets(self, kind, values):
-        model = self.bridge.settings_snapshot().asr_model
+        settings = self.bridge.settings_snapshot()
+        model = settings.asr_model
         if kind == "download" and values.get("model", model) != model:
             raise ValueError("所选模型已改变，请重新确认下载。")
+        engine_model, device = (model, settings.device) if kind == "download" else ("small", "cpu")
+        self._check_model_runtime(engine_model, device)
 
         def complete(result):
             self.readiness = ""
@@ -625,6 +673,7 @@ class WorkspaceController(QObject):
             self.changed.emit()
 
         def fetch(progress, cancel):
+            self.runtime_setup.check_before_transfer(engine_model, device)
             if kind == "download":
                 return download_model(model, progress, cancel)
             from tingmu.speech_assets import install

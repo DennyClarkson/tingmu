@@ -1,23 +1,25 @@
 """Assemble a first-run Windows portable folder from the existing bundled runtimes."""
 import argparse
 from datetime import datetime, timezone
-import hashlib
 import json
+import os
 from pathlib import Path
 import shutil
 import tempfile
 import tomllib
 
+from bundle_files import compile_launcher, copy_packages, launcher_hash, precompile
 from qml_runtime import qml_asset_manifest, validate_qml_runtime
 
 ROOT = Path(__file__).resolve().parents[1]
 BUNDLE = ROOT / "dist/Tingmu"
+RELEASE_DOCUMENTS = {"使用说明.md": "docs/portable.md", "THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md"}
 PACKAGE_ASSETS = {
     "tagger.pickle", "nagisa_v001.dict", "nagisa_v001.hp", "nagisa_v001.model",
     "trained_models", "test_data", "tests", "test", "__pycache__", "direct_url.json",
 }
-EXCLUDED_EXTENSIONS = {
-    ".onnx", ".safetensors", ".ckpt", ".gguf", ".pt", ".tflite", ".weights", ".whl",
+WEIGHT_EXTENSIONS = {".onnx", ".safetensors", ".ckpt", ".gguf", ".pt", ".tflite", ".weights"}
+EXCLUDED_EXTENSIONS = WEIGHT_EXTENSIONS | {".whl",
     ".wav", ".mp3", ".mp4", ".mkv", ".webm", ".avi", ".mov", ".ogg", ".flac", ".pyc",
 }
 
@@ -35,38 +37,81 @@ def ignore_runtime(directory, names):
     return ignored
 
 
-def patch_aligner(root):
-    # Nagisa eagerly opens its Japanese model on import. Hardware detection must
-    # work before the user has chosen to download any ASR or tokenizer weights.
-    packages = root / "runtime/asr/Lib/site-packages"
-    aligner = packages / "qwen_asr/inference/qwen3_forced_aligner.py"
-    code = aligner.read_text("utf-8")
-    needle = "        words = nagisa.tagging(text).words"
-    if code.count("\nimport nagisa\n") != 1 or code.count(needle) != 1:
-        raise ValueError("Review the Qwen tokenizer import for this dependency version")
-    aligner.write_text(code.replace("\nimport nagisa\n", "\n").replace(needle, "        import nagisa\n" + needle),
-                       encoding="utf-8")
+def validate_model_free_runtime(root, folders=("app", "runtime", "bin")):
+    """Check the actual artifact after all copy/compile steps, including wheel data."""
+    inspect_suffixes = WEIGHT_EXTENSIONS | {".bin", ".model", ".npz", ".pkl", ".pickle", ".joblib", ".pb", ".h5"}
+    # These are numerical integration constants used by scipy.stats.qmc.
+    sobol = "runtime/asr/Lib/site-packages/scipy/stats/_sobol_direction_numbers.npz"
+    count = 0
+    for folder in folders:
+        for directory, _, names in os.walk(root / folder):
+            for name in names:
+                count += 1
+                path = Path(directory) / name
+                ext = path.suffix.lower()
+                if ext in inspect_suffixes or name in PACKAGE_ASSETS:
+                    if path.relative_to(root).as_posix() != sobol:
+                        raise ValueError(f"Unexpected model payload in model-free distribution: {path}")
+                if ext == ".pth":  # CPython path config is text; PyTorch checkpoints are binary.
+                    if path.stat().st_size > 65536:
+                        raise ValueError(f"Unexpected binary .pth in model-free distribution: {path}")
+                    config = path.read_bytes()
+                    if b"\x00" in config:
+                        raise ValueError(f"Unexpected binary .pth in model-free distribution: {path}")
+                    config.decode("utf-8")
+    return {"files_checked": count, "model_payloads": 0}
 
-    tagger = packages / "nagisa/tagger.py"
-    code = tagger.read_text("utf-8")
-    needle = "base + '/data/nagisa_v001."
-    if code.count(needle) != 3:
-        raise ValueError("Review the Nagisa asset locations for this dependency version")
-    cache = "from pathlib import Path\nasset_dir = str(Path(__file__).resolve().parents[5] / '.cache/qwen-support/nagisa-0.2.11')"
-    code = code.replace("sys.path.append(base)", "sys.path.append(base)\n" + cache)
-    tagger.write_text(code.replace(needle, "asset_dir + '/nagisa_v001."), encoding="utf-8")
+
+def validate_core_release(root):
+    """Reject even empty heavyweight package directories left behind by stale wheels."""
+    for name in RELEASE_DOCUMENTS:
+        document = root / name
+        if not document.is_file() or not document.stat().st_size:
+            raise ValueError(f"Missing or empty release document: {document}")
+    packages = root / "runtime/python/Lib/site-packages"
+    blocked = {"av", "ctranslate2", "faster_whisper", "hf_xet", "nvidia", "onnxruntime",
+               "tokenizers", "torch", "qwen_asr"}
+    for path in (root / "bin", root / "runtime/asr", root / ".cache", root / "data"):
+        if path.exists():
+            raise ValueError(f"Unexpected external runtime or user data in release: {path}")
+    for path in packages.iterdir():
+        name = path.name.lower().split("-")[0].split(".")[0]
+        if name in blocked or name.startswith("nvidia_"):
+            raise ValueError(f"Unexpected inference package in release: {path}")
+    return validate_model_free_runtime(root)
+
+
+def copy_release_documents(repository, root):
+    for name, source in RELEASE_DOCUMENTS.items():
+        shutil.copy2(repository / source, root / name)
 
 
 def copy_app(root):
-    shutil.copytree(ROOT / "src/tingmu", root / "app/tingmu", ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    source = ROOT / "src/tingmu"
+
+    def ignore(directory, names):
+        omitted = shutil.ignore_patterns("__pycache__", "*.pyc")(directory, names)
+        if Path(directory) == source:
+            omitted.add("ui")  # This distribution launches only the Qt Quick frontend.
+        return omitted
+
+    shutil.copytree(source, root / "app/tingmu", ignore=ignore)
     for name in ("bootstrap.py", "bootstrap_logging.py", "portable_smoke.py", "qml_runtime.py"):
         shutil.copy2(ROOT / "packaging" / name, root / "app" / name)
 
 
 def release_manifest(marker, app_root, runtime_root):
     version = tomllib.loads((ROOT / "pyproject.toml").read_text("utf-8"))["project"]["version"]
-    return {**marker, "version": version, "built": datetime.now(timezone.utc).isoformat(),
-            "qml_runtime": validate_qml_runtime(runtime_root), "qml_assets": qml_asset_manifest(app_root)}
+    result = {**marker, "version": version, "built": datetime.now(timezone.utc).isoformat(),
+              "qml_runtime": validate_qml_runtime(runtime_root), "qml_assets": qml_asset_manifest(app_root)}
+    if app_root != runtime_root:  # App-only refresh keeps the installed runtime.
+        if result.get("startup_bytecode"):
+            caches = [p for folder in (app_root / "app", runtime_root / "runtime/python/Lib")
+                      for p in folder.rglob("*.pyc")]
+            result["startup_bytecode"] = {"files": len(caches), "bytes": sum(p.stat().st_size for p in caches)}
+        # Validate just the new payload. User-installed engines stay outside the release audit.
+        validate_model_free_runtime(app_root, ("app",))
+    return result
 
 
 def refresh(destination):
@@ -74,13 +119,15 @@ def refresh(destination):
     manifest_path = destination / "tingmu-portable.json"
     marker = json.loads(manifest_path.read_text("utf-8"))
     app = destination / "app"
-    launcher_hash = hashlib.sha256((ROOT / "packaging/Launcher.cs").read_bytes()).hexdigest()
+    digest = launcher_hash(ROOT / "packaging/Launcher.cs")
     if (app.resolve() != app or not (app / "bootstrap.py").is_file() or not (destination / "Tingmu.exe").is_file()
-            or marker.get("launcher_source_sha256") != launcher_hash):
+            or marker.get("launcher_source_sha256") != digest):
         raise ValueError("Expected an existing portable app with the current launcher")
     with tempfile.TemporaryDirectory(prefix=".tingmu-update-", dir=destination) as folder:
         stage = Path(folder)
         copy_app(stage)
+        if marker.get("startup_bytecode"):
+            precompile(stage / "app", destination / "runtime/python/python.exe", include_runtime=False)
         replacement = release_manifest(marker, stage, destination)
         staged_marker = stage / manifest_path.name
         staged_marker.write_text(json.dumps(replacement, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -104,25 +151,39 @@ def refresh(destination):
     print(f"Updated portable application: {destination}")
 
 
-def build(destination):
+def build(destination, source=None, *, bytecode=True):
+    source = BUNDLE if source is None else source
     if destination.exists():
         raise FileExistsError(f"Choose a new folder. Destination already exists: {destination}")
-    marker = json.loads((BUNDLE / "tingmu-portable.json").read_text("utf-8"))
-    launcher_hash = hashlib.sha256((ROOT / "packaging/Launcher.cs").read_bytes()).hexdigest()
-    if marker["launcher_source_sha256"] != launcher_hash:
-        raise ValueError("Refresh the portable launcher before building the clean package")
+    marker = json.loads((source / "tingmu-portable.json").read_text("utf-8"))
+    launcher_source = ROOT / "packaging/Launcher.cs"
+    digest = launcher_hash(launcher_source)
     with tempfile.TemporaryDirectory(prefix=".tingmu-build-", dir=destination.parent) as staging:
         root = Path(staging) / "Tingmu"
         root.mkdir()
-        print("Copying independent Windows and ASR runtimes...", flush=True)
-        shutil.copytree(BUNDLE / "runtime", root / "runtime", ignore=ignore_runtime)
-        patch_aligner(root)
-        (root / "bin").mkdir()
-        for name in ("ffmpeg.exe", "ffprobe.exe", "FFmpeg-LICENSE.txt"):
-            shutil.copy2(BUNDLE / "bin" / name, root / "bin" / name)
+        print("Copying core Windows runtime...", flush=True)
+        src = source / "runtime/python"
+        dst = root / "runtime/python"
+
+        def outside_packages(directory, names):
+            if Path(directory) == src / "Lib":
+                return {"site-packages", *ignore_runtime(directory, names)}
+            return ignore_runtime(directory, names)
+
+        shutil.copytree(src, dst, ignore=outside_packages)
+        copy_packages(src / "Lib/site-packages", dst / "Lib/site-packages", "python", ignore_runtime)
         copy_app(root)
-        shutil.copy2(BUNDLE / "Tingmu.exe", root / "Tingmu.exe")
-        marker = release_manifest({**marker, "clean_install": True}, root, root)
+        copy_release_documents(ROOT, root)
+        if marker.get("launcher_source_sha256") == digest:
+            shutil.copy2(source / "Tingmu.exe", root / "Tingmu.exe")
+        else:
+            compile_launcher(launcher_source, root / "Tingmu.exe")
+        compiled = precompile(root / "app", root / "runtime/python/python.exe",
+                              include_runtime=True) if bytecode else {}
+        marker.pop("asr", None)
+        marker = release_manifest({**marker, "clean_install": True, "launcher_source_sha256": digest,
+                                   "startup_bytecode": compiled}, root, root)
+        marker["weight_audit"] = validate_core_release(root)
         (root / "tingmu-portable.json").write_text(json.dumps(marker, ensure_ascii=False, indent=2), encoding="utf-8")
         root.rename(destination)
     print(f"Clean install ready: {destination}", flush=True)
@@ -131,6 +192,12 @@ def build(destination):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("destination", type=Path, help="Portable folder on the project disk")
+    parser.add_argument("--source", type=Path, help="Base portable runtime folder (default: dist/Tingmu)")
+    parser.add_argument("--no-bytecode", action="store_true", help="Build a source-only comparison copy")
     parser.add_argument("--refresh", action="store_true", help="Update program files in an existing, closed installation")
     args = parser.parse_args()
-    (refresh if args.refresh else build)(args.destination.resolve())
+    if args.refresh:
+        refresh(args.destination.resolve())
+    else:
+        build(args.destination.resolve(), args.source.resolve() if args.source else None,
+              bytecode=not args.no_bytecode)

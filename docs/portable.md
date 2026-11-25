@@ -1,8 +1,22 @@
 # 听幕便携版使用指南
 
-将完整的 Windows x64 便携文件夹解压到有写入权限、空间足够的位置，双击 `Tingmu.exe`。播放器、Qt Quick 界面、字体、FFmpeg 和 Python 运行时随包提供。干净发行包首次启动时没有个人资料、模型连接或识别权重，默认工作区已停用文本 API。已有安装会恢复上次使用的工作区。
+在 GitHub Releases 的附件中选择 Windows x64 便携 ZIP，将整个压缩包解压到有写入权限、空间足够的位置。打开解压出的 `Tingmu` 文件夹，双击 `Tingmu.exe`。同一目录中的 `THIRD_PARTY_NOTICES.md` 说明随包组件和许可的位置。[GitHub Releases](https://github.com/DennyClarkson/tingmu/releases)
+
+随包提供 Qt Quick 播放器、四套完整字体、Python 和基础学习工具。视频解码使用 Qt 自带的多媒体插件。干净发行包首次启动时没有个人资料、模型连接或识别权重，默认工作区已停用文本 API。已有安装会恢复上次使用的工作区。
 
 ## 首次播放与准备
+
+首次打开时，「运行环境与依赖管理」会在后台离线检查本机。点「暂不下载，直接进入」即可用 **0 B 下载**播放视频、使用外挂字幕。以后可从「文件」菜单或「工作区设置 → 语音识别」再次打开。显示「已复用本机组件 · 0 B」的项目可直接使用。
+
+| 想使用的功能 | 一次性准备 |
+| --- | --- |
+| 打开视频、切换音轨、阅读外挂字幕或学习文档 | 随包就绪。 |
+| 提取音轨、调用本机或外部转写 API、解码内嵌字幕 | 检测或指定同时包含 FFmpeg 和 FFprobe 的目录。缺少工具时可勾选安装到 `bin/`。 |
+| 使用本地 Whisper 或 ONNX 语音处理 | 勾选本地 Whisper 引擎；使用 API 转写或外挂字幕时可跳过。 |
+| 使用 NVIDIA 加速 Whisper | 检测现有 CUDA 12 / cuDNN 9 动态库。仅在具有兼容 NVIDIA 显卡且缺少可复用运行库时选择安装。 |
+| 使用 Qwen3-ASR | 选择本机已装好 PyTorch 和 Qwen3-ASR 的 Python 环境，或明确勾选数 GiB 的独立运行环境。 |
+
+界面会显示所选组件的预计下载量。确认安装后可查看进度或取消。运行环境与模型权重分别管理。本地识别引擎就绪后，在对应工作区选模型并确认下载权重。搬迁后，若原电脑上的路径失效，可重新检测、指定新路径或将所需组件装进便携目录。
 
 1. 用顶部工作区选择器新建或打开学习工作区。「用哪种语言学」决定译文和讲解的语言，「想学哪种语言」对应片中所学的原声。两者可以相同，也支持自填语言代码。
 2. 选「文件 → 打开视频…」开始播放。媒体库可以引用任意位置的视频。若希望将片源和随附字幕一并保存在工作区，点「复制视频到工作区…」。也可在「工作区设置 → 语言与文件」打开视频目录，把文件放进 `media/`。打开「自动准备放入 media 的视频」后，听幕会等待复制完成，并在所需资源可用时排队处理。
@@ -34,11 +48,11 @@ Agent 按所选音轨、可辨认的剧集编号、实际字幕语言和时间�
 
 **本机识别。** 在「工作区设置 → 语音识别」选择内置 Whisper 或 Qwen。按学习语言和设备选模型，点「下载所选模型」，核对包大小和本次预计下载量后确认。下载时显示已接收字节和速度。同一安装的工作区共用权重。已有完整的 CTranslate2 Whisper 模型可放入安装内的 `.cache/models/`，再点「选择已有的本机 Whisper 模型…」。设备可选 `auto`、`cpu` 或 `cuda`，GPU 识别需要兼容的 NVIDIA 驱动。单纯播放和直接读取字幕无需下载识别模型。
 
-**人声和分句。** 可另行下载人声分离及换人检测模型。启用预处理但缺少分离模型时会用频谱方法减弱重复背景声。缺少换人检测模型时，沿用识别器分句。原始识别文本和声学时间随材料保存。模型按文本划分长句时，屏幕分段时间为推算值。疑难台词可对照原声，使用「纠正此句 → 复核并保存」留下修订。[本地语音处理](local-speech.md)
+**人声和分句。** 可另行下载人声分离及换人检测模型。启用预处理但缺少分离模型时会用频谱方法减弱重复背景声。缺少换人检测模型时，沿用识别器分句。原始识别文本和声学时间随材料保存。模型按文本划分长句时，屏幕分段时间为推算值。疑难台词可对照原声，使用「纠正此句 → 复核并保存」留下修订。[本地语音处理](https://github.com/DennyClarkson/tingmu/blob/main/docs/local-speech.md)
 
-**转写服务。** 也可使用已启动的本机回环 API，或指定一个远程转写接口。选择「外部 API · 远程转写」时，填写服务地址、模型和字幕格式，并明确勾选「允许此工作区发送音轨」。生成字幕时，听幕将所选音轨分段发往该地址。视频播放、音轨提取及预处理在本机进行。[外部语音接口](external-asr.md)
+**转写服务。** 也可使用已启动的本机回环 API，或指定一个远程转写接口。选择「外部 API · 远程转写」时，填写服务地址、模型和字幕格式，并明确勾选「允许此工作区发送音轨」。生成字幕时，听幕将所选音轨分段发往该地址。视频播放、音轨提取及预处理在本机进行。[外部语音接口](https://github.com/DennyClarkson/tingmu/blob/main/docs/external-asr.md)
 
-**文本服务。** 在「文件 → 全局文本模型…」保存连接，并为「全文复核」「批量讲解」「学习对话」分配模型。同一安装共享连接和任务分配。每个工作区在「文本模型与 API」选择停用、仅本机 API 或允许远程文本 API。授权远程讲解只开放文本处理，发送音轨须在语音设置中另行授权。[模型连接与权限](providers.md)
+**文本服务。** 在「文件 → 全局文本模型…」保存连接，并为「全文复核」「批量讲解」「学习对话」分配模型。同一安装共享连接和任务分配。每个工作区在「文本模型与 API」选择停用、仅本机 API 或允许远程文本 API。授权远程讲解只开放文本处理，发送音轨须在语音设置中另行授权。[模型连接与权限](https://github.com/DennyClarkson/tingmu/blob/main/docs/providers.md)
 
 ### 队列进度与重试
 
@@ -64,7 +78,9 @@ Agent 按所选音轨、可辨认的剧集编号、实际字幕语言和时间�
 | `data/` | 默认工作区、全局模型连接、工作区目录。新建工作区位于 `data/workspaces/`。 |
 | 每个工作区 | `media/` 存放复制或放入的视频，`documents/` 保存学习材料，`notebooks/` 保存笔记，`study.db` 保存收藏、聊天及播放记录，`exports/` 是默认导出位置。 |
 | `.cache/` | 同一安装共用的识别权重、运行缓存和临时文件。 |
-| `app/`、`runtime/`、`bin/` | 应用、随包运行时、FFmpeg 与 FFprobe。 |
+| `app/`、`runtime/python/` | 应用、组件版本和 SHA-256 清单、随包的核心 Python 与 Qt。 |
+| `bin/`、`.cache/runtime-deps/`、`runtime/asr/` | 用户按需安装的媒体工具、Whisper/ONNX 和 CUDA 库、独立 Qwen 环境。 |
+| `data/runtime-setup.json` | 首次引导状态和已验证的外部组件路径。 |
 
 关闭听幕再备份或移动整个便携文件夹。启动时可重新定位安装内的媒体引用。迁移前的数据库和 JSON 原件保存在工作区的 `migration-backups/`，目标有冲突时会停止迁移。目录外引用的视频仍需从原路径访问。使用个人资料的副本会包含这些学习记录。供他人首次使用的副本应使用下方的干净构建流程。
 
@@ -72,16 +88,18 @@ Agent 按所选音轨、可辨认的剧集编号、实际字幕语言和时间�
 
 ## 维护者构建与验收
 
-以下命令在 Windows 的仓库根目录执行，文内相对链接指向该仓库的文件。源码仓库不附带便携运行时或模型。先准备项目的 `.venv/`、独立 Qwen 环境 `.cache/qwen-venv/`，以及 PATH 中的 FFmpeg、FFprobe 和随附许可证。打包使用系统 .NET Framework x64 编译器生成窗口式启动器。[开发环境](development.md)
+使用准备好的 Windows x64 Python 3.12 开发环境 `.venv/` 构建。两个入口采用相同的核心包内容；一种读取开发环境，另一种以既有便携目录的主 Python 为输入。构建只取程序和运行依赖，使用系统 .NET Framework 编译器生成启动器，输出清单记录 Qt 闭包、资源哈希与模型审计结果。[开发环境](https://github.com/DennyClarkson/tingmu/blob/main/docs/development.md)
 
-1. **制作基础便携目录。** 运行 `.\scripts\build_portable.ps1` 生成 `dist/Tingmu/`。构建复制运行时、程序、FFmpeg 以及缓存中已有的模型 snapshot、refs 和语音前处理权重。仅在明确迁移本机旧资料时追加 `-ImportUserData`，它复制 `%LOCALAPPDATA%/Tingmu` 中的资料，以 SQLite 在线备份复制数据库，并把导入记录写入目标 `data/import-manifest.json`。
-2. **制作用于分发的干净副本。** 已有基础便携目录后，用下面的命令指定一个尚不存在的目标目录。其父目录须已存在。干净构建只带程序、FFmpeg 和独立运行时，排除个人资料、模型权重和缓存。用该目录里的 `Tingmu.exe` 验证首次启动。
-3. **更新已有安装。** 先关闭该安装的所有听幕窗口，包括托盘中的进程。`.\scripts\build_portable.ps1 -RefreshApp` 更新基础目录的代码和 QML，启动器源码变化时重新编译 EXE。要仅替换指定安装的 `app/` 和发行清单，用下方第二条命令。该操作会验证运行时和启动器源文件摘要，校验通过后替换程序，保留现有运行时和学习数据。启动器源码变化后，应从已更新的基础目录另建干净包。
-4. **验证交付物。** 对每份安装运行 `Tingmu.exe --portable-smoke`。附加 `--smoke-media "视频绝对路径"` 可检验真视频帧、定位、倍速、暂停以及片源支持的音轨切换。报告在该安装的 `data/logs/portable-smoke.json`，其中 `ready` 表示检查是否全部通过。测试学习资料独立保存在 `.cache/portable-smoke/`。离屏构造检查可设进程级 `QT_QPA_PLATFORM=offscreen`。播放、全屏和交互改动还应在可见 Windows 窗口操作核对。[交接与实测记录](../handoff.md)
+在仓库根目录执行以下命令，使用新的 QA 目录。每次打包只需选一个构建入口。
 
 ```powershell
-.\.venv\Scripts\python.exe -B packaging\build_clean_install.py "..\Clean Environment Clean Install Test"
-.\.venv\Scripts\python.exe -B packaging\build_clean_install.py "..\Clean Environment Clean Install Test" --refresh
+$qa = '.cache/qa/bundle-opt'
+New-Item -ItemType Directory -Force $qa | Out-Null
+.venv/Scripts/python.exe -B packaging/build_portable.py --destination "$qa/Tingmu"
+# 从已有便携目录生成同一款干净发行包
+.venv/Scripts/python.exe -B packaging/build_clean_install.py "$qa/clean" --source "$qa/Tingmu"
 ```
 
-打包器用 `python312._pth` 隔离 CPython 的模块搜索路径。播放器和 ASR 使用各自的依赖环境。`tingmu-portable.json` 记录启动器源码摘要、QML 资源哈希和必要的 Qt 模块。为支持含中文和空格的安装路径，打包时在随包 Nagisa 依赖中使用相对文件名加载模型。干净构建另将其分词权重定位到安装缓存，供选择相应模型后下载。
+更新已有安装前先退出听幕和托盘进程。`packaging/build_clean_install.py <安装目录> --refresh` 更新程序及清单，保留工作区、模型和按需安装的组件。启动器源码有变化时，在新目录完整构建。
+
+在搬迁后的副本运行 `Tingmu.exe --portable-smoke --smoke-media "双音轨视频绝对路径"` 可离线验证播放、音轨切换、定位、倍速、暂停、字体和首次引导。有系统托盘时也会测试隐藏和恢复窗口。无显示器时可设置 `QT_QPA_PLATFORM=offscreen` 和 `QT_QUICK_BACKEND=software`。报告在副本的 `data/logs/portable-smoke.json`，测试工作区与引导状态保存在 `.cache/portable-smoke/`。[体积、冷启动与实测](https://github.com/DennyClarkson/tingmu/blob/main/docs/bundle-and-startup-optimization.md)

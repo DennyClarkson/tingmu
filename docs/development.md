@@ -91,7 +91,7 @@ git diff --check
 
 ## 便携构建与验收范围
 
-源码克隆不附带运行时、模型或成品 EXE。日常交付单位是整个可写的 Windows 便携目录。`scripts/build_portable.ps1` 使用已备好的运行时与依赖组装 `dist/Tingmu/`，`-RefreshApp` 用于刷新已存在的完整包。`-ImportUserData` 会导入个人资料。已有完整便携运行时、要验证全新首次启动时，可用 `packaging/build_clean_install.py` 在新目录创建无模型和用户资料的独立包。具体构建、刷新与 EXE 冒烟步骤见[便携版说明](portable.md)。
+源码克隆不附带运行时、模型或成品 EXE。日常交付单位是整个可写的 Windows 便携目录。`scripts/build_portable.ps1` 使用已备好的运行时与依赖组装 `dist/Tingmu/`，`-RefreshApp` 用于刷新已存在的完整包。在已有安装上同时指定 `-RefreshApp -ImportUserData` 可显式导入个人资料。已有完整便携运行时、要验证全新首次启动时，可用 `packaging/build_clean_install.py` 在新目录创建无模型和用户资料的独立包。具体构建、刷新与 EXE 冒烟步骤见[便携版说明](portable.md)。
 
 0.12.0 发布交接记录了 744 项测试与 113 项子测试通过，两份 EXE 各通过 16 项检查，也记录了 Windows 三语界面、字幕来源复用和短片原声转录的实测范围。这里引用该次发布记录。当前分支的结果取决于对应提交实际运行的检查。[当前交接](../handoff.md) · [验收索引](../reports/README.md)
 

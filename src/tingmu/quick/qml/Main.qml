@@ -26,6 +26,7 @@ ApplicationWindow {
     Connections { target: backend; function onLayoutChanged() { app.layoutDraft = backend.layout } }
     property bool restoring:true
     property bool closingSession:false
+    property bool pendingWorkspaceSetup:false
     property string dropTarget:""
     property string viewMode:layoutDraft.viewMode || "watch"
     property var viewLayouts:layoutDraft.viewLayouts || ({})
@@ -108,7 +109,10 @@ ApplicationWindow {
         libraryDock.SplitView.preferredHeight=Math.min(w.libraryHeight || 420,app.height*0.62)
         companionDock.SplitView.preferredHeight=Math.min(w.companionHeight || 450,(app.height-104)*0.56)
         restoring=false
-        if(workspaces.info.showSetup) Qt.callLater(function(){workspaceSetup.open()})
+        if (runtimeSetup.firstRun) {
+            pendingWorkspaceSetup = !!workspaces.info.showSetup
+            Qt.callLater(openRuntimeSetup)
+        } else if(workspaces.info.showSetup) Qt.callLater(function(){workspaceSetup.open()})
     }
     function flushAllDrafts() {
         if (!learningPanel.flushDrafts()) return false
@@ -155,7 +159,35 @@ ApplicationWindow {
     ModelManager{id:modelManager}
     TeachingPreferences{id:teachingPreferences}
     SubtitleCorrection{id:subtitleCorrection}
-    WorkspaceSetup{id:workspaceSetup;onModelsRequested:app.openDialog("models",app,{})}
+    function openRuntimeSetup() {
+        runtimeLoader.active = true
+        runtimeLoader.item.open()
+    }
+    Loader {
+        id: runtimeLoader
+        active: false
+        source: "RuntimeSetupDialog.qml"
+        onLoaded: item.parent = app.Overlay.overlay
+    }
+    Connections {
+        target: runtimeLoader.item
+        function onClosed() {
+            if (app.pendingWorkspaceSetup) {
+                app.pendingWorkspaceSetup = false
+                workspaceSetup.open()
+            }
+        }
+    }
+    Action {
+        id: runtimeAction; objectName: "runtimeSetupAction"
+        text: qsTranslate("Tingmu", "运行环境与依赖管理…")
+        onTriggered: app.openRuntimeSetup()
+    }
+    WorkspaceSetup {
+        id: workspaceSetup
+        onModelsRequested: app.openDialog("models", app, {})
+        onRuntimeRequested: app.openRuntimeSetup()
+    }
     Connections {
         target:backend
         function onAppAction(name,payload){
@@ -228,6 +260,7 @@ ApplicationWindow {
                     Action{objectName:"globalTextModelsAction";text:qsTranslate("Tingmu", "全局文本模型…");onTriggered:app.openDialog("models",app,{})}
                     Action{objectName:"hideToTrayAction";text:qsTranslate("Tingmu", "收起到系统托盘");enabled:desktopTray.available;onTriggered:if(app.flushAllDrafts())desktopTray.hideToTray()}
                     Action{text:qsTranslate("Tingmu", "退出听幕");onTriggered:desktopTray.quitApplication()}
+                    Component.onCompleted: if (runtimeSetup.available) insertAction(count - 2, runtimeAction)
                 }
                 AppMenu {
                     objectName:"playbackMenu";title:qsTranslate("Tingmu", "播放")

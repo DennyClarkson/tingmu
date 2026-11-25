@@ -11,10 +11,21 @@ QML_MODULES = (
     "QtQuick/Controls", "QtQuick/Controls/Basic", "QtQuick/Templates", "QtMultimedia",
 )
 QT_BINARIES = (
-    "QtQml.pyd", "QtQuick.pyd", "QtQuickControls2.pyd", "QtMultimedia.pyd",
+    "QtCore.pyd", "QtGui.pyd", "QtWidgets.pyd", "QtNetwork.pyd", "QtSvg.pyd",
+    "QtQml.pyd", "QtMultimedia.pyd",
+    "Qt6OpenGL.dll", "opengl32sw.dll",
     "Qt6Qml.dll", "Qt6Quick.dll", "Qt6QuickControls2.dll", "Qt6Multimedia.dll",
     "Qt6MultimediaQuick.dll", "plugins/platforms/qwindows.dll",
-    "plugins/multimedia/ffmpegmediaplugin.dll",
+    "plugins/platforms/qoffscreen.dll", "plugins/platforms/qminimal.dll",
+    "plugins/multimedia/ffmpegmediaplugin.dll", "plugins/multimedia/windowsmediaplugin.dll",
+    "plugins/imageformats/qjpeg.dll", "plugins/imageformats/qico.dll", "plugins/imageformats/qsvg.dll",
+    "plugins/iconengines/qsvgicon.dll", "plugins/styles/qmodernwindowsstyle.dll",
+    "plugins/tls/qschannelbackend.dll",
+)
+QT_TRANSLATIONS = tuple(
+    f"translations/{catalog}_{language}.qm"
+    for catalog in ("qt", "qtbase", "qtdeclarative", "qtmultimedia")
+    for language in ("en", "zh_CN", "zh_TW")
 )
 
 
@@ -37,13 +48,10 @@ def configure_qml_environment(root: Path) -> None:
 
 
 def validate_qml_runtime(root: Path) -> dict:
-    qt = qt_directory(root)
-    expected = [qt / "qml" / module / "qmldir" for module in QML_MODULES]
-    expected.extend(qt / filename for filename in QT_BINARIES)
-    missing = [str(path.relative_to(root)) for path in expected if not path.is_file()]
-    if missing:
-        raise RuntimeError("Portable Qt Quick runtime is incomplete: " + ", ".join(missing))
-    return {"modules": list(QML_MODULES), "binaries": list(QT_BINARIES)}
+    # Only the build uses the PE reader. The shipped bootstrap just sets paths.
+    from pe_bundle import validate_qt_directory
+
+    return validate_qt_directory(qt_directory(root))
 
 
 def qml_asset_manifest(root: Path) -> dict[str, str]:

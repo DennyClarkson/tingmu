@@ -11,15 +11,26 @@ import time
 
 from .models import AppSettings, preparation_identity_settings
 from .diagnostics import redact_text
-from .media import MediaError
-from .pipeline import TRANSLATION_REVIEW_VERSION, find_subtitle, prepare_media
 from .preparation_stages import stage_code, stage_label
-from .providers import ProviderError
+from .translation_review import TRANSLATION_REVIEW_VERSION
 from .storage import Store, atomic_json, canonical_path, media_fingerprint
+
+
+def prepare_media(*args, **kwargs):
+    from .pipeline import prepare_media as prepare
+    return prepare(*args, **kwargs)
+
+
+def find_subtitle(media_path: Path, target_language: str) -> Path | None:
+    from .media_files import find_subtitle as find
+    return find(media_path, target_language)
 
 
 def _failure_details(error, document):
     """Expose our safe validation errors, never arbitrary upstream payloads."""
+    from .media import MediaError
+    from .providers import ProviderError
+
     metadata = document.metadata if document else {}
     reviewing = metadata.get("review_stage") in ("partial", "running")
     stage = "文本复核" if reviewing else "学习讲解" if metadata.get("annotation_spec") else "字幕识别"
@@ -241,6 +252,7 @@ class PreparationQueue:
         with self._mutation():
             document = self.store.load_document(media, settings.language)
             if not document or not document.cues:
+                from .providers import ProviderError
                 raise ProviderError("此视频没有可复用的字幕，请先生成或导入字幕。")
             fingerprint = media_fingerprint(media)
             identity = json.dumps(["existing-lessons", media, fingerprint, preparation_identity_settings(spec)],
@@ -416,6 +428,7 @@ class PreparationQueue:
                                 or not _not_being_written(media)):
                             raise FileNotFoundError("自动准备的媒体已经变化或仍在复制")
                     if job.get("teaching_only") and not self.store.load_document(job["media_path"], settings.language):
+                        from .providers import ProviderError
                         raise ProviderError("此视频没有可复用的字幕，请先生成或导入字幕。")
                     if settings.asr_backend == "external":
                         def current_permission():

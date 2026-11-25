@@ -8,8 +8,7 @@ import stat
 from pathlib import Path
 import time
 
-from .media import MEDIA_EXTENSIONS, SUBTITLE_EXTENSIONS
-from .pipeline import find_subtitle
+from .media_files import MEDIA_EXTENSIONS, SUBTITLE_EXTENSIONS, find_subtitle
 
 
 _INBOX_EXTENSIONS = MEDIA_EXTENSIONS | SUBTITLE_EXTENSIONS
@@ -183,7 +182,7 @@ class InboxScanner:
     def preparation_reasons(self, settings, candidates, generation, cancelled):
         """Cache each path gate and share the local-model probe across candidates."""
         context = (settings.preparation_workflow, settings.target_language, settings.asr_backend,
-                   settings.asr_model, settings.allow_audio_upload, generation)
+                   settings.asr_model, settings.allow_audio_upload, settings.device, generation)
         now = time.monotonic()
         # Also detect manual changes to shared model files outside the application.
         if context != self._block_context or now - self._model_checked_at >= 60:
@@ -236,6 +235,19 @@ def _asr_block_reason(settings):
         return (f"所选识别模型 {settings.asr_model} 无法识别 {settings.target_language}。"
                 "请添加与视频同名的字幕文件，或在工作区设置中选择支持该语言的模型或转写 API。")
     from .workspace_models import model_readiness
-    if model_readiness(settings.asr_model).ready:
+    readiness = model_readiness(settings.asr_model)
+    if readiness.code == "runtime_missing":
+        return readiness.message
+    if readiness.ready:
+        from .runtime import portable_root
+        if portable := portable_root():
+            from .runtime_deps import cached_probe
+            tools = cached_probe(portable, "ffmpeg")
+            if not tools["ready"]:
+                return tools["detail"]
+            if settings.device == "cuda" and not settings.asr_model.startswith("qwen"):
+                cuda = cached_probe(portable, "whisper-cuda")
+                if not cuda["ready"]:
+                    return cuda["detail"]
         return ""
     return f"等待安装本地识别模型 {settings.asr_model}；请在聊天中请求下载并确认，或在工作区设置中下载"

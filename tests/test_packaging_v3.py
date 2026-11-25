@@ -18,13 +18,12 @@ bootstrap_logging = importlib.util.module_from_spec(log_spec)
 log_spec.loader.exec_module(bootstrap_logging)
 
 
-def test_runtime_detects_missing_multimedia_plugin(tmp_path):
+def test_runtime_detects_missing_multimedia_plugin(tmp_path, monkeypatch):
+    from test_bundle_pe import make_qt_tree
+
+    monkeypatch.syspath_prepend(str(Path(__file__).parents[1] / "packaging"))
     qt = qml_runtime.qt_directory(tmp_path)
-    files = [qt / "qml" / module / "qmldir" for module in qml_runtime.QML_MODULES]
-    files.extend(qt / name for name in qml_runtime.QT_BINARIES)
-    for path in files:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("fixture", encoding="utf-8")
+    make_qt_tree(qt)
     assert "QtMultimedia" in qml_runtime.validate_qml_runtime(tmp_path)["modules"]
     (qt / "plugins/multimedia/ffmpegmediaplugin.dll").unlink()
     with pytest.raises(RuntimeError, match="ffmpegmediaplugin.dll"):

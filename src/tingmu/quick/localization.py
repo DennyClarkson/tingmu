@@ -21,6 +21,7 @@ _STANDARD = {
 # These arguments are themselves application messages. All other arguments, including
 # filenames, model identifiers and words quoted from a subtitle, stay verbatim.
 _MESSAGE_ARGS = {
+    "运行环境验证失败：%1": ("1",),
     "%1 已完成步骤已保存，重试会继续处理。": ("1",),
     "第 %1 句（%2） · %3": ("3",),
     "%1 服务建议等待 %2 秒。": ("1",),

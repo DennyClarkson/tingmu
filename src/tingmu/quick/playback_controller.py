@@ -11,7 +11,7 @@ from tingmu.export_paths import export_path
 from PySide6.QtCore import Qt, QTimer, QUrl
 from PySide6.QtMultimedia import QMediaMetaData, QMediaPlayer, QVideoFrame
 from tingmu.diagnostics import media_id
-from tingmu.media import MEDIA_EXTENSIONS
+from tingmu.media_files import MEDIA_EXTENSIONS
 from tingmu.lesson_material import lesson_counts
 from tingmu.translation_review import translation_provided, translation_verified
 from tingmu.timeline import SubtitleTimeline
