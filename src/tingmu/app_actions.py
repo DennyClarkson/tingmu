@@ -193,7 +193,7 @@ class AppActionExecutor:
         snapshot = self.notebooks.snapshot(self.context.language.target)
         entry = next((e for e in snapshot.get("collections", snapshot.get("entries", [])) if e["id"] == ident), None)
         if entry is None:
-            raise ActionError("收藏不存在或不属于本次对话的学习语言。", "scope_mismatch")
+            raise ActionError("收藏不存在或不属于本次对话的学习语言/方言。", "scope_mismatch")
         return entry
 
     def _require_complete_read(self, target, revision):

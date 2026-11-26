@@ -74,7 +74,7 @@ def test_explicit_organize_adds_teaching_keeps_collections_and_is_incremental(bo
     tutor = Tutor()
     result = manager.organize("yue", tutor, instructions="重点比较普通话，练习礼貌请求")
     assert result["markdown"].startswith(personal)
-    assert "已知语言与目标语言对比" in result["markdown"] and "我想分清普通话" in result["markdown"]
+    assert "已知语言/方言与目标语言/方言对比" in result["markdown"] and "我想分清普通话" in result["markdown"]
     assert "语法要点" in result["markdown"] and "AI 生成，非视频原句" in result["markdown"]
     assert len(store.entries()) == 3 and result["stats"]["organized"] == 2
     assert result["stats"]["unorganized"] == 0 and result["stats"]["note_count"] == 1
@@ -250,7 +250,7 @@ def test_organize_instructions_are_generation_context_not_notebook_prose(book):
     assert "学习要求：" not in markdown and "不重做视频" not in markdown
     assert "学习关系：简体中文 → 粤语" in markdown
     assert "zh-CN" not in markdown and "zh\\-CN" not in markdown
-    assert "已知语言与目标语言对比" in markdown and "教学例句（AI 生成，非视频原句）" in markdown
+    assert "已知语言/方言与目标语言/方言对比" in markdown and "教学例句（AI 生成，非视频原句）" in markdown
     prompt = tutor.prompts[0]
     for constraint in ("generation conditions", "Never copy the request", "Never mention field names",
                        "Do not report or promise save/edit/processing status", "Keep uncertain linguistic claims",

@@ -208,7 +208,7 @@ class UiActionController:
 
         self._media_bound(context)
         if context.language != self.ports.settings().language:
-            raise ActionError("当前学习语言已变化，请重新发起修订。", "scope_mismatch")
+            raise ActionError("当前学习语言/方言已变化，请重新发起修订。", "scope_mismatch")
         if name == "read_current_subtitle":
             return read_target(
                 self.ports.store().load_document(context.media_path, context.language), context.correction

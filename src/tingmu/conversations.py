@@ -122,8 +122,8 @@ class ConversationStore:
 
     def create(self, language, media_path="", title="新对话"):
         _text(title, "标题", 200)
-        _text(language.source, "讲解语言", 80)
-        _text(language.target, "学习语言", 80)
+        _text(language.source, "讲解语言/方言", 80)
+        _text(language.target, "学习语言/方言", 80)
         if not isinstance(media_path, str) or "\x00" in media_path:
             raise ValueError("视频路径无效。")
         session_id = uuid.uuid4().hex

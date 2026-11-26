@@ -18,6 +18,15 @@ _STANDARD = {
     "OK": "确定", "Cancel": "取消", "Close": "关闭", "Discard": "放弃", "Yes": "是",
     "No": "否", "Open": "打开", "Save": "保存", "Apply": "应用", "Reset": "重置",
 }
+# These six source labels form part of the stored subtitle plan's identity.
+_SUBTITLE_EVIDENCE_LABELS = {
+    "所选音轨标注的语言与学习语言不同": "所选音轨标注的语言/方言与学习语言/方言不同",
+    "采用学习语言原文和按时间对应的已有译文": "采用学习语言/方言原文和按时间对应的已有译文",
+    "采用学习语言字幕作为原文，缺少的译文由后续步骤处理": "采用学习语言/方言字幕作为原文，缺少的译文由后续步骤处理",
+    "原文语种或对白覆盖不完整，需语音识别": "原文语言/方言或对白覆盖不完整，需语音识别",
+    "文本语种证据不足": "无法确定字幕的语言/方言",
+    "多份同语种字幕内容不同，无法唯一判断": "同一语言/方言的多份字幕内容不同，无法唯一判断",
+}
 # These arguments are themselves application messages. All other arguments, including
 # filenames, model identifiers and words quoted from a subtitle, stay verbatim.
 _MESSAGE_ARGS = {
@@ -111,7 +120,15 @@ class InterfaceLanguage(QTranslator):
             label = _STANDARD.get(source.replace("&", ""))
             if label:
                 return _catalog("zh-TW").get(label, label) if self._code == "zh-TW" else label
-        if self._code == "zh-CN" or not source:
+        if not source:
+            return None
+        if self._code == "zh-CN":
+            if context == "TingmuStatus":
+                return _SUBTITLE_EVIDENCE_LABELS.get(source)
+            if context == "TingmuEvidence":
+                name, separator, reason = source.rpartition("：")
+                label = _SUBTITLE_EVIDENCE_LABELS.get(reason)
+                return name + separator + label if label else None
             return None
         if context == "TingmuLanguage":
             labels = _language_labels(self._code)

@@ -551,7 +551,7 @@ def _classic_projection(rows, language, make_id):
                 # Several speakers or alternative translations share a clock.
                 # Keep all evidenced target rows, without an invented pairing.
                 if any(not row.by_language for row in group):
-                    raise ValueError("无法确定双语字幕中的学习语言对白，请重新导入单语原文或使用字幕 Agent。")
+                    raise ValueError("无法确定双语字幕中的学习语言/方言对白，请重新导入单语原文或使用字幕 Agent。")
                 consumed.update(row.index for row in group if target not in row.by_language)
     cues, events = [], {}
     for row in rows:
@@ -564,7 +564,7 @@ def _classic_projection(rows, language, make_id):
         elif target != known and row.unresolved and re.search(r"\n|[|｜]|\s/\s", row.display):
             if not _wrapped_target(row, target):
                 if target not in row.by_language:
-                    raise ValueError("无法确定双语字幕中的学习语言对白，请重新导入单语原文或使用字幕 Agent。")
+                    raise ValueError("无法确定双语字幕中的学习语言/方言对白，请重新导入单语原文或使用字幕 Agent。")
                 text = "\n".join(row.by_language[target])
         other = linked.get(row.index)
         if other:

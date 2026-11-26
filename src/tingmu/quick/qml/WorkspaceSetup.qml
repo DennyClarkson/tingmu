@@ -161,7 +161,7 @@ AppDialog {
                 SectionTitle { text: root.creating ? qsTranslate("Tingmu", "新建学习工作区") : (root.current.id === "default" ? qsTranslate("Tingmu", root.current.name) : root.current.name) }
                 SegmentBar {
                     visible: !root.creating
-                    TButton { text: qsTranslate("Tingmu", "语言与文件"); quiet:true; checked: root.section === "general"; onClicked: root.section = "general" }
+                    TButton { text: qsTranslate("Tingmu", "语言/方言与文件"); quiet:true; checked: root.section === "general"; onClicked: root.section = "general" }
                     TButton { objectName: "workspaceModelsTab"; text: qsTranslate("Tingmu", "语音识别"); quiet:true; checked: root.section === "models"; onClicked: root.section = "models" }
                     TButton { objectName: "workspaceTextTab"; text: qsTranslate("Tingmu", "文本模型与 API"); quiet:true; checked: root.section === "text"; onClicked: root.section = "text" }
                 }
@@ -205,13 +205,13 @@ AppDialog {
                                 }
                                 RowLayout {
                                     Layout.fillWidth: true; spacing: 14
-                                    WorkspaceLanguage { id: known; objectName: "knownLanguage"; Layout.fillWidth: true; label: qsTranslate("Tingmu", "用哪种语言学") }
-                                    WorkspaceLanguage { id: learning; objectName: "learningLanguage"; Layout.fillWidth: true; label: qsTranslate("Tingmu", "想学哪种语言") }
+                                    WorkspaceLanguage { id: known; objectName: "knownLanguage"; Layout.fillWidth: true; label: qsTranslate("Tingmu", "用哪种语言/方言学") }
+                                    WorkspaceLanguage { id: learning; objectName: "learningLanguage"; Layout.fillWidth: true; label: qsTranslate("Tingmu", "想学哪种语言/方言") }
                                 }
                                 TButton {
                                     visible: !root.creating
                                     enabled: known.code !== backend.settings.source_language || learning.code !== backend.settings.target_language
-                                    text: qsTranslate("Tingmu", "保存语言"); onClicked: workspaces.action("languages", {source: known.code, target: learning.code})
+                                    text: qsTranslate("Tingmu", "保存语言/方言"); onClicked: workspaces.action("languages", {source: known.code, target: learning.code})
                                 }
                                 Rectangle { Layout.fillWidth: true; height: 1; color: Theme.line }
                                 RowLayout {
@@ -227,7 +227,7 @@ AppDialog {
                                         onToggled: backend.setting("auto_prepare_media", checked) }
                                     TButton { text: qsTranslate("Tingmu", "打开视频目录"); onClicked: workspaces.action("mediaFolder", {}) }
                                 }
-                                Hint { text: qsTranslate("Tingmu", "media/　导入的视频和随附字幕\ndocuments/　生成的字幕和逐句学习材料\nnotebooks/　分语言整理的 Markdown 笔记\nexports/　默认导出位置\nstudy.db　收藏、对话和播放记录"); lineHeight: 1.45 }
+                                Hint { text: qsTranslate("Tingmu", "media/　导入的视频和随附字幕\ndocuments/　生成的字幕和逐句学习材料\nnotebooks/　按语言/方言整理的 Markdown 笔记\nexports/　默认导出位置\nstudy.db　收藏、对话和播放记录"); lineHeight: 1.45 }
                                 Hint { visible:!root.creating; text:backend.lessonModel.configured ? qsTranslate("Tingmu", "已配置逐句讲解与译稿核验模型。") : qsTranslate("Tingmu", "当前只准备原文字幕。可在「文本模型与 API」分配逐句讲解模型。") }
                             }
                             ColumnLayout {
@@ -243,7 +243,7 @@ AppDialog {
                                 }
                                 Hint { text: root.cantonese
                                     ? qsTranslate("Tingmu", "粤语原声可选 Qwen3-ASR，下载时会一并取得对齐模型。Whisper 可选 large-v3-turbo 或 large-v3；small 不支持指定粤语。")
-                                    : qsTranslate("Tingmu", "多语种识别可先试 Whisper small。选择 Qwen 或转写接口前，请确认模型支持当前学习语言 ") + backend.settings.target_language + "。" }
+                                    : qsTranslate("Tingmu", "识别多种语言/方言可先试 Whisper small。选择 Qwen 或转写接口前，请确认模型支持当前学习语言/方言（%1）。").arg(backend.settings.target_language) }
                                 SpeechSettings { id: speechFields; Layout.fillWidth: true }
                                 ColumnLayout {
                                     visible: backend.settings.asr_backend === "local"; Layout.fillWidth: true; spacing: 7

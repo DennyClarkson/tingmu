@@ -1,0 +1,6 @@
+previous_tag = "v0.13.1"
+
+[[changes]]
+zh = "工作区、字幕与学习笔记等涉及学习对象的文案统一使用「语言/方言」。选择粤语或其他学习对象时，仍可沿用原有的工作区、识别设置和学习记录。"
+en = "Workspace settings, subtitles and study notes now refer to both languages and dialects. You can keep using your existing workspaces, transcription settings and study records when learning Cantonese or another language or dialect."
+author = "DennyClarkson"

@@ -4,13 +4,13 @@
 
 [简体中文](README.md) · **English**
 
-Tingmu is a Windows video player for learning a language one line at a time. Open an episode or a recorded lesson and click a subtitle to replay the line, read an explanation, or save a word or phrase. You can also ask the study companion about the dialogue you’re watching. Tingmu starts with Cantonese for Mandarin speakers. Each workspace lets you choose the language you know and the one you’re studying, including the same language for both.
+Tingmu is a Windows video player for studying a language or dialect one line at a time. Open an episode or a recorded lesson and click a subtitle to replay the line, read an explanation, or save a word or phrase. You can also ask the study companion about the dialogue you’re watching. Tingmu starts with Cantonese for Mandarin speakers. In each workspace, choose the language or dialect you know and the one you’re studying. You can use the same one for both.
 
 ## Get started
 
 **Windows x64 portable app.** Open the [latest stable release](https://github.com/DennyClarkson/tingmu/releases/latest). Under **Assets**, download the file ending in `-windows-x64-portable.zip`. Extract the entire ZIP to a folder you can write to, then double-click `Tingmu/Tingmu.exe`. On first launch, Tingmu checks your computer for installed components offline. Select **Skip downloads and enter** (暂不下载，直接进入) to play videos with external subtitles right away. Playback needs **0 B of additional downloads**. When you’re ready to transcribe audio, open **Runtimes and dependencies** to configure the components you need. [All releases](https://github.com/DennyClarkson/tingmu/releases) · [Portable app and first-time setup](docs/portable.en.md)
 
-To switch to English, open **视图 → 界面语言 / Language → English**. You can switch among English, Simplified Chinese, and Traditional Chinese at any time from **View → Interface language**. This setting applies to the whole installation. To choose the languages for subtitles and explanations, click the workspace name at the top and select your known and study languages.
+To switch to English, open **视图 → 界面语言 / Language → English**. You can switch among English, Simplified Chinese, and Traditional Chinese at any time from **View → Interface language**. This setting applies to the whole installation. Click the workspace name at the top to choose what you want to study and which language or dialect to use for translations and explanations.
 
 **Run from source.** The `main` branch includes the latest development changes. Check the release notes for the features in a particular portable build. On Windows, install Git and uv, clone this repository, and open PowerShell in the directory containing `pyproject.toml`. Run these commands to set up and launch the CPU development environment. The first setup downloads dependencies. You can configure speech models later. [Development setup and checks (Chinese)](docs/development.md)
 
@@ -19,13 +19,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup.ps1 -Dev -Cp
 .\.venv\Scripts\python.exe -m tingmu gui
 ```
 
-## Prepare subtitles and explanations (0.13.1)
+## Prepare subtitles and explanations (0.13.2)
 
 1. Add a video to the **Media library** and open the episode you want to study. In **Prepare**, select the audio track and set **Workflow for new tasks**. The default, **Classic**, uses your workspace’s transcription, review, and explanation settings. Choose **Subtitle Agent** if you already have subtitles or want Tingmu to check the video’s embedded subtitle tracks. Each task keeps the workflow selected when you add it to the queue.
 2. To use a specific SRT, ASS, SSA, or VTT file, select **Subtitle Agent → Choose subtitles and queue this video…**. To have Tingmu find matching subtitle files alongside the video (including those with the same base name) and check embedded tracks, select the video in the library and add it to the queue.
 3. Click **Start queue**. The Subtitle Agent checks the subtitle text, series and episode information where available, the selected audio track, and how much of the dialogue the subtitles cover. Expand a task to see which sources it accepted or ruled out, how many original lines and translations it used, and which step is running.
 
-The default **Local sentence grouping** uses source timestamps, pauses and punctuation to split dialogue, keeping titles and names such as `Dr. Smith` together. For multilingual dialogue, open the queue settings before adding the video and choose **Sentence grouping for new jobs → Model-assisted grouping**. With the workspace’s text permissions, the model groups indexed words or lines. Tingmu checks their coverage and calculates their timings locally. In the preparation studio you can follow each batch as it generates text and read the three most recently checked translations alongside their source lines. [Segmentation evidence and results (Chinese)](docs/subtitle-quality.md)
+The default **Local sentence grouping** uses source timestamps, pauses and punctuation to split dialogue, keeping titles and names such as `Dr. Smith` together. When speakers switch between languages and dialects, open the queue settings before adding the video and choose **Sentence grouping for new jobs → Model-assisted grouping**. With the workspace’s text permissions, the model groups indexed words or lines. Tingmu checks their coverage and calculates their timings locally. In the preparation studio you can follow each batch as it generates text and read the three most recently checked translations alongside their source lines. [Segmentation evidence and results (Chinese)](docs/subtitle-quality.md)
 
 For example, if you know Chinese and are studying English, Tingmu handles the subtitles that pass these checks as follows.
 
@@ -36,7 +36,7 @@ For example, if you know Chinese and are studying English, Tingmu handles the su
 | Chinese only | Transcribes the selected English audio track or reuses a matching transcript of the audio | Uses Chinese lines that overlap in time as references for review and explanations. Generates and checks translations against the English dialogue |
 | No usable text subtitles | Transcribes the selected audio track or reuses a matching transcript of the audio | Generates and checks translations against the original dialogue |
 
-The same rules apply to embedded text tracks. The task also lists image-based tracks such as DVD and PGS subtitles. Reading their text requires OCR. **Every Subtitle Agent task needs a line-by-line explanation**, even when both languages are already present. If a teaching model is unavailable, Tingmu keeps the material it has recovered. Configure a model and click **Retry failed** to continue. [Workflow and progress details](docs/portable.en.md)
+The same rules apply to embedded text tracks. The task also lists image-based tracks such as DVD and PGS subtitles. Reading their text requires OCR. **Every Subtitle Agent task needs a line-by-line explanation**, even when the subtitles include both the dialogue and its translation. If a teaching model is unavailable, Tingmu keeps the material it has recovered. Configure a model and click **Retry failed** to continue. [Workflow and progress details](docs/portable.en.md)
 
 ## Watch, study, and manage your data
 

@@ -49,7 +49,7 @@ uses existing subtitles or configured ASR, then enabled text review and teaching
 processing has its own settings and audio permission. 播放器 gear also has 准备当前视频.
 Strong text review has NOT heard the audio; preserve this distinction when explaining subtitle quality.
 准备 → 新任务流程 offers 经典流程 and 字幕 Agent. The latter examines sidecars and readable embedded
-subtitle tracks against the selected audio and language pair. A matching original replaces ASR;
+subtitle tracks against the selected audio and the workspace’s known and study languages or dialects. A matching original replaces ASR;
 aligned translations are reused; translation-only text supplies timed hints for an actual transcription.
 Explanations remain required. Use process_videos(workflow=subtitle_agent) for a requested subtitle-aware
 job and manage_queue(status) for its observed decision and stage. Users can attach a caption in 准备.
@@ -80,7 +80,7 @@ NOT newly measured acoustic alignment. SRT export uses display lines, including 
 write in 记下这一句… and press 收藏 to save a sentence note (empty note can bookmark the sentence).
 收藏 tab offers 定位原句, 删除收藏, 导出笔记 (Markdown/CSV), 学习复盘. 来源 opens 字幕来源
 with original text and review/timing details. Companion gear sets 显示读音, 显示释义,
-显示讲解, 已知语言 / 学习语言 and 学习程度; language codes are also editable and may match.
+显示讲解, 已知语言/方言 → 学习语言/方言 and 学习程度. The two codes are editable and can match.
 Top 对话 or 工作区 → 独立聊天窗口 opens INDEPENDENT chat, not a companion tab. Type then 发送
 or Ctrl+Enter. Chat gear 对话设置 has 文本模型 and 管理模型连接. The model picker below the
 conversation selects a saved connection. 新对话 starts a session; 历史会话/隐藏会话, 重命名 and
@@ -89,7 +89,7 @@ conversation selects a saved connection. 新对话 starts a session; 历史会�
 All workspaces in this installation share the teaching, text-review and chat model assignments. Each workspace
 keeps its own permission to process text remotely. Chat model selection changes the global chat assignment for future requests.
 Study data, notes, chat and playback progress live in the application's local data folder, associated
-with the video path and language pair; they are not sidecar files scattered beside each video. The
+with the video path and the chosen languages or dialects; they are not sidecar files scattered beside each video. The
 portable app stores data beside the app. 文件 → 打开数据文件夹 or the library gear opens that folder.
 Review, teaching and chat services receive text. External transcription requires separate workspace audio permission.
 In 全局文本模型 use ＋ 新建连接 or choose a saved connection to edit 服务预设, API 地址（Base URL）, 凭据来源,
@@ -98,13 +98,13 @@ In 全局文本模型 use ＋ 新建连接 or choose a saved connection to edit 
 or account permission to generate. Environment keys are read locally; entered keys are Windows-user
 protected and must be entered again on another machine. Neither key values nor raw connection details
 are available to this tutor. Choosing a model never automatically reprocesses existing materials.
-学习 opens the 我的学习 workspace: 语言笔记 chooses the studied language; 全部主题 and
-所有视频 filter sources. 语言学习笔记 shows Markdown; 编辑, 保存修改 and 预览 edit personal
+In 学习, use the 所学语言/方言 selector to choose a notebook. 全部主题 and
+所有视频 filter sources. 学习笔记 shows Markdown; 编辑, 保存修改 and 预览 edit personal
 writing with conflict protection. AI 整理 organizes existing collected items; 打开笔记文件 and
 导出 Markdown expose the local notebook. 间隔复习 shows a question, 显示答案 reveals the
 answer, then 再学一次 / 有点难 / 记住了 / 很熟悉 schedules review. 回到视频原句 or
 ↗ 回到原句 seeks the source; 用这些收藏练习对话 opens practice conversation. Material stays
-separated by studied language; manual prose is preserved during synchronization and organization.
+separated by the language or dialect being studied; manual prose is preserved during synchronization and organization.
 Collections stay in 收藏箱 until explicit AI 整理; organizing preserves them and marks them 已整理.
 The word cards show 已收藏 for pending words and 已整理 for previously organized words. To
 recollect an organized word, click it twice. The notebook keeps a link to each distinct subtitle

@@ -114,7 +114,7 @@ AppDialog {
                         }
                         Card {
                             heading: qsTranslate("Tingmu", "从音轨生成字幕")
-                            detail: qsTranslate("Tingmu", "用 FFmpeg 提取音轨，通过本机引擎和所选模型权重，或转写 API 生成字幕。讲解另需文本模型，多语言对白可选智能分句。")
+                            detail: qsTranslate("Tingmu", "用 FFmpeg 提取音轨，通过本机引擎和所选模型权重，或转写 API 生成字幕。讲解另需文本模型，多种语言/方言的对白可选智能分句。")
                             buttonText: qsTranslate("Tingmu", "选择语音服务"); target: "speech"
                         }
                     }
@@ -122,8 +122,8 @@ AppDialog {
                         Layout.fillWidth: true; visible: guide.page === "start"; spacing: 10
                         Heading { text: qsTranslate("Tingmu", "从视频到学习材料") }
                         Step {
-                            number: "1"; heading: qsTranslate("Tingmu", "语言与文件")
-                            detail: qsTranslate("Tingmu", "在工作区选择已知语言和学习语言，再打开或拖入视频。")
+                            number: "1"; heading: qsTranslate("Tingmu", "语言/方言与文件")
+                            detail: qsTranslate("Tingmu", "在工作区选择已知语言/方言和学习语言/方言，再打开或拖入视频。")
                             buttonText: qsTranslate("Tingmu", "打开视频"); target: "open"
                         }
                         Step {
@@ -141,7 +141,7 @@ AppDialog {
                         Layout.fillWidth: true; visible: guide.page === "settings"; spacing: 8
                         Card {
                             heading: qsTranslate("Tingmu", "工作区")
-                            detail: qsTranslate("Tingmu", "选择语言、文件位置、语音后端；分别决定本工作区的文本权限和音轨上传授权。")
+                            detail: qsTranslate("Tingmu", "选择语言/方言、文件位置、语音后端；分别决定本工作区的文本权限和音轨上传授权。")
                             buttonText: qsTranslate("Tingmu", "学习工作区"); target: "workspace"
                         }
                         Card {

@@ -562,7 +562,7 @@ class WorkspaceController(QObject):
                 self._switch_summary + "\n\n识别模型：" + speech
                 + ("\n推荐依据：" + reasons if reasons else "")
                 + "\n\n应用资料目录下的视频文件夹：" + workspace["media_folder"]
-                + "\n可在「工作区设置 → 语言与文件」点「打开视频目录」。复制完成后会按本工作区设置自动准备字幕。")
+                + "\n可在「工作区设置 → 语言/方言与文件」点「打开视频目录」。复制完成后会按本工作区设置自动准备字幕。")
             self.switch(workspace_id, None, False)
         except Exception as exc:
             self.error = str(exc)

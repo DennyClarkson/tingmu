@@ -477,7 +477,7 @@ ApplicationWindow {
             }
             Text {
                 Layout.fillWidth: true; textFormat: Text.PlainText
-                text: qsTranslate("Tingmu", "在故事里，听懂另一种语言。\n\n本地播放与识别，逐句阅读与收藏。\n文本模型的复核和解释仍需对照原声。")
+                text: qsTranslate("Tingmu", "在故事里，听懂另一种语言/方言。\n\n本地播放与识别，逐句阅读与收藏。\n文本模型的复核和解释仍需对照原声。")
                 color: Theme.muted; font.family: Theme.font; font.pixelSize: 13; wrapMode: Text.Wrap; lineHeight: 1.4
             }
             Text {

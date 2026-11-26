@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "tingmu"
-version = "0.13.1"
-description = "Local video player and language-learning companion"
+version = "0.13.2"
+description = "Local video player for learning languages and dialects"
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]

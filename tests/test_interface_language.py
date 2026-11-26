@@ -32,6 +32,8 @@ def test_interface_menu_retranslates_windows_and_preserves_the_study_session(qui
     trigger(window, "interfaceEnglish")
     qtbot.waitUntil(lambda: models.title() == "Tingmu · Global text models")
     assert setup.property("opened") and setup.property("title") == "Study workspace"
+    assert find(window, "interfaceLanguageMenu").property("title") == "Interface language"
+    assert find(window, "learningLanguage").property("label") == "Language/dialect to study"
     assert find(window, "workspaceTextTab").property("text") == "Text models and API"
     assert find(window, "queueStartButton").property("text") == "Start queue"
     assert find(window, "applicationStatus").property("text") == "Saved “开始队列”"
@@ -39,6 +41,7 @@ def test_interface_menu_retranslates_windows_and_preserves_the_study_session(qui
     assert find(window, "workspaceInterfaceLanguage").property("currentText") == "English"
     trigger(window, "interfaceTraditional")
     assert setup.property("title") == "學習工作區"
+    assert find(window, "learningLanguage").property("label") == "想學哪種語言/方言"
     assert find(window, "queueStartButton").property("text") == "開始佇列"
     assert models.title() == "聽幕 · 全域文字模型"
     assert any(o.property("text") == "確定" for o in window.findChildren(QObject) if o.inherits("QQuickButton"))
@@ -48,6 +51,7 @@ def test_interface_menu_retranslates_windows_and_preserves_the_study_session(qui
     trigger(window, "interfaceSimplified")
     assert find(window, "fileMenu").property("title") == "文件"
     assert setup.property("title") == "学习工作区"
+    assert find(window, "learningLanguage").property("label") == "想学哪种语言/方言"
     assert not engine._tingmu_warnings
 
 
@@ -114,7 +118,12 @@ def test_interface_catalogs_cover_controls_and_keep_evidence_filenames(tmp_path)
         for literal in re.findall(r'qsTranslate\("Tingmu",\s*("(?:[^"\\]|\\.)*")\)', path.read_text("utf-8")):
             assert json.loads(literal) in english, (path.name, literal)
     language = localization.InterfaceLanguage(tmp_path)
+    filename = "大语言模型.srt"
+    evidence = filename + "：文本语种证据不足"
+    assert language.translate("TingmuEvidence", evidence) == filename + "：无法确定字幕的语言/方言"
+    assert language.translate("TingmuStatus", "大语言模型") is None
     assert language.select("en")
+    assert language.translate("TingmuEvidence", evidence) == filename + ": Insufficient evidence for the subtitle language/dialect"
     assert language.translate("TingmuEvidence", "开始队列.srt：剧名不符") == "开始队列.srt: Series title mismatch"
     assert language.translate("TingmuEvidence", "内嵌字幕轨 3：图像字幕，需要 OCR") == "Embedded subtitle track 3: Image subtitles require OCR"
     assert language.translate("TingmuEvidence", "指定字幕：集数不符（视频 S05E15，字幕 S05E05）") == (

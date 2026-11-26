@@ -156,7 +156,7 @@ def _alternatives(settings, offline):
         allowed = local or (not offline and bool(getattr(settings, "allow_audio_upload", False)))
         rows.append({"backend": backend, "name": "已配置的本机 API" if local else "已配置的远程 API",
                      "model": model, "available": valid and allowed, "verified": False,
-                     "reason": "尚未连接验证；服务、模型支持语言与凭据需另行测试" if allowed else
+                     "reason": "尚未连接验证；服务、模型支持的语言/方言与凭据需另行测试" if allowed else
                                "离线模式或尚未授权发送音轨，不能使用远程识别"})
     return rows
 
@@ -189,7 +189,7 @@ def recommend_models(settings=None, *, language=None, preference="balanced", off
         device = "cuda" if gpu_ok else "cpu"
         reasons, warnings = [], []
         if not language_ok:
-            reasons.append("当前字幕后端不支持此语言" if language else "Qwen 自动检测可能得到对齐器不支持的语言，请先选择语种")
+            reasons.append("当前字幕后端不支持此语言/方言" if language else "Qwen 自动检测可能得到对齐器不支持的语言/方言，请先指定音轨的语言/方言")
         if not runtime.get("cpu_usable") and not gpu_ok:
             reasons.append("当前应用识别运行时不可用")
         required_ram = gpu_ram if gpu_ok else cpu_ram

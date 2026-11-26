@@ -125,7 +125,7 @@ def language_combo(value: str) -> QComboBox:
         combo.setCurrentIndex(index)
     else:
         combo.setEditText(value)
-    combo.setToolTip("选择语言，或输入语言代码；已知语言和学习语言可以相同")
+    combo.setToolTip("选择语言/方言，或直接输入代码。已知和学习的语言/方言可以相同。")
     return combo
 
 
@@ -879,8 +879,8 @@ class MainWindow(WorkspaceMixin, QMainWindow):
         for label, value in [("入门", "beginner"), ("进阶", "intermediate"), ("熟练", "advanced")]:
             self.level_combo.addItem(label, value)
         self.level_combo.setCurrentIndex(max(0, self.level_combo.findData(self.settings.level)))
-        config.addRow("已知语言", self.source_combo)
-        config.addRow("学习语言", self.target_combo)
+        config.addRow("已知语言/方言", self.source_combo)
+        config.addRow("学习语言/方言", self.target_combo)
         config.addRow("程度", self.level_combo)
         section("文本与对话")
         self.provider_combo = QComboBox()
@@ -1088,7 +1088,7 @@ class MainWindow(WorkspaceMixin, QMainWindow):
 
     def refresh_language_label(self, *_args):
         self.language_button.setText(f"{self.source_combo.currentText()} → {self.target_combo.currentText()}")
-        self.language_button.setToolTip("学习语言与设置")
+        self.language_button.setToolTip("学习语言/方言与设置")
 
     def adjacent_media_path(self, direction: int) -> Path | None:
         paths = [Path(self.library_list.item(index).data(Qt.ItemDataRole.UserRole))
@@ -1366,7 +1366,7 @@ class MainWindow(WorkspaceMixin, QMainWindow):
             if not self.document_compatible(document):
                 self.clear_loops()
                 self.set_document(None)
-                self.progress_label.setText("处理结果已保存；当前语言或音轨已改变，重新选择后可载入")
+                self.progress_label.setText("处理结果已保存；当前语言/方言或音轨已改变，重新选择后可载入")
                 return
             self.set_document(document)
             self.progress_label.setText(self.document_status(document))

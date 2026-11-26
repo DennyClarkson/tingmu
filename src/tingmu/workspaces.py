@@ -22,7 +22,7 @@ def language_code(value):
     from .locale_catalog import resolve_language
     code = resolve_language(value) or str(value).strip()
     if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", code):
-        raise ValueError("请输入有效的语言代码，如 zh-CN、yue 或 en")
+        raise ValueError("请输入有效的语言/方言代码，如 zh-CN、yue 或 en")
     return code
 
 

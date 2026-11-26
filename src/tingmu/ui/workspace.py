@@ -417,7 +417,7 @@ class WorkspaceMixin:
         self.add_menu_action(layout, "恢复已保存布局", self.restore_workspace)
         self.add_menu_action(layout, "重置布局", lambda: self.apply_layout_preset("study"))
         settings = bar.addMenu("设置")
-        self.add_menu_action(settings, "语言、模型与阅读…", self.toggle_settings)
+        self.add_menu_action(settings, "语言/方言、模型与阅读…", self.toggle_settings)
         self.overlay_action = settings.addAction("全屏学习浮层")
         self.overlay_action.setCheckable(True)
         self.overlay_action.setChecked(True)
@@ -426,7 +426,7 @@ class WorkspaceMixin:
         help_menu = bar.addMenu("帮助")
         self.add_menu_action(help_menu, "操作说明", lambda: QMessageBox.information(self, "操作说明", "拖动面板标题可重新排列、合并为标签或浮动。\n空格：播放 / 暂停；F：视频全屏；Esc：退出全屏。\n单击字幕定位，点击词语暂停并查看读音。\n全屏浮层可拖动，字号与透明度在设置调整。"))
         about = bar.addMenu("关于")
-        self.add_menu_action(about, "关于听幕", lambda: QMessageBox.about(self, "听幕", "听幕 · 本地播放器与语言学习伴侣\n音视频在本机处理，云端仅接收已授权的文本。"))
+        self.add_menu_action(about, "关于听幕", lambda: QMessageBox.about(self, "听幕", "听幕 · 本地播放器与语言/方言学习伴侣\n音视频在本机处理，云端仅接收已授权的文本。"))
 
     def build_aspect_menu(self):
         menu = QMenu("画面比例", self)

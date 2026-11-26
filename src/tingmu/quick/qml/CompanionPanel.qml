@@ -123,15 +123,15 @@ Item {
             Toggle { text: qsTranslate("Tingmu", "显示读音"); checked: root.showReading; onToggled: root.showReading=checked }
             Toggle { text: qsTranslate("Tingmu", "显示释义"); checked: root.showTranslation; onToggled: root.showTranslation=checked }
             Toggle { text: qsTranslate("Tingmu", "显示讲解"); checked: root.showExplanation; onToggled: root.showExplanation=checked }
-            Text { textFormat:Text.PlainText; text: qsTranslate("Tingmu", "已知语言 / 学习语言"); color: Theme.muted; font.family: Theme.font; font.pixelSize: 11 }
+            Text { textFormat:Text.PlainText; text: qsTranslate("Tingmu", "已知语言/方言 → 学习语言/方言"); color: Theme.muted; font.family: Theme.font; font.pixelSize: 11 }
             RowLayout {
                 Choice { Layout.fillWidth: true; translateOptions:true;model:["普通话","粤语","英语","日语","韩语"]; property var codes:["zh-CN","yue","en","ja","ko"]; currentIndex: codes.indexOf(backend.settings.source_language);displayText:currentIndex<0 ? backend.settings.source_language : labelAt(currentIndex, currentText); onActivated: backend.setting("source_language",codes[currentIndex]) }
                 Choice { Layout.fillWidth: true; translateOptions:true;model:["粤语","普通话","英语","日语","韩语"]; property var codes:["yue","zh-CN","en","ja","ko"]; currentIndex: codes.indexOf(backend.settings.target_language);displayText:currentIndex<0 ? backend.settings.target_language : labelAt(currentIndex, currentText); onActivated: backend.setting("target_language",codes[currentIndex]) }
             }
-            Text { textFormat:Text.PlainText; text:qsTranslate("Tingmu", "或填写语言代码（如 fr、de、es）");color:Theme.muted;font.family:Theme.font;font.pixelSize:10 }
+            Text { textFormat:Text.PlainText; text:qsTranslate("Tingmu", "或填写语言/方言代码（如 fr、de、es）");color:Theme.muted;font.family:Theme.font;font.pixelSize:10 }
             RowLayout {
-                Field { Layout.fillWidth:true;Layout.preferredWidth:100;text:backend.settings.source_language || "";placeholderText:qsTranslate("Tingmu", "已知语言");onEditingFinished:if(text.trim())backend.setting("source_language",text.trim()) }
-                Field { Layout.fillWidth:true;Layout.preferredWidth:100;text:backend.settings.target_language || "";placeholderText:qsTranslate("Tingmu", "学习语言");onEditingFinished:if(text.trim())backend.setting("target_language",text.trim()) }
+                Field { Layout.fillWidth:true;Layout.preferredWidth:100;text:backend.settings.source_language || "";placeholderText:qsTranslate("Tingmu", "已知语言/方言");onEditingFinished:if(text.trim())backend.setting("source_language",text.trim()) }
+                Field { Layout.fillWidth:true;Layout.preferredWidth:100;text:backend.settings.target_language || "";placeholderText:qsTranslate("Tingmu", "学习语言/方言");onEditingFinished:if(text.trim())backend.setting("target_language",text.trim()) }
             }
             Text { textFormat:Text.PlainText; text: qsTranslate("Tingmu", "学习程度"); color: Theme.muted; font.family: Theme.font; font.pixelSize: 11 }
             Choice { Layout.fillWidth: true; translateOptions:true;model:["入门","中级","进阶"]; property var codes:["beginner","intermediate","advanced"]; currentIndex: Math.max(0,codes.indexOf(backend.settings.level)); onActivated: backend.setting("level",codes[currentIndex]) }

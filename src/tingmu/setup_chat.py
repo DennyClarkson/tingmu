@@ -74,8 +74,8 @@ class SetupAssistant:
         matches = [row for row in catalog["workspaces"] if row["source"] == source and row["target"] == target]
         active = next((w for w in matches if w["id"] == catalog["current_workspace_id"]), None)
         if len(matches) > 1 and not active and not self.intent.get("create"):
-            return say("你有多个符合这组语言的工作区：" + "、".join(w["name"] for w in matches)
-                       + "。请在左上角选一个，再告诉我你想学的语言。")
+            return say("你有多个符合这组语言/方言的工作区：" + "、".join(w["name"] for w in matches)
+                       + "。请在左上角选一个，再告诉我你想学的语言/方言。")
         workspace = active or (matches[0] if matches else None)
         created = workspace is None or self.intent.get("create", False)
         if created:
@@ -116,7 +116,7 @@ class SetupAssistant:
         if created or (ident != catalog["current_workspace_id"] and not workspace.get("text_configured", False)):
             reuse = run("reuse_workspace_text_models", workspace_id=ident)
             if reuse.get("requires_human_confirmation"):
-                response.append("允许此工作区使用远程文本模型后，听幕会为每句生成讲解，并核对已知语言的译稿。")
+                response.append("允许此工作区使用远程文本模型后，听幕会为每句生成讲解，并核对已知语言/方言的译稿。")
             elif reuse.get("applied"):
                 response.append("已在此工作区启用全局分配的本机文本连接。")
             elif not workspace.get("text_configured"):

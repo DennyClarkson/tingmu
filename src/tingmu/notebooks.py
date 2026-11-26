@@ -31,7 +31,7 @@ class NotebookConflict(ValueError):
 
 def _language(value):
     if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", value):
-        raise ValueError("学习语言标识无效。")
+        raise ValueError("学习语言/方言标识无效。")
     return value
 
 
@@ -405,7 +405,7 @@ class NotebookManager:
             old_links = set(re.findall(r"tingmu://entry/([1-9][0-9]*)", original["markdown"]))
             for entry_id in set(re.findall(r"tingmu://entry/([1-9][0-9]*)", markdown)) - old_links:
                 if self.source_entry(int(entry_id), target_language=language) is None:
-                    raise ValueError("笔记新增的来源不存在或不属于当前学习语言。")
+                    raise ValueError("笔记新增的来源不存在或不属于当前学习语言/方言。")
             self._write(language, markdown, expected_revision)
             with self.store._connection() as db:
                 db.execute("INSERT OR IGNORE INTO notebook_v5_migrations VALUES (?)", (target_language,))
@@ -423,7 +423,7 @@ class NotebookManager:
             raise ValueError("收藏 ID 无效或重复。")
         by_id = {entry["id"]: entry for entry in entries}
         if not set(ids) <= set(by_id):
-            raise ValueError("收藏不存在或不属于当前学习语言。")
+            raise ValueError("收藏不存在或不属于当前学习语言/方言。")
         return [by_id[i] for i in ids]
 
     def update_entry_note(self, entry_id, note, expected_revision=None, *, target_language=None):
@@ -435,7 +435,7 @@ class NotebookManager:
         with _LOCK, self.store._connection(immediate=True) as db:
             entry = db.execute("SELECT target_language FROM entries WHERE id=?", (entry_id,)).fetchone()
             if not entry or (target_language is not None and entry[0] != target_language):
-                raise ValueError("收藏不存在或不属于当前学习语言。")
+                raise ValueError("收藏不存在或不属于当前学习语言/方言。")
             row = db.execute("SELECT entry_note FROM notebook_collections WHERE entry_id=?", (entry_id,)).fetchone()
             old = row[0] if row else ""
             if expected_revision is not None and expected_revision != _revision(old):
@@ -602,7 +602,7 @@ class NotebookManager:
                 raise NotebookConflict("笔记已修改，请重新加载后保存。")
             note = next((n for n in original["notes"] if n["id"] == note_id), None)
             if note is None:
-                raise ValueError("学习笔记不存在或不属于当前学习语言。")
+                raise ValueError("学习笔记不存在或不属于当前学习语言/方言。")
             self._check_linked_ids(body, set(note["entry_ids"]))
             span = self._note_span(original["markdown"], note)
             if span is None:
@@ -628,7 +628,7 @@ class NotebookManager:
                 raise NotebookConflict("笔记已修改，请重新加载后删除。")
             note = next((n for n in original["notes"] if n["id"] == note_id), None)
             if note is None:
-                raise ValueError("学习笔记不存在或不属于当前学习语言。")
+                raise ValueError("学习笔记不存在或不属于当前学习语言/方言。")
             span = self._note_span(original["markdown"], note)
             if span is None:
                 raise NotebookConflict("此条笔记已在 Markdown 中修改，请先核对原文。")
@@ -661,7 +661,7 @@ class NotebookManager:
                                     "remark": entry.get("entry_note", "") or entry.get("note", "")})
                 current = [{"title": "我的学习材料", "entry_ids": [e["id"] for e in batch],
                             "learning_note": "本地整理仅引用已有释义与备注。先回忆词句，再对照原片检查；"
-                                             "跨语言差异、语法和新例句尚待进一步分析。", "entry_notes": details}]
+                                             "语言/方言之间的差异、语法和新例句尚待进一步分析。", "entry_notes": details}]
             else:
                 payload = {"target_language": language, "source_language": source_language,
                            "target_language_name": language_name(language),

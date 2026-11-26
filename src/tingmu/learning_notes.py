@@ -36,7 +36,7 @@ def language_name(language):
 
 
 DETAIL_FIELDS = {
-    "comparison": "已知语言与目标语言对比", "usage": "用法与语境", "grammar": "语法要点",
+    "comparison": "已知语言/方言与目标语言/方言对比", "usage": "用法与语境", "grammar": "语法要点",
     "pitfalls": "易错点", "example": "教学例句（AI 生成，非视频原句）", "example_translation": "例句解释",
     "goal": "学习目标", "remark": "个性化备注",
 }

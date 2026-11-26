@@ -1,9 +1,9 @@
 # 全片文本复核与短句显示
 
-工作区开启原文复核后，听幕使用分配给复核任务的文本模型处理原声转录，随后再分词并生成讲解。字幕 Agent 若采纳学习语言原文，会沿用字幕原句。若仅能采纳译文，会把和转录时间重叠的译文作为上下文。文本复核无法核实实际发音，可回到原声确认。[模型与权限](providers.md) · [字幕来源判断](portable.md)
+工作区开启原文复核后，听幕使用分配给复核任务的文本模型处理原声转录，随后再分词并生成讲解。字幕 Agent 若采纳学习语言/方言原文，会沿用字幕原句。若仅能采纳译文，会把和转录时间重叠的译文作为上下文。文本复核无法核实实际发音，可回到原声确认。[模型与权限](providers.md) · [字幕来源判断](portable.md)
 
 `review(cues, language, progress=None, cancelled=None, checkpoint=None, context_cues=None)`
-返回原顺序的源 `Cue`。ID、声学 start/end、original_text 不变；学习正文使用工作区的学习语言，粤语规范为繁体；
+返回原顺序的源 `Cue`。ID、声学 start/end、original_text 不变；学习正文使用工作区的学习语言/方言，粤语规范为繁体；
 旧 translation、explanation、tokens 清空，让后续教师针对复核正文重新生成材料。
 `Cue.segmented_texts: list[str]` 单独保存模型决定的短句边界，拼接必须逐字等于复核 text，
 包括标点和空格。绝不把相邻源句合并，也不把某个源 ID 的文字搬到另一个 ID。
@@ -24,7 +24,7 @@
 `review_metadata` 按源 ID 保存 `state/reason/changed/model_uncertain`，state 为
 `reviewed_unchanged/corrected/uncertain/retained`；另有 `segmentation`（model 或
  deterministic_fallback）、`segment_count`、`timing_basis`、`short_display_estimate`。
-原有 uncertain 永不清除，实际改动也保留不确定性。原因用已知语言，zh-CN 用简体中文。
+原有 uncertain 永不清除，实际改动也保留不确定性。原因用已知语言/方言，zh-CN 用简体中文。
 不使用“声音已验证”状态。
 
 `SubtitleTimeline` 保持源句分离。未分割的显示 Cue 仍用源 ID；分割后 ID 为

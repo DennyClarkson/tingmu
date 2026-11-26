@@ -233,7 +233,7 @@ def _asr_block_reason(settings):
     from .model_advisor import model_supports_language
     if not model_supports_language(settings.asr_model, settings.target_language):
         return (f"所选识别模型 {settings.asr_model} 无法识别 {settings.target_language}。"
-                "请添加与视频同名的字幕文件，或在工作区设置中选择支持该语言的模型或转写 API。")
+                "请添加与视频同名的字幕文件，或在工作区设置中选择支持该语言/方言的模型或转写 API。")
     from .workspace_models import model_readiness
     readiness = model_readiness(settings.asr_model)
     if readiness.code == "runtime_missing":

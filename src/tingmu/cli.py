@@ -11,7 +11,7 @@ def main(argv=None) -> int:
     for stream in (sys.stdout, sys.stderr):
         if stream is not None and hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8")
-    parser = argparse.ArgumentParser(prog="tingmu", description="听幕 · 看剧学语言")
+    parser = argparse.ArgumentParser(prog="tingmu", description="听幕 · 看剧学语言/方言")
     parser.add_argument("--data-dir", type=Path, help="学习数据目录")
     commands = parser.add_subparsers(dest="command")
     gui = commands.add_parser("gui", help="打开播放器")
@@ -23,8 +23,8 @@ def main(argv=None) -> int:
                          help="使用经典流程或字幕 Agent，默认沿用工作区设置")
     prepare.add_argument("--segmentation-mode", choices=SEGMENTATION_MODES,
                          help="新任务分句方式。local 为本地分句；llm_regroup 使用复核模型，必要时使用讲解模型。默认沿用工作区设置")
-    prepare.add_argument("--source")
-    prepare.add_argument("--target")
+    prepare.add_argument("--source", help="已知语言/方言代码，用于译文和讲解（如 zh-CN）")
+    prepare.add_argument("--target", help="学习语言/方言代码，对应视频对白（如 yue）")
     prepare.add_argument("--provider", choices=["local", "workspace", "deepseek", "openai"],
                          help="local 使用本地词典，workspace 使用工作区允许的文本模型。省略时本地分句用 local，模型分句用 workspace")
     prepare.add_argument("--model")

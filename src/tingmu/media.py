@@ -493,7 +493,7 @@ def _asr_worker(request_path: Path) -> int:
                               download_root=request["model_cache"], cpu_threads=min(8, os.cpu_count() or 4))
         language = request["language"]
         if language is not None and language not in engine.supported_languages:
-            raise ValueError(f"模型 {request['model']} 不支持语言 {language}。粤语请使用 large-v3 或 large-v3-turbo。")
+            raise ValueError(f"模型 {request['model']} 不支持语言/方言 {language}。粤语请使用 large-v3 或 large-v3-turbo。")
         turns = request.get("speaker_changes", [])
         assets = distribution("faster-whisper").locate_file("faster_whisper/assets")
         vad_filter = any(path.is_file() for path in assets.glob("silero_vad*.onnx"))
@@ -521,7 +521,7 @@ def _asr_worker(request_path: Path) -> int:
                                           initial_prompt=request.get("initial_prompt"),
                                           condition_on_previous_text=False,
                                           vad_parameters={"min_silence_duration_ms": 500})
-        _worker_emit({"progress": f"开始识别 {info.duration:.1f} 秒音频（语言 {info.language}）",
+        _worker_emit({"progress": f"开始识别 {info.duration:.1f} 秒音频（语言/方言 {info.language}）",
                       "metrics": {"activity": "语音识别", "done": 0, "total": float(info.duration), "unit": "秒"}})
         from .whisper_segments import quality_evidence, segment_evidence
         cues, raw_segments = [], []

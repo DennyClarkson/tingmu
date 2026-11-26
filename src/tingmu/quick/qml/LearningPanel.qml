@@ -84,7 +84,7 @@ Item {
                     Layout.preferredWidth: columnWidth; Layout.maximumWidth: columnWidth; Layout.minimumWidth: columnWidth
                     Layout.fillHeight: true; spacing: root.height < 540 ? 7 : 12
                     Text{Layout.fillWidth:true;Layout.minimumWidth:0;wrapMode:Text.Wrap;text:qsTranslate("Tingmu", "学习资料");color:Theme.text;font.family:Theme.serif;font.pixelSize:26}
-                    Text{text:qsTranslate("Tingmu", "所学语言");color:Theme.muted;font.family:Theme.font;font.pixelSize:11}
+                    Text{text:qsTranslate("Tingmu", "所学语言/方言");color:Theme.muted;font.family:Theme.font;font.pixelSize:11}
                     Choice{objectName:"notebookLanguageChoice";Layout.fillWidth:true;optionLabel:(i,value)=>interfaceLanguage.code === "zh-CN" || !model[i] ? value : qsTranslate("Tingmu", "%1学习笔记").arg(qsTranslate("TingmuLanguage", model[i].language));model:root.book.books || [];textRole:"title";currentIndex:Math.max(0,model.findIndex(function(b){return b.language===root.book.language}));onActivated:root.selectLanguage(model[currentIndex].language)}
                     Choice{objectName:"notebookVideoFilter";Layout.fillWidth:true;optionLabel:(i,value)=>i===0 ? qsTranslate("Tingmu",value) : value;model:root.videos;textRole:"label";onActivated:root.videoFilter=model[currentIndex].path}
                     Text{Layout.fillWidth:true;text:((root.book.stats || {}).total || 0)+qsTranslate("Tingmu", " 条收藏 · ")+((root.book.stats || {}).due || 0)+qsTranslate("Tingmu", " 条待复习");color:Theme.muted;font.family:Theme.font;font.pixelSize:11;wrapMode:Text.Wrap}
@@ -154,7 +154,7 @@ Item {
                                     Layout.fillWidth: true
                                     Layout.preferredHeight: Math.max(notebookScroll.availableHeight, editor.implicitHeight)
                                 }
-                                Text{visible:!root.editing && !root.book.markdown;Layout.fillWidth:true;text:qsTranslate("Tingmu", "把收藏变成理解\n\n在“收藏”中选好词句并明确整理后，会生成包含用法、例句与语言对比的笔记。你也可以直接开始写。");color:Theme.muted;font.family:Theme.font;font.pixelSize:15;wrapMode:Text.Wrap;lineHeight:1.6}
+                                Text{visible:!root.editing && !root.book.markdown;Layout.fillWidth:true;text:qsTranslate("Tingmu", "把收藏变成理解\n\n在“收藏”中选好词句并明确整理后，会生成包含用法、例句与语言/方言对比的笔记。你也可以直接开始写。");color:Theme.muted;font.family:Theme.font;font.pixelSize:15;wrapMode:Text.Wrap;lineHeight:1.6}
                             }
                         }
                         ColumnLayout {
