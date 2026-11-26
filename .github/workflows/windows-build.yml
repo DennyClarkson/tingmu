@@ -87,7 +87,7 @@ jobs:
         run: >-
           .venv/Scripts/python.exe packaging/build_release.py --expect-version $env:EXPECT_VERSION
           --smoke-media .cache/fixtures/dual-audio.mkv --output .cache/release
-      - name: Prepare Chinese release notes
+      - name: Prepare Chinese and English release notes
         run: .venv/Scripts/python.exe .github/release_metadata.py --summary .cache/release/release-summary.json
       - name: Upload smoke diagnostics on failure
         if: failure()

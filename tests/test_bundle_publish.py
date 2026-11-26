@@ -90,7 +90,9 @@ def test_build_stages_owned_files_and_refresh_preserves_caches(builder, tmp_path
     write(installation, "data/settings.json", b"personal")
     write(installation, ".cache/speech-models/old", b"personal")
     write(repo, "packaging/Launcher.cs", b"source")
+    write(repo, "src/tingmu/quick/brand/app-icon.ico", b"fixture icon")
     write(repo, "docs/portable.md", b"docs")
+    write(repo, "docs/portable.en.md", b"English guide")
     write(repo, "THIRD_PARTY_NOTICES.md", b"notices")
     for name in ("old", "new"):
         write(repo, ".cache/speech-models/" + name, b"source")
@@ -113,7 +115,7 @@ def test_build_stages_owned_files_and_refresh_preserves_caches(builder, tmp_path
         assert not (root / "runtime/asr").exists()
         assert not (root / "bin").exists()
         assert not list((root / "runtime").rglob("*.onnx"))
-        assert (root / "使用说明.md").read_bytes() == b"docs"
+        assert b"English guide" in (root / "使用说明.md").read_bytes()
         assert (root / "THIRD_PARTY_NOTICES.md").read_bytes() == b"notices"
         return {"model_payloads": 0}
 
@@ -137,7 +139,8 @@ def test_build_stages_owned_files_and_refresh_preserves_caches(builder, tmp_path
     assert (installation / "Tingmu.exe").read_bytes() == b"new"
     assert (installation / "app/bootstrap.py").read_bytes() == b"new"
     assert not (installation / "app/stale.py").exists()
-    assert (installation / "使用说明.md").read_bytes() == b"docs"
+    guide = (installation / "使用说明.md").read_bytes()
+    assert b"docs" in guide and b"English guide" in guide
     assert (installation / "THIRD_PARTY_NOTICES.md").read_bytes() == b"notices"
     marker = json.loads((installation / "tingmu-portable.json").read_bytes())
     assert marker["launcher_source_sha256"]

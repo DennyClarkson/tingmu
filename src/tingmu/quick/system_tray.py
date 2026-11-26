@@ -1,35 +1,15 @@
 """Keep the current study session available from the desktop notification area."""
 import json
+from pathlib import Path
 
 from PySide6.QtCore import QObject, Property, Qt, Slot
-from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPixmap, QWindow
+from PySide6.QtGui import QIcon, QWindow
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 from shiboken6 import isValid
 
 from tingmu.runtime import confined_path
 from tingmu.storage import atomic_json
 from .localization import ui_text
-
-
-def _application_icon():
-    icon = QIcon()
-    for size in (16, 24, 32, 48, 64):
-        pixmap = QPixmap(size, size)
-        pixmap.fill(Qt.transparent)
-        painter = QPainter(pixmap)
-        painter.setRenderHint(QPainter.Antialiasing)
-        painter.setPen(Qt.NoPen)
-        painter.setBrush(QColor("#8bbda1"))
-        painter.drawRoundedRect(pixmap.rect(), size / 5, size / 5)
-        font = QFont("Source Han Sans SC")
-        font.setPixelSize(round(size * .8))
-        font.setWeight(QFont.Weight.DemiBold)
-        painter.setFont(font)
-        painter.setPen(QColor("#101315"))
-        painter.drawText(pixmap.rect(), Qt.AlignCenter, "听")
-        painter.end()
-        icon.addPixmap(pixmap)
-    return icon
 
 
 class SystemTray(QObject):
@@ -41,7 +21,8 @@ class SystemTray(QObject):
         self._exiting = False
         self._preference_path = None
         self._language = None
-        self._tray = QSystemTrayIcon(_application_icon(), self)
+        icon = QIcon(str(Path(__file__).parent / "brand" / "app-icon.ico"))
+        self._tray = QSystemTrayIcon(icon, self)
         self._tray.setToolTip("听幕")
         self._menu = QMenu()
         self._open = self._menu.addAction("打开听幕", self.restore)
@@ -53,7 +34,7 @@ class SystemTray(QObject):
         self._quit = self._menu.addAction("退出听幕", self.quitApplication)
         self._tray.setContextMenu(self._menu)
         self._tray.activated.connect(self._activated)
-        app.setWindowIcon(self._tray.icon())
+        app.setWindowIcon(icon)
         app.aboutToQuit.connect(self._tray.hide)
 
     def set_language(self, language):

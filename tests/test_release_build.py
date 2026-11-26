@@ -18,6 +18,7 @@ def release(tmp_path, monkeypatch):
         path = tmp_path / source
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(name, encoding="utf-8")
+    (tmp_path / "docs/portable.en.md").write_text("English guide", encoding="utf-8")
     return build_release
 
 
@@ -26,8 +27,8 @@ def make_bundle(release, root):
     (root / "runtime/python/Lib/site-packages").mkdir(parents=True)
     for name in ("Tingmu.exe", "app/bootstrap.py", "runtime/python/Lib/site-packages/core.py"):
         (root / name).write_bytes(b"fixture")
-    for name, source in release.RELEASE_DOCUMENTS.items():
-        (root / name).write_bytes((release.ROOT / source).read_bytes())
+    for name in release.RELEASE_DOCUMENTS:
+        (root / name).write_bytes(release.release_document_bytes(release.ROOT, name))
     manifest = {"clean_install": True, "version": "1.2.3-rc.1", "weight_audit": {"model_payloads": 0},
                 "qml_runtime": {"pe_files_checked": 42}}
     (root / "tingmu-portable.json").write_text(json.dumps(manifest), encoding="utf-8")
@@ -89,7 +90,7 @@ def test_size_and_document_gates(release, monkeypatch):
 
 
 @pytest.mark.parametrize("missing", [
-    "qml_window", "isolated_data", "portable_imports", "bundled_open_fonts", "first_run_guide",
+    "qml_window", "application_icon", "isolated_data", "portable_imports", "bundled_open_fonts", "first_run_guide",
     "first_run_skip_persisted", "workspace_llm_concurrency", "notebook_markdown_preview", "no_new_bytecode",
     "decode", "seek", "rate", "audio_switch", "pause",
 ])
@@ -171,6 +172,7 @@ def test_build_only_archives_pristine_tree_and_preserves_diagnostics(release, mo
             assert not any(name.startswith(("Tingmu/data/", "Tingmu/.cache/")) for name in names)
             assert "Tingmu/使用说明.md" in names and "Tingmu/THIRD_PARTY_NOTICES.md" in names
             assert bundle.getinfo("Tingmu/使用说明.md").flag_bits & 0x800
+            assert b"English guide" in bundle.read("Tingmu/使用说明.md")
             assert summary["file_count"] == sum(not item.is_dir() for item in bundle.infolist())
             assert summary["unpacked_bytes"] == sum(item.file_size for item in bundle.infolist())
             assert bundle.testzip() is None

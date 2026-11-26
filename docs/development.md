@@ -84,12 +84,17 @@ git diff --check
 
 ## 在本地演练 GitHub Release
 
+每次发布前，在 `.github/release-changes/v<版本>.toml` 中为每项面向用户的改动填写中文 `zh` 和英文 `en`。将 `previous_tag` 设为上一版标签，首发留空。发布说明从这里读取变更和贡献者信息，并从当次构建的 `release-summary.json` 读取大小、文件数与 SHA-256。[首发示例](../.github/release-changes/v0.12.0.toml)
+
+**Maintaining bilingual release notes.** For each version, add a file named `.github/release-changes/v<version>.toml`. Write each user-facing change in both Chinese (`zh`) and English (`en`). Set `previous_tag` to the preceding release tag, or leave it empty for the first release. The notes generator combines these entries and contributor credits with the measurements and SHA-256 for that build. [First release example](../.github/release-changes/v0.12.0.toml)
+
 在 Windows x64 的干净检出中用 `uv sync --locked --extra dev` 准备 Python 3.12 环境。下面的第一条命令会下载并校验锁表指定的 FFmpeg，现场合成五秒双音轨视频。发布构建随后在中文空格路径启动离屏播放器，断网验证解码、定位、切轨、倍速和暂停。
 
 ```powershell
 & ./.venv/Scripts/python.exe .github/prepare_smoke_media.py --output .cache/qa/release-fixtures/dual-audio.mkv
 $version = & ./.venv/Scripts/python.exe -c "import tomllib; print(tomllib.load(open('pyproject.toml', 'rb'))['project']['version'])"
 & ./.venv/Scripts/python.exe packaging/build_release.py --expect-version $version --smoke-media .cache/qa/release-fixtures/dual-audio.mkv --output .cache/qa/release-dry-run
+& ./.venv/Scripts/python.exe .github/release_metadata.py --summary .cache/qa/release-dry-run/release-summary.json
 ```
 
 成功后，输出目录包含 ZIP、`SHA256SUMS.txt` 和记录实际体积与文件数的 `release-summary.json`。烟雾报告与构建日志在同目录的 `diagnostics/`。ZIP 收录首次运行前的干净目录。归档条目排序和时间戳固定，每个构建的清单会记录当次构建时间，请使用同次生成的校验和。

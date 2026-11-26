@@ -1,4 +1,8 @@
-# 听幕验收记录
+# 听幕验收记录 · Tingmu validation reports
+
+[简体中文](#zh-cn) · [English](#english)
+
+<a id="zh-cn"></a>
 
 ## 0.12.0 发布验收
 
@@ -28,3 +32,34 @@
 ## 共享范围
 
 `.gitignore` 默认忽略新增报告。若需共享，先整理为去除密钥、机器路径和个人学习内容的汇总，人工审阅后再加入允许列表。私人媒体与字幕、原始模型请求或回答、截图、诊断转储和个人数据库留在本机。
+
+## English
+
+### Release validation for 0.12.0
+
+The November 23, 2026 handoff records the checks below. Contributors run the development checks locally and record the results in their pull requests. [Hosted check for this round of maintenance](https://github.com/DennyClarkson/tingmu/actions/runs/45179352534) · [0.12.0 handoff](../handoff.md) · [Local test commands](../docs/development.md)
+
+| Area | What was checked |
+| --- | --- |
+| Regression tests and portable playback | 744 offline tests and 113 subtests passed, along with Ruff and the offline lockfile check. Each of two executables passed 16 checks covering startup, video decoding, seeking, playback speed, audio track switching, and pause. |
+| Subtitle selection | For one episode, 673 bilingual subtitle pairs and their timestamps were compared against the accompanying ASS file. The player identified six image-based subtitle tracks and an external subtitle file for the wrong episode. In the translation-only case, 29 seconds of the original audio were transcribed locally with Whisper on CPU and checked against the overlapping reference subtitles. These checks did not measure recognition accuracy for the full episode. |
+| Text model | A single live DeepSeek Flash request generated explanations for three original bilingual test lines. All three supplied translations were preserved and the export was verified. |
+| Windows interface and updates | Checks covered the file picker in both bundled runtimes, subtitle selection decisions and missing-model recovery prompts in all three interface languages, and whether selections survived a language switch. The handoff also records checks of packaged files against source and preservation of study data. |
+
+Local evidence for these checks was stored in the ignored `.cache/qa/subtitle-agent-v12/` directory. These synthetic tests ship with the repository and can be run locally. [Source selection](../tests/test_subtitle_sources.py) · [Preparation](../tests/test_agent_preparation.py) · [Queue and export](../tests/test_workflow_queue.py) · [Interface languages](../tests/test_interface_language.py)
+
+### Archived reports
+
+These three redacted JSON reports describe the scope of testing during the **0.5 series**.
+
+| Report | Coverage |
+| --- | --- |
+| [acceptance-v5.json](acceptance-v5.json) | Automated regression tests, native-window interaction, DeepSeek and GPT text requests, and data retention |
+| [portable-v5-validation.json](portable-v5-validation.json) | Portable build checks and preservation of media and existing study materials |
+| [v5-reasoning-live.json](v5-reasoning-live.json) | Counts from live requests for provider-exposed reasoning and summaries, and the model names returned by the services |
+
+For other versions, look up the date or version in the [handoff history](../handoff.md). Sample media, original reports, and paths under `.cache/` identified there as local are kept on the test machine.
+
+### Sharing a report
+
+Git ignores new reports by default. To share one, prepare a summary with credentials, machine-specific paths, and personal study content removed. Have it reviewed before adding it to the allowlist. Keep private media and subtitles, raw model requests and responses, screenshots, diagnostic dumps, and personal databases on the local machine.

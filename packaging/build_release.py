@@ -13,13 +13,13 @@ import zipfile
 
 from filelock import FileLock
 
-from build_clean_install import RELEASE_DOCUMENTS, validate_core_release
+from build_clean_install import RELEASE_DOCUMENTS, release_document_bytes, validate_core_release
 from build_portable import publish, unlinked
 
 ROOT = Path(__file__).resolve().parents[1]
 MAX_BYTES = 350 * 1024**2
 REQUIRED_CHECKS = {
-    "qml_window", "isolated_data", "portable_imports", "bundled_open_fonts", "first_run_guide",
+    "qml_window", "application_icon", "isolated_data", "portable_imports", "bundled_open_fonts", "first_run_guide",
     "first_run_skip_persisted", "workspace_llm_concurrency", "notebook_markdown_preview", "no_new_bytecode",
 }
 MEDIA_CHECKS = {"decode", "seek", "rate", "audio_switch", "pause"}
@@ -66,8 +66,8 @@ def audit_bundle(root, version):
         raise ValueError("Unexpected runtime contents")
     if not (root / "Tingmu.exe").is_file() or not (root / "app/bootstrap.py").is_file():
         raise ValueError("Missing portable launcher or bootstrap")
-    for name, source in RELEASE_DOCUMENTS.items():
-        if (root / name).read_bytes() != (ROOT / source).read_bytes():
+    for name in RELEASE_DOCUMENTS:
+        if (root / name).read_bytes() != release_document_bytes(ROOT, name):
             raise ValueError(f"Release document differs from its source: {name}")
     manifest = json.loads((root / "tingmu-portable.json").read_text("utf-8"))
     if manifest.get("clean_install") is not True or manifest.get("version") != version:

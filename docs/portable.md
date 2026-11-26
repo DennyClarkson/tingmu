@@ -1,5 +1,7 @@
 # 听幕便携版使用指南
 
+[English](portable.en.md)
+
 在 GitHub Releases 的附件中选择 Windows x64 便携 ZIP，将整个压缩包解压到有写入权限、空间足够的位置。打开解压出的 `Tingmu` 文件夹，双击 `Tingmu.exe`。同一目录中的 `THIRD_PARTY_NOTICES.md` 说明随包组件和许可的位置。[GitHub Releases](https://github.com/DennyClarkson/tingmu/releases)
 
 随包提供 Qt Quick 播放器、四套完整字体、Python 和基础学习工具。视频解码使用 Qt 自带的多媒体插件。干净发行包首次启动时没有个人资料、模型连接或识别权重，默认工作区已停用文本 API。已有安装会恢复上次使用的工作区。
@@ -92,6 +94,8 @@ Agent 按所选音轨、可辨认的剧集编号、实际字幕语言和时间�
 
 关闭听幕再备份或移动整个便携文件夹。启动时可重新定位安装内的媒体引用。迁移前的数据库和 JSON 原件保存在工作区的 `migration-backups/`，目标有冲突时会停止迁移。目录外引用的视频仍需从原路径访问。使用个人资料的副本会包含这些学习记录。供他人首次使用的副本应使用下方的干净构建流程。
 
+**用新版 ZIP 升级。** 从托盘退出听幕并备份整个旧文件夹。将新版完整解压到新的可写目录，首次启动前把旧安装的 `data/` 复制到新版 `Tingmu/`。要复用已下载的模型和可选组件，再复制已有的 `.cache/`、`bin/` 和 `runtime/asr/`，保留新版自带的 `app/` 和 `runtime/python/`。启动新版，核对上次使用的工作区、收藏、笔记和视频播放，重新检测依赖。换电脑或 Windows 账号后，需要重新输入手工保存的 API 密钥。需要回退时，从备份打开旧版。
+
 启动错误可在安装内的 `data/logs/application.log` 查看。在「帮助 → 开发者模式 → 查看日志」可查看运行状态或点「导出诊断」，输出到当前工作区的 `diagnostics/`。运行事件记录在工作区的 `logs/events.jsonl`，每份约 2 MiB，保留 3 份轮转备份。启动日志同样限制在约 2 MiB，保留 2 份备份。诊断保留异常类型、代码位置和已脱敏的环境信息，排除字幕、对话、笔记和请求正文。
 
 ## 维护者构建与验收
@@ -108,6 +112,6 @@ New-Item -ItemType Directory -Force $qa | Out-Null
 .venv/Scripts/python.exe -B packaging/build_clean_install.py "$qa/clean" --source "$qa/Tingmu"
 ```
 
-更新已有安装前先退出听幕和托盘进程。`packaging/build_clean_install.py <安装目录> --refresh` 更新程序及清单，保留工作区、模型和按需安装的组件。启动器源码有变化时，在新目录完整构建。
+更新已有安装前先退出听幕和托盘进程。`packaging/build_clean_install.py <安装目录> --refresh` 更新程序及清单，保留工作区、模型和按需安装的组件。启动器源码或图标有变化时，在新目录完整构建。
 
 在搬迁后的副本运行 `Tingmu.exe --portable-smoke --smoke-media "双音轨视频绝对路径"` 可离线验证播放、音轨切换、定位、倍速、暂停、字体和首次引导。有系统托盘时也会测试隐藏和恢复窗口。无显示器时可设置 `QT_QPA_PLATFORM=offscreen` 和 `QT_QUICK_BACKEND=software`。报告在副本的 `data/logs/portable-smoke.json`，测试工作区与引导状态保存在 `.cache/portable-smoke/`。[体积、冷启动与实测](https://github.com/DennyClarkson/tingmu/blob/main/docs/bundle-and-startup-optimization.md)

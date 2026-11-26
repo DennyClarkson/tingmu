@@ -7,9 +7,10 @@ on:
       - '**'
       - '!*.md'
       - '!docs/**'
-      # Both files ship in the portable archive. Changes to .github/** also always run.
+      # The license notices and both language editions of the guide ship in the ZIP.
       - THIRD_PARTY_NOTICES.md
       - docs/portable.md
+      - docs/portable.en.md
   pull_request:
     branches: [main]
     paths: *build_paths

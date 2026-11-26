@@ -53,8 +53,14 @@ def test_clean_builder_ships_current_release_documents(tmp_path, core, monkeypat
     monkeypatch.setattr(core, "validate_qml_runtime", lambda root: {})
     destination = tmp_path / "release"
     core.build(destination, source, bytecode=False)
-    for name, relative in (("使用说明.md", "docs/portable.md"), ("THIRD_PARTY_NOTICES.md", "THIRD_PARTY_NOTICES.md")):
-        assert (destination / name).read_bytes() == (core.ROOT / relative).read_bytes()
+    guide = (destination / "使用说明.md").read_text("utf-8")
+    for file, external, internal in (("portable.md", "(portable.en.md)", "(#english)"),
+                                     ("portable.en.md", "(portable.md)", "(#chinese)")):
+        original = (core.ROOT / "docs" / file).read_text("utf-8")
+        assert external in original and original.rstrip().replace(external, internal) in guide
+        assert f'id="{internal[2:-1]}"' in guide
+    notices = "THIRD_PARTY_NOTICES.md"
+    assert (destination / notices).read_bytes() == (core.ROOT / notices).read_bytes()
     manifest = json.loads((destination / "tingmu-portable.json").read_text("utf-8"))
     assert manifest["weight_audit"] == core.validate_core_release(destination)
 
@@ -67,5 +73,9 @@ def test_copy_app_only_includes_qml_frontend_and_ships_installer_lock(tmp_path, 
     app = tmp_path / "app/tingmu"
     assert not (app / "ui").exists()
     assert (app / "quick/qml/Main.qml").is_file()
+    for name in ("app-icon.svg", "app-icon.ico"):
+        assert (app / "quick/brand" / name).read_bytes() == (
+            Path(__file__).resolve().parents[1] / "src/tingmu/quick/brand" / name
+        ).read_bytes()
     assert (app / "assets/runtime-deps/windows-cp312-x64.json").is_file()
     assert len(list((app / "quick/qml/fonts").glob("*.otf"))) == 4

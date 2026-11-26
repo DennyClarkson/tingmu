@@ -6,15 +6,15 @@ on:
   workflow_dispatch:
     inputs:
       existing_tag:
-        description: '从指定的已有标签重新构建（如 v0.12.0）'
+        description: '从已有标签重新构建 / Rebuild an existing tag (e.g. v0.12.0)'
         type: string
         default: ''
       dry_run:
-        description: '仅构建、验收并上传 Actions 构件'
+        description: '仅构建、验收并上传 Actions 构件 / Build, verify and upload Actions artifacts only'
         type: boolean
         default: true
       draft:
-        description: '关闭 dry_run 后，将 Release 保存为草稿'
+        description: '关闭 dry_run 后保存为草稿 / Save the release as a draft when dry_run is off'
         type: boolean
         default: false
 
@@ -52,7 +52,7 @@ jobs:
       - name: Verify downloaded ZIP checksum
         working-directory: release
         run: sha256sum --strict --check SHA256SUMS.txt
-      - name: Publish the tested commit with generated changelog
+      - name: Publish the tested commit with bilingual release notes
         shell: bash
         working-directory: release
         env:
@@ -95,5 +95,4 @@ jobs:
           if [[ "$DRAFT" == true ]]; then flags+=(--draft); fi
           if [[ "${VERSION%%+*}" == *-* ]]; then flags+=(--prerelease); fi
           gh release create "$TAG" "Tingmu-$VERSION-windows-x64-portable.zip" SHA256SUMS.txt \
-            --repo "$GITHUB_REPOSITORY" --title "听幕 $TAG" --notes-file release-notes.md \
-            --generate-notes "${flags[@]}"
+            --repo "$GITHUB_REPOSITORY" --title "听幕 Tingmu $TAG" --notes-file release-notes.md "${flags[@]}"

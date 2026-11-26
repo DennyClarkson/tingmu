@@ -1,6 +1,5 @@
 """Portable QML checks must fail before delivering a broken application folder."""
 import importlib.util
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -73,6 +72,9 @@ def test_refresh_only_updates_owned_application(tmp_path, monkeypatch, clean):
     qml = fixture / "src/tingmu/quick/qml"
     qml.mkdir(parents=True)
     (qml / "Main.qml").write_text("import QtQuick\nItem {}", encoding="utf-8")
+    brand = qml.parent / "brand"
+    brand.mkdir()
+    (brand / "app-icon.ico").write_bytes(b"fixture icon")
     monkeypatch.setattr(builder, "ROOT", fixture)
     monkeypatch.setattr(builder, "validate_qml_runtime", lambda root: {})
     install = tmp_path / "installed"
@@ -81,7 +83,8 @@ def test_refresh_only_updates_owned_application(tmp_path, monkeypatch, clean):
         file.parent.mkdir(parents=True, exist_ok=True)
         file.write_bytes(b"original")
     marker = install / "tingmu-portable.json"
-    marker.write_text(json.dumps({"clean_install": clean, "launcher_source_sha256": hashlib.sha256(b"new").hexdigest()}))
+    marker.write_text(json.dumps({"clean_install": clean,
+                                 "launcher_source_sha256": builder.launcher_hash(fixture / "packaging/Launcher.cs")}))
     builder.refresh(install)
     assert (install / "app/bootstrap.py").read_text() == "new"
     assert json.loads(marker.read_text())["clean_install"] is clean

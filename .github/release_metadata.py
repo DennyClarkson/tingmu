@@ -23,22 +23,72 @@ def release_version(project_version, tag):
     return project_version
 
 
-def format_notes(summary):
+def change_history(version, changes, repository_url):
+    tag = f"v{version}"
+    previous = changes["previous_tag"]
+    if previous:
+        release_version(previous.removeprefix("v"), previous)
+        if previous == tag:
+            raise ValueError("previous_tag must differ from the release tag")
+    history_url = f"{repository_url}/compare/{previous}...{tag}" if previous else f"{repository_url}/commits/{tag}"
+    entries = changes.get("changes", [])
+    if not entries:
+        raise ValueError(f"Add at least one bilingual change entry for {tag}")
+
+    lines = ["## 更新内容 / What’s changed", ""]
+    contributors = []
+    for entry in entries:
+        zh, en = entry.get("zh", "").strip(), entry.get("en", "").strip()
+        if zh == en or not re.search(r"[\u3400-\u9fff]", zh) or not re.search(r"[A-Za-z]", en):
+            raise ValueError(f"Each change for {tag} needs both Chinese (zh) and English (en) text")
+        references = []
+        if author := entry.get("author"):
+            references.append(f"@{author}")
+        if pr := entry.get("pr"):
+            references.append(f"[#{pr}]({repository_url}/pull/{pr})")
+        if entry.get("first_contribution"):
+            if not author or not pr:
+                raise ValueError("A first contribution needs an author and pull request")
+            contributors.append(" · ".join(references))
+        lines.extend([f"- {zh}  ", f"  {en}"])
+        if references:
+            lines[-1] += " " + " · ".join(references)
+
+    if contributors:
+        lines.extend(["", "## 首次贡献者 / New contributors", "", *(f"- {item}" for item in contributors)])
+    lines.extend(["", f"[完整更新记录 / Full changelog]({history_url})", ""])
+    return "\n".join(lines)
+
+
+def format_notes(summary, changes, repository_url):
     mib = 1024**2
     return (
-        "## Windows x64 便携版\n\n"
-        f"- 压缩包 `{summary['archive']}`，{summary['zip_bytes'] / mib:.2f} MiB。\n"
-        f"- 解压后 {summary['unpacked_bytes'] / mib:.2f} MiB，共 {summary['file_count']:,} 个文件。\n"
-        f"- ZIP 的 SHA-256 为 `{summary['sha256']}`，也可核对附件 `SHA256SUMS.txt`。\n"
-        "- **0 模型权重随包**。完整解压 ZIP，双击 `Tingmu/Tingmu.exe`。\n\n"
-        "首次启动会离线检测本机工具。选择「暂不下载，直接进入」，即可 **0 B** 下载开始播放。"
-        "运行时可稍后按需安装，模型权重在工作区配置中单独下载。\n"
+        "## Windows x64 便携版 / Windows x64 portable edition\n\n"
+        "| 项目 / Package details | 实测值 / Audited value |\n"
+        "| --- | --- |\n"
+        f"| 压缩包 / ZIP archive | `{summary['archive']}` |\n"
+        f"| 下载大小 / Download size | {summary['zip_bytes'] / mib:.2f} MiB |\n"
+        f"| 解压大小 / Unpacked size | {summary['unpacked_bytes'] / mib:.2f} MiB |\n"
+        f"| 文件数 / Files | {summary['file_count']:,} |\n"
+        f"| ZIP SHA-256 (`SHA256SUMS.txt`) | `{summary['sha256']}` |\n"
+        "| 随包模型权重 / Bundled model weights | **0** |\n\n"
+        "### 安装与首次启动 / Installation and first launch\n\n"
+        "将整个 ZIP 解压到可写目录，双击 `Tingmu/Tingmu.exe`。首次启动会离线检测本机工具。"
+        "选择「暂不下载，直接进入」，即可用 **0 B** 下载开始播放。"
+        "运行时可稍后按需安装，模型权重可在工作区设置中单独下载。"
+        "在「视图 → 界面语言 / Language」可切换界面语言。\n\n"
+        "Extract the entire ZIP to a writable folder and double-click `Tingmu/Tingmu.exe`. "
+        "On first launch, Tingmu checks for local tools offline. Choose **Skip downloads and enter** "
+        "(暂不下载，直接进入) to play a video with **0 B** of additional downloads. "
+        "To switch to English, choose **视图 → 界面语言 / Language → English**. You can install runtimes "
+        "later and download model weights separately in workspace settings.\n\n"
+        + change_history(summary["version"], changes, repository_url)
     )
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--summary", type=Path, help="Generate Chinese notes beside this audited summary")
+    parser.add_argument("--summary", type=Path, help="Generate bilingual notes beside this audited summary")
     args = parser.parse_args()
     with Path("pyproject.toml").open("rb") as stream:
         project = tomllib.load(stream)["project"]
@@ -48,7 +98,12 @@ def main():
         summary = json.loads(args.summary.read_text(encoding="utf-8"))
         if summary["version"] != version or summary["model_payloads"] != 0:
             raise ValueError("Release summary does not match the validated version or model policy")
-        notes = format_notes(summary)
+        changes_file = Path(__file__).parent / "release-changes" / f"v{version}.toml"
+        with changes_file.open("rb") as stream:
+            changes = tomllib.load(stream)
+        server = os.environ.get("GITHUB_SERVER_URL", "https://github.com")
+        repository = os.environ.get("GITHUB_REPOSITORY", "DennyClarkson/tingmu")
+        notes = format_notes(summary, changes, f"{server}/{repository}")
         args.summary.with_name("release-notes.md").write_text(notes, encoding="utf-8")
         if step_summary := os.environ.get("GITHUB_STEP_SUMMARY"):
             with Path(step_summary).open("a", encoding="utf-8") as stream:

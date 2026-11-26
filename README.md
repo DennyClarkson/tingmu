@@ -1,14 +1,18 @@
+<img align="right" src="src/tingmu/quick/brand/app-icon.svg" width="88" height="88" alt="听幕标志：摊开的青绿书页中嵌着播放键">
+
 # 听幕 Tingmu
+
+**简体中文** · [English](README.en.md)
 
 听幕是一款 Windows 视频播放器，可以把一集剧或一段课程做成逐句学习材料。播放时点字幕就能回听原句、查看讲解、收藏词句，也可以让学习伴侣结合当前对白答疑。默认用普通话学粤语，支持自行选择已知语言与学习语言，包括同语学习。
 
 ## 开始使用
 
-**Windows x64 便携版**　在 GitHub Releases 选择 Windows x64 便携 ZIP，完整解压到可写目录，双击 `Tingmu/Tingmu.exe`。首次启动会离线检测本机组件。点「暂不下载，直接进入」，即可用 **0 B 下载**播放视频和使用外挂字幕。需要转写时，再到「运行环境与依赖管理」配置所需组件。[GitHub Releases](https://github.com/DennyClarkson/tingmu/releases) · [便携版与首次设置](docs/portable.md)
+**Windows x64 便携版**　在[最新正式版](https://github.com/DennyClarkson/tingmu/releases/latest)的 **Assets** 中下载文件名以 `-windows-x64-portable.zip` 结尾的压缩包，完整解压到可写目录，双击 `Tingmu/Tingmu.exe`。首次启动会离线检测本机组件。点「暂不下载，直接进入」，即可用 **0 B 下载**播放视频和使用外挂字幕。需要转写时，再到「运行环境与依赖管理」配置所需组件。[所有版本](https://github.com/DennyClarkson/tingmu/releases) · [便携版与首次设置](docs/portable.md)
 
 点顶部工作区名称，选择你熟悉的语言和视频里要学的语言。简体中文、繁體中文和 English 可在「视图 → 界面语言 / Language」随时切换。界面语言整份安装共用，字幕和讲解使用工作区的语言组合。
 
-**从源码运行**　在 Windows 上安装 Git 和 uv，克隆仓库后进入含 `pyproject.toml` 的目录。在 PowerShell 执行下面的命令即可启动 CPU 开发环境。首次安装需要下载依赖，语音模型按需配置。[开发环境与检查](docs/development.md)
+**从源码运行**　`main` 分支包含最新开发改动，便携版功能以对应版本的发布说明为准。在 Windows 上安装 Git 和 uv，克隆仓库后进入含 `pyproject.toml` 的目录。在 PowerShell 执行下面的命令即可启动 CPU 开发环境。首次安装需要下载依赖，语音模型按需配置。[开发环境与检查](docs/development.md)
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup.ps1 -Dev -CpuOnly

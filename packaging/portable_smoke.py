@@ -119,7 +119,7 @@ def run_smoke(root: Path, media: Path | None = None) -> int:
     bytecode = {path for name in ("app", "runtime/python") for path in (root / name).rglob("*.pyc")}
     import tingmu
     from PySide6.QtCore import QMetaObject, QObject, Qt, QTimer, qVersion
-    from PySide6.QtGui import QFontDatabase
+    from PySide6.QtGui import QFontDatabase, QIcon
     from tingmu.quick.main import create_qml_app
     from tingmu.runtime import cache_root, data_root, is_clean_install
 
@@ -141,6 +141,9 @@ def run_smoke(root: Path, media: Path | None = None) -> int:
         "frames": 0, "errors": [], "blocked_network_events": blocked_network_events, "checks": {},
     }
     report["checks"]["qml_window"] = report["window_visible"] and bool(windows)
+    expected_icon = QIcon(str(root / "app/tingmu/quick/brand/app-icon.ico")).pixmap(32, 32)
+    report["checks"]["application_icon"] = bool(
+        windows and not expected_icon.isNull() and windows[0].icon().pixmap(32, 32).toImage() == expected_icon.toImage())
     report["checks"]["studio_animations_disabled"] = engine.rootContext().contextProperty("onscreenAnimations") is False
     report["checks"]["isolated_data"] = bridge.store.data_dir == isolated_data
     report["checks"]["portable_imports"] = all(Path(path).is_relative_to(root) for path in sys.path)

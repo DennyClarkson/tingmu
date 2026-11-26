@@ -81,9 +81,22 @@ def validate_core_release(root):
     return validate_model_free_runtime(root)
 
 
+def release_document_bytes(repository, name):
+    source = repository / RELEASE_DOCUMENTS[name]
+    if name != "使用说明.md":
+        return source.read_bytes()
+    # Keep the established portable filename. Both language links work offline.
+    chinese = source.read_text("utf-8").replace("[English](portable.en.md)", "[English](#english)")
+    english = (source.parent / "portable.en.md").read_text("utf-8").replace(
+        "[简体中文](portable.md)", "[简体中文](#chinese)"
+    )
+    return (f'<a id="chinese"></a>\n\n{chinese.rstrip()}\n\n---\n\n'
+            f'<a id="english"></a>\n\n{english.rstrip()}\n').encode("utf-8")
+
+
 def copy_release_documents(repository, root):
-    for name, source in RELEASE_DOCUMENTS.items():
-        shutil.copy2(repository / source, root / name)
+    for name in RELEASE_DOCUMENTS:
+        (root / name).write_bytes(release_document_bytes(repository, name))
 
 
 def copy_app(root):

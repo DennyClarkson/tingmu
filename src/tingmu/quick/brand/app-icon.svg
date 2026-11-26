@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="96 117 1064 1064" width="256" height="256">
+  <title>Tingmu</title>
+  <path fill="#84a18f" d="M570 465Q592 445 640 418L982 214C1025 188 1063 211 1063 253V433L570 520Z"/>
+  <path fill="#23433e" stroke="#88a798" stroke-width="20" stroke-linejoin="round"
+        d="M158 362Q158 311 200 321L532 444Q569 457 592 474L1043 373Q1096 360 1096 411V902Q1096 946 1052 957L599 1077Q571 1088 543 1077L192 951Q158 940 158 905Z"/>
+  <path fill="#f5f5e9" d="M687 590Q686 545 724 562L980 710Q1013 731 981 753L727 905Q687 931 687 884Z"/>
+</svg>

@@ -1,0 +1,22 @@
+# The first public release links to its full commit history.
+# For later releases, use the preceding release tag, such as "v0.12.0".
+previous_tag = ""
+
+[[changes]]
+zh = "听幕 0.10.0 增加多语言学习工作区、双语字幕与并发处理。"
+en = "Tingmu 0.10.0 adds multilingual study workspaces, bilingual subtitles, and concurrent processing."
+author = "DennyClarkson"
+pr = 1
+first_contribution = true
+
+[[changes]]
+zh = "听幕 0.12.0 引入字幕 Agent 和三语界面，并收录 0.11 系列更新。"
+en = "Tingmu 0.12.0 introduces the Subtitle Agent and a three-language interface, and includes the 0.11 series updates."
+author = "DennyClarkson"
+pr = 2
+
+[[changes]]
+zh = "更新听幕 0.12 使用与开发指南，改为本地验证。"
+en = "Updated the Tingmu 0.12 user and developer guides and switched to local validation."
+author = "DennyClarkson"
+pr = 3

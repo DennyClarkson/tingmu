@@ -26,14 +26,20 @@ def copy_packages(source, destination, runtime, clean_ignore=None):
         copy_pyside_runtime(source / "PySide6", destination / "PySide6")
 
 
+def launcher_icon(source):
+    return source.parents[1] / "src/tingmu/quick/brand/app-icon.ico"
+
+
 def launcher_hash(source):
-    return hashlib.sha256(source.read_bytes()).hexdigest()
+    """Fingerprint both compiler inputs so an old or differently branded EXE is rebuilt."""
+    inputs = (source, launcher_icon(source))
+    return hashlib.sha256(b"".join(hashlib.sha256(path.read_bytes()).digest() for path in inputs)).hexdigest()
 
 
 def compile_launcher(source, target):
     compiler = Path(os.environ["WINDIR"]) / "Microsoft.NET/Framework64/v4.0.30319/csc.exe"
     subprocess.run([str(compiler), "/nologo", "/target:winexe", "/platform:x64", "/optimize+",
-                    f"/out:{target}", str(source)], check=True)
+                    f"/win32icon:{launcher_icon(source)}", f"/out:{target}", str(source)], check=True)
 
 
 def precompile(app, interpreter, *, include_runtime):
