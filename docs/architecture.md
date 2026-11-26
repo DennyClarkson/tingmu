@@ -1,4 +1,4 @@
-# 听幕 0.12.0 架构与扩展点
+# 听幕 0.13.0 架构与扩展点
 
 听幕在 Windows 上以 Python 和 Qt Quick/QML 运行。一次观看涉及三层数据。音轨或字幕提供有来源的原句，准备流程生成工作区的学习文档，播放器按当前时间从文档取显示行。修改其中一层时，要保留下一层追溯到原句的能力。
 
@@ -11,6 +11,8 @@
 | 启动、切换工作区、切换界面语言 | `quick/main.py`、`quick/workspace_controller.py`、`workspaces.py`、`quick/localization.py`、`quick/i18n/` | `test_qml_workspace.py`、`test_interface_language.py` |
 | 播放、全屏、音轨和显示字幕 | `quick/playback_controller.py`、`quick/bridge.py`、`quick/qml/`、`quick/playback_sources.py`、`quick/embedded.py` | `test_qml_v5.py`、`test_player_sources.py`、`test_embedded_subtitles.py` |
 | 入队、选择字幕来源、失败重试 | `media_inbox.py`、`batch.py`、`subtitle_sources.py`、`pipeline.py` | `test_workflow_queue.py`、`test_subtitle_sources.py`、`test_agent_preparation.py` |
+| 文本模型前的时码规整、英语句点、可选智能分句 | `acoustic.py`、`pre_llm.py`、`sentence_punctuation.py`、`regroup_stage.py` | `test_acoustic_periods.py`、`test_pre_llm.py`、`test_regroup_preparation.py` |
+| 准备工作室的实时批次和已核验字幕 | `studio_stream.py`、`studio_metrics.py`、`quick/qml/PreparationStudio.qml` | `test_studio_stream_pipeline.py`、`test_studio_metrics.py`、`test_studio_qml.py` |
 | 语音识别、原文复核、讲解、译稿核验 | `preparation.py`、`review.py`、`agent.py`、`translation_verifier.py`、`batch_scheduler.py`、`llm_client.py` | `test_external_asr.py`、`test_pipeline_review.py`、`test_agent_concurrency.py`、`test_batch_scheduler.py` |
 | 模型与授权、学习对话、受限操作 | `global_models.py`、`providers.py`、`credentials.py`、`companion.py`、`app_actions.py` | `test_global_models.py`、`test_conversations.py`、`test_app_actions_v5.py` |
 | 文档发布、播放时间轴、收藏与笔记 | `storage.py`、`database.py`、`timeline.py`、`corrections.py`、`notebooks.py`、`quick/collections_controller.py` | `test_storage.py`、`test_database.py`、`test_word_recollection.py` |

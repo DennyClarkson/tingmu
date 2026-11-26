@@ -12,17 +12,28 @@ def core(tmp_path, monkeypatch):
 
     (tmp_path / "runtime/python/Lib/site-packages").mkdir(parents=True)
     build_clean_install.copy_release_documents(build_clean_install.ROOT, tmp_path)
+    for source in (build_clean_install.ROOT / "src/tingmu").rglob("*"):
+        if source.is_file() and ("license" in source.name.lower() or "licenses" in source.parts):
+            installed = tmp_path / "app" / source.relative_to(build_clean_install.ROOT / "src")
+            installed.parent.mkdir(parents=True, exist_ok=True)
+            installed.write_bytes(source.read_bytes())
     return build_clean_install
 
 
-@pytest.mark.parametrize("document", ["使用说明.md", "THIRD_PARTY_NOTICES.md"])
-@pytest.mark.parametrize("empty", [False, True])
-def test_build_audit_requires_both_release_documents(tmp_path, core, document, empty):
-    if empty:
-        (tmp_path / document).write_bytes(b"")
-    else:
+@pytest.mark.parametrize("document", ["使用说明.md", "THIRD_PARTY_NOTICES.md", "LICENSE"])
+@pytest.mark.parametrize("content", [None, b"", b"previous release"])
+def test_build_audit_requires_current_release_documents(tmp_path, core, document, content):
+    if content is None:
         (tmp_path / document).unlink()
+    else:
+        (tmp_path / document).write_bytes(content)
     with pytest.raises(ValueError, match=document):
+        core.validate_core_release(tmp_path)
+
+
+def test_audit_rejects_obsolete_bundled_library_license(tmp_path, core):
+    (tmp_path / "app/tingmu/assets/licenses/LGPL-3.0.txt").write_bytes(b"outdated")
+    with pytest.raises(ValueError, match="LGPL-3.0"):
         core.validate_core_release(tmp_path)
 
 
@@ -59,8 +70,8 @@ def test_clean_builder_ships_current_release_documents(tmp_path, core, monkeypat
         original = (core.ROOT / "docs" / file).read_text("utf-8")
         assert external in original and original.rstrip().replace(external, internal) in guide
         assert f'id="{internal[2:-1]}"' in guide
-    notices = "THIRD_PARTY_NOTICES.md"
-    assert (destination / notices).read_bytes() == (core.ROOT / notices).read_bytes()
+    for name in ("LICENSE", "THIRD_PARTY_NOTICES.md"):
+        assert (destination / name).read_bytes() == (core.ROOT / name).read_bytes()
     manifest = json.loads((destination / "tingmu-portable.json").read_text("utf-8"))
     assert manifest["weight_audit"] == core.validate_core_release(destination)
 

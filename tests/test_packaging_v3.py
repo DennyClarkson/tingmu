@@ -75,6 +75,10 @@ def test_refresh_only_updates_owned_application(tmp_path, monkeypatch, clean):
     brand = qml.parent / "brand"
     brand.mkdir()
     (brand / "app-icon.ico").write_bytes(b"fixture icon")
+    for name in (*builder.RELEASE_DOCUMENTS.values(), "docs/portable.en.md"):
+        document = fixture / name
+        document.parent.mkdir(parents=True, exist_ok=True)
+        document.write_bytes(b"current " + name.encode())
     monkeypatch.setattr(builder, "ROOT", fixture)
     monkeypatch.setattr(builder, "validate_qml_runtime", lambda root: {})
     install = tmp_path / "installed"
@@ -85,9 +89,12 @@ def test_refresh_only_updates_owned_application(tmp_path, monkeypatch, clean):
     marker = install / "tingmu-portable.json"
     marker.write_text(json.dumps({"clean_install": clean,
                                  "launcher_source_sha256": builder.launcher_hash(fixture / "packaging/Launcher.cs")}))
+    (install / "THIRD_PARTY_NOTICES.md").write_bytes(b"older version")
     builder.refresh(install)
     assert (install / "app/bootstrap.py").read_text() == "new"
     assert json.loads(marker.read_text())["clean_install"] is clean
+    for name in builder.RELEASE_DOCUMENTS:
+        assert (install / name).read_bytes() == builder.release_document_bytes(fixture, name)
     for relative in ("Tingmu.exe", "data/workspaces/example/study.db", ".cache/models/model.bin"):
         assert (install / relative).read_bytes() == b"original"
 

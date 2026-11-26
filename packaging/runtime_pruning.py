@@ -1,8 +1,11 @@
 """Select installed wheel contents for the two independent Windows runtimes."""
+import base64
 import csv
+import hashlib
 from importlib.metadata import distributions
 import io
 from pathlib import Path
+import shutil
 import tomllib
 
 from packaging.requirements import Requirement
@@ -53,6 +56,33 @@ def _owned_paths(distribution):
         # Wheels can also own executables outside site-packages.
         if not path.startswith("/") and ".." not in path.split("/"):
             yield path
+
+
+def check_wheel_licenses(packages, *, copy_from=()):
+    """Keep upstream notices even when a header, doc or test directory was pruned."""
+    for info in packages.glob("*.dist-info"):
+        with (info / "RECORD").open(encoding="utf-8", newline="") as record:
+            for name, digest, _ in csv.reader(record):
+                path = Path(name)
+                if path.anchor or ".." in path.parts:
+                    continue
+                if not (path.parts[:2] == (info.name, "licenses") or
+                        path.name.lower().split(".")[0] in {"authors", "copying", "copyright", "license", "licence", "notice"}):
+                    continue
+                target = packages / path
+                if not target.is_file():
+                    # An older portable source can itself be missing a pruned notice.
+                    # Only a byte-for-byte RECORD match may be recovered from another installation.
+                    source = next((root / path for root in copy_from if (root / path).is_file()), None)
+                    if source is None or not digest:
+                        raise ValueError(f"Missing wheel license: {target}")
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(source, target)
+                if digest:
+                    algorithm, expected = digest.split("=", 1)
+                    actual = hashlib.new(algorithm, target.read_bytes()).digest()
+                    if base64.urlsafe_b64encode(actual).rstrip(b"=").decode("ascii") != expected:
+                        raise ValueError(f"Wheel license differs from its RECORD: {target}")
 
 
 def _ancestors(path):

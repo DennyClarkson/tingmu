@@ -469,6 +469,26 @@ ApplicationWindow {
     AppDialog {
         id:aboutDialog;objectName:"aboutDialog";title:qsTranslate("Tingmu", "关于听幕");anchors.centerIn:parent;width:390;modal:true;standardButtons:Dialog.Close
 
-        contentItem:ColumnLayout{spacing:14;Text { textFormat:Text.PlainText;text:qsTranslate("Tingmu", "听幕");color:Theme.text;font.family:Theme.font;font.pixelSize:30}Text { textFormat:Text.PlainText;Layout.fillWidth:true;text:qsTranslate("Tingmu", "在故事里，听懂另一种语言。\n\n本地播放与识别，逐句阅读与收藏。\n文本模型的复核和解释仍需对照原声。");color:Theme.muted;font.family:Theme.font;font.pixelSize:13;wrapMode:Text.Wrap;lineHeight:1.4}Text { textFormat:Text.PlainText;text:"VERSION " + (backend.applicationState.version || "3");color:Theme.accent;font.family:Theme.mono;font.pixelSize:11}}
+        contentItem: ColumnLayout {
+            spacing: 14
+            Text {
+                textFormat: Text.PlainText; text: qsTranslate("Tingmu", "听幕")
+                color: Theme.text; font.family: Theme.font; font.pixelSize: 30
+            }
+            Text {
+                Layout.fillWidth: true; textFormat: Text.PlainText
+                text: qsTranslate("Tingmu", "在故事里，听懂另一种语言。\n\n本地播放与识别，逐句阅读与收藏。\n文本模型的复核和解释仍需对照原声。")
+                color: Theme.muted; font.family: Theme.font; font.pixelSize: 13; wrapMode: Text.Wrap; lineHeight: 1.4
+            }
+            Text {
+                Layout.fillWidth: true; textFormat: Text.PlainText; wrapMode: Text.Wrap
+                text: qsTranslate("Tingmu", "听幕采用 Apache-2.0 许可证。第三方组件的许可见 THIRD_PARTY_NOTICES.md。")
+                color: Theme.muted; font.family: Theme.font; font.pixelSize: 13
+            }
+            Text {
+                textFormat: Text.PlainText; text: "VERSION " + backend.applicationState.version
+                color: Theme.accent; font.family: Theme.mono; font.pixelSize: 11
+            }
+        }
     }
 }

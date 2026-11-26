@@ -13,8 +13,8 @@ import zipfile
 
 from filelock import FileLock
 
-from build_clean_install import RELEASE_DOCUMENTS, release_document_bytes, validate_core_release
-from build_portable import publish, unlinked
+from build_clean_install import RELEASE_DOCUMENTS, validate_core_release
+from bundle_files import publish, unlinked
 
 ROOT = Path(__file__).resolve().parents[1]
 MAX_BYTES = 350 * 1024**2
@@ -66,9 +66,6 @@ def audit_bundle(root, version):
         raise ValueError("Unexpected runtime contents")
     if not (root / "Tingmu.exe").is_file() or not (root / "app/bootstrap.py").is_file():
         raise ValueError("Missing portable launcher or bootstrap")
-    for name in RELEASE_DOCUMENTS:
-        if (root / name).read_bytes() != release_document_bytes(ROOT, name):
-            raise ValueError(f"Release document differs from its source: {name}")
     manifest = json.loads((root / "tingmu-portable.json").read_text("utf-8"))
     if manifest.get("clean_install") is not True or manifest.get("version") != version:
         raise ValueError("Invalid version or clean_install in portable manifest")
@@ -76,7 +73,7 @@ def audit_bundle(root, version):
     pe_count = manifest.get("qml_runtime", {}).get("pe_files_checked")
     if type(models) is not int or models != 0 or type(pe_count) is not int or pe_count <= 0:
         raise ValueError("Missing or failing PE/model audit in portable manifest")
-    validate_core_release(root)
+    validate_core_release(root, ROOT)
     files = []
     size = 0
     for path in root.rglob("*"):

@@ -1,0 +1,21 @@
+previous_tag = "v0.12.0"
+
+[[changes]]
+zh = "转写、外挂与内嵌字幕在送入文本模型前共用质量检查。听幕依据相邻声学锚点修复 ForcedAligner 挤在一起的字词时间戳，保留原始依据，并避免在 Mr. 或人名首字母后误切。可选的多语言智能分句按原始字词或字幕索引重组，再由听幕核对覆盖范围并计算时间。"
+en = "Transcripts, sidecar subtitles and embedded captions share a quality check before reaching a text model. Tingmu repairs collapsed ForcedAligner timestamps using nearby acoustic anchors, preserves the original evidence and avoids false breaks after titles such as Mr. or initials in names. Optional multilingual LLM grouping uses indexed source words or captions. Tingmu verifies coverage and calculates each cue’s timing."
+author = "DennyClarkson"
+
+[[changes]]
+zh = "准备工作室的并行 Worker 可实时显示智能分句、全文复核、逐句讲解和译稿核验四个阶段的 SSE 输出，逐字高亮最新字符。进度和步骤平滑切换，最近三条通过核验的译文与对应原句一起显示。"
+en = "In the preparation studio, parallel workers can display live SSE text during model-assisted grouping, transcript review, line-by-line explanations and translation checks. The newest characters light up as they arrive, progress and stage changes animate smoothly, and the latest three checked translations appear with their source lines."
+author = "DennyClarkson"
+
+[[changes]]
+zh = "快速上手指南和任务就绪清单可直接打开缺项的设置。下载运行环境与模型时可查看实时速度、已传大小和总量，预估值会单独标明。停靠与浮动播放器共用圆角边框，全屏播放控件居中悬浮，字幕会为其留出空间。"
+en = "The quick-start guide and readiness checklist link to missing settings. Runtime and model downloads show transfer speed, bytes received and total size, with estimates clearly marked. Docked and floating players have rounded frames, and subtitles leave room for the centered floating controls in fullscreen."
+author = "DennyClarkson"
+
+[[changes]]
+zh = "继续提供单一的 Windows x64 极简便携包，随包模型权重为零。GitHub Actions 支持按原标签重建并核对实际测试的提交，校验 ZIP 的 SHA-256 后发布双语说明。便携包内含听幕的 Apache-2.0 许可证和第三方声明。"
+en = "Tingmu continues to ship one lightweight Windows x64 portable ZIP with zero bundled model weights. GitHub Actions can rebuild the exact tagged source, checks the tested commit and ZIP SHA-256, and publishes bilingual release notes. The portable folder includes Tingmu’s Apache-2.0 license and third-party notices."
+author = "DennyClarkson"

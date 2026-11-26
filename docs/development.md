@@ -1,4 +1,4 @@
-# 听幕 0.12.0 Windows 开发入门
+# 听幕 0.13.0 Windows 开发入门
 
 从源码启动、运行离线回归、定位改动，都可以从仓库根目录（含 `pyproject.toml`）完成。以下使用 Windows x64 与 PowerShell。项目声明支持 Python `>=3.12,<3.14`，安装脚本与 Windows 回归使用 3.12。
 
@@ -74,10 +74,11 @@ git diff --check
 
 推送到 `main`、向 `main` 提交 PR 或手动运行 Windows 工作流时，CI 使用锁定的 CPU/开发依赖执行 Ruff、离线测试和便携包验证。引擎测试用本机回环服务，媒体测试用校验过的 FFmpeg 合成样片。`--require-ffmpeg` 会在工具缺失时让字幕集成测试失败。包体验收另外在含中文和空格的目录运行真实启动器，上传的预览 ZIP 来自原始干净目录。[Windows CI](../.github/workflows/ci.yml) · [离线测试入口](../.github/run_offline_tests.py)
 
-集中开发 0.12 的字幕决策、队列或语言切换时，可在同一窗口运行以下四个测试文件。
+开发字幕来源决策、分句、准备工作室或界面语言时，可在同一窗口选择相应的专项测试。
 
 ```powershell
 & .\.venv\Scripts\python.exe .github/run_offline_tests.py -q --require-ffmpeg tests/test_subtitle_sources.py tests/test_agent_preparation.py tests/test_workflow_queue.py tests/test_interface_language.py
+& .\.venv\Scripts\python.exe .github/run_offline_tests.py -q tests/test_acoustic_periods.py tests/test_pre_llm.py tests/test_regroup_preparation.py tests/test_studio_stream_pipeline.py
 ```
 
 改动影响普通窗口、全屏、焦点、语言菜单或可见播放时，另开使用正常 Qt 显示设置的终端，用自己的测试工作区和可分享素材检查实际操作。「帮助 → 开发者模式」可查看运行事件。所选工作区的 `logs/` 保存日志，`diagnostics/` 保存手动导出。界面快照、诊断与真实服务输出都留在本地审阅。

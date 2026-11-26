@@ -11,8 +11,10 @@ import pytest
 def release(tmp_path, monkeypatch):
     monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / "packaging"))
     import build_release
+    import build_clean_install
 
     monkeypatch.setattr(build_release, "ROOT", tmp_path)
+    monkeypatch.setattr(build_clean_install, "ROOT", tmp_path)
     (tmp_path / "pyproject.toml").write_text('[project]\nversion = "1.2.3-rc.1"\n', encoding="utf-8")
     for name, source in build_release.RELEASE_DOCUMENTS.items():
         path = tmp_path / source
@@ -27,8 +29,8 @@ def make_bundle(release, root):
     (root / "runtime/python/Lib/site-packages").mkdir(parents=True)
     for name in ("Tingmu.exe", "app/bootstrap.py", "runtime/python/Lib/site-packages/core.py"):
         (root / name).write_bytes(b"fixture")
-    for name in release.RELEASE_DOCUMENTS:
-        (root / name).write_bytes(release.release_document_bytes(release.ROOT, name))
+    from build_clean_install import copy_release_documents
+    copy_release_documents(release.ROOT, root)
     manifest = {"clean_install": True, "version": "1.2.3-rc.1", "weight_audit": {"model_payloads": 0},
                 "qml_runtime": {"pe_files_checked": 42}}
     (root / "tingmu-portable.json").write_text(json.dumps(manifest), encoding="utf-8")
@@ -171,6 +173,7 @@ def test_build_only_archives_pristine_tree_and_preserves_diagnostics(release, mo
             assert all(name.startswith("Tingmu/") for name in names)
             assert not any(name.startswith(("Tingmu/data/", "Tingmu/.cache/")) for name in names)
             assert "Tingmu/使用说明.md" in names and "Tingmu/THIRD_PARTY_NOTICES.md" in names
+            assert bundle.read("Tingmu/LICENSE") == (release.ROOT / "LICENSE").read_bytes()
             assert bundle.getinfo("Tingmu/使用说明.md").flag_bits & 0x800
             assert b"English guide" in bundle.read("Tingmu/使用说明.md")
             assert summary["file_count"] == sum(not item.is_dir() for item in bundle.infolist())

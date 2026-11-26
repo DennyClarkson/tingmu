@@ -12,5 +12,10 @@
 *.yml text eol=lf
 *.yaml text eol=lf
 *.svg text eol=lf
+/LICENSE text eol=lf
+# Keep the upstream notice bytes intact in wheels and Windows release archives.
+/src/tingmu/assets/licenses/** -text
+/src/tingmu/assets/licenses/libdivide.txt whitespace=trailing-space,space-before-tab,cr-at-eol
+/src/tingmu/quick/qml/icons/*-LICENSE.txt -text
 *.otf binary
 *.ttf binary

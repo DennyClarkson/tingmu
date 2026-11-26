@@ -1,6 +1,6 @@
 # Integration contracts
 
-Start with the 0.12 workflow and the cross-version contracts below. Newer product versions take precedence over earlier revisions when behavior changes. The [module map](architecture.md) and [development guide](development.md) describe the current source tree and verification commands.
+In 0.13.0, both preparation workflows check source timing before review and teaching. The optional model-assisted grouping step uses the same source evidence. See [subtitle acquisition](#subtitle-acquisition-before-text-models), [source-indexed grouping](#source-indexed-subtitle-regrouping) and [live preparation and transfers](#live-preparation-and-transfers) for the current contracts. The module map and development guide cover implementation and verification. [Module map](architecture.md) · [Development guide](development.md)
 
 ## Optional subtitle Agent and interface language in 0.12
 

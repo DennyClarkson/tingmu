@@ -5,9 +5,10 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import tempfile
 
 from pe_bundle import copy_pyside_runtime
-from runtime_pruning import site_packages_ignore
+from runtime_pruning import check_wheel_licenses, site_packages_ignore
 
 
 def copy_packages(source, destination, runtime, clean_ignore=None):
@@ -24,6 +25,8 @@ def copy_packages(source, destination, runtime, clean_ignore=None):
     shutil.copytree(source, destination, ignore=ignore)
     if runtime == "python":
         copy_pyside_runtime(source / "PySide6", destination / "PySide6")
+        build_packages = Path(__file__).resolve().parents[1] / ".venv/Lib/site-packages"
+        check_wheel_licenses(destination, copy_from=(source, build_packages))
 
 
 def launcher_icon(source):
@@ -47,3 +50,47 @@ def precompile(app, interpreter, *, include_runtime):
     if include_runtime:
         command.append("--runtime")
     return json.loads(subprocess.check_output(command, text=True))
+
+
+def unlinked(path):
+    if path.resolve() != Path(os.path.abspath(path)) or path.is_symlink() or path.is_junction():
+        raise ValueError(f"Unexpected linked build destination: {path}")
+    return path
+
+
+def publish(stage, destination, names):
+    """Roll back the whole program on a failed rename; keep blocked recovery copies."""
+    for name in names:
+        unlinked(destination / name)
+        if not (stage / name).exists():
+            raise FileNotFoundError(stage / name)
+    # A rollback blocked by a Windows file lock must survive stage cleanup.
+    backup = Path(tempfile.mkdtemp(prefix=".tingmu-previous-", dir=destination))
+    saved = []
+    installed = []
+    try:
+        for name in names:
+            target = destination / name
+            if target.exists():
+                (backup / name).parent.mkdir(parents=True, exist_ok=True)
+                target.rename(backup / name)
+                saved.append(name)
+            (stage / name).rename(target)
+            installed.append(name)
+    except BaseException:
+        failures = []
+        for name in reversed(installed):
+            try:
+                (destination / name).rename(stage / name)
+            except OSError as exc:
+                failures.append(exc)
+        for name in reversed(saved):
+            try:
+                (backup / name).rename(destination / name)
+            except OSError as exc:
+                failures.append(exc)
+        if failures:
+            raise RuntimeError(f"Rollback blocked. Previous program files are in {backup}") from failures[0]
+        shutil.rmtree(backup)
+        raise
+    shutil.rmtree(backup)

@@ -2,7 +2,7 @@
 
 [English](portable.en.md)
 
-在 GitHub Releases 的附件中选择 Windows x64 便携 ZIP，将整个压缩包解压到有写入权限、空间足够的位置。打开解压出的 `Tingmu` 文件夹，双击 `Tingmu.exe`。同一目录中的 `THIRD_PARTY_NOTICES.md` 说明随包组件和许可的位置。[GitHub Releases](https://github.com/DennyClarkson/tingmu/releases)
+在 GitHub Releases 的附件中选择 Windows x64 便携 ZIP，将整个压缩包解压到有写入权限、空间足够的位置。打开解压出的 `Tingmu` 文件夹，双击 `Tingmu.exe`。同一目录中的 `LICENSE` 收录听幕的 Apache-2.0 许可证，`THIRD_PARTY_NOTICES.md` 列出第三方组件、来源及其各自的许可。[GitHub Releases](https://github.com/DennyClarkson/tingmu/releases)
 
 随包提供 Qt Quick 播放器、四套完整字体、Python 和基础学习工具。视频解码使用 Qt 自带的多媒体插件。干净发行包首次启动时没有个人资料、模型连接或识别权重，默认工作区已停用文本 API。已有安装会恢复上次使用的工作区。
 
@@ -51,6 +51,8 @@ Agent 按所选音轨、可辨认的剧集编号、实际字幕语言和时间�
 **本机识别。** 在「工作区设置 → 语音识别」选择内置 Whisper 或 Qwen。按学习语言和设备选模型，点「下载所选模型」，核对包大小和本次预计下载量后确认。下载时显示已接收字节和速度。同一安装的工作区共用权重。已有完整的 CTranslate2 Whisper 模型可放入安装内的 `.cache/models/`，再点「选择已有的本机 Whisper 模型…」。设备可选 `auto`、`cpu` 或 `cuda`，GPU 识别需要兼容的 NVIDIA 驱动。单纯播放和直接读取字幕无需下载识别模型。
 
 **人声和分句。** 可另行下载人声分离及换人检测模型。启用预处理但缺少分离模型时会用频谱方法减弱重复背景声。缺少换人检测模型时，沿用识别器分句。原始识别文本和声学时间随材料保存。模型按文本划分长句时，屏幕分段时间为推算值。疑难台词可对照原声，使用「纠正此句 → 复核并保存」留下修订。[本地语音处理](https://github.com/DennyClarkson/tingmu/blob/main/docs/local-speech.md)
+
+在准备队列的齿轮中选择「新任务分句方式」。默认的「本地分句」按时码、停顿和标点处理。「模型智能分句」使用已获工作区文本授权的复核模型，未分配时使用讲解模型。模型按原始字词或字幕的索引分组，听幕计算时间，对校验失败的部分使用本地结果。已有配对译文的字幕保留原分段。
 
 **转写服务。** 也可使用已启动的本机回环 API，或指定一个远程转写接口。选择「外部 API · 远程转写」时，填写服务地址、模型和字幕格式，并明确勾选「允许此工作区发送音轨」。生成字幕时，听幕将所选音轨分段发往该地址。视频播放、音轨提取及预处理在本机进行。[外部语音接口](https://github.com/DennyClarkson/tingmu/blob/main/docs/external-asr.md)
 

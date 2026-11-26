@@ -19,11 +19,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup.ps1 -Dev -Cp
 .\.venv\Scripts\python.exe -m tingmu gui
 ```
 
-## 准备字幕和讲解（0.12）
+## 准备字幕和讲解（0.13.0）
 
 1. 在媒体库添加视频，打开要学习的那一集，再到「准备」选择音轨和「新任务流程」。默认的**经典流程**沿用工作区已有的识别、复核和讲解设置。**字幕 Agent** 适合手头已有字幕，或想让听幕检查视频内嵌字幕的情况。流程在任务入队时确定。
 2. 有指定字幕时，选择「字幕 Agent → 为当前视频选字幕并入队…」。支持 SRT、ASS、SSA 和 VTT。要自动检查同名或匹配的外挂与内嵌字幕，直接在媒体库勾选视频并加入处理队列。
 3. 点「开始队列」。字幕 Agent 会检查字幕内容、可辨认的剧集信息、所选音轨和时间覆盖。展开任务可查看采纳和排除的来源、采用了多少句原文和译文，以及正在执行的步骤。
+
+默认的「本地分句」结合原始时码、停顿和标点划分字幕，能保留 `Dr. Smith` 这类称谓和姓名的连贯性。处理多语言对白时，可在入队前打开队列设置，将「新任务分句方式」设为「模型智能分句」。模型按工作区文本权限引用原句或字词，听幕在本机核对覆盖范围并计算时间。准备工作室可查看各批次正在生成的文字，以及最近三条已核验译文和对应原句。[分句依据与实测](docs/subtitle-quality.md)
 
 以**用中文学英语**为例，字幕 Agent 按以下方式处理通过检查的材料。
 
@@ -48,3 +50,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup.ps1 -Dev -Cp
 项目使用 Python 3.12 与 Qt Quick/QML。开发文档包含启动、离线回归和打包入口，交接记录按版本保留验收结果和限制。
 
 [贡献指南](CONTRIBUTING.md) · [开发环境与本地验证](docs/development.md) · [模块与数据流](docs/architecture.md) · [接口约定](docs/contracts.md) · [版本交接](handoff.md)
+
+## 许可证与致谢
+
+听幕原创代码采用 Apache License 2.0（`Apache-2.0`）。感谢 Qt、FFmpeg、Unicode CLDR、Adobe 思源及 Source 字体等上游项目。第三方组件、字体、语言数据和可选模型各自适用上游许可，便携包内也附有项目许可证与第三方声明。[项目许可证](LICENSE) · [第三方声明与致谢](THIRD_PARTY_NOTICES.md)

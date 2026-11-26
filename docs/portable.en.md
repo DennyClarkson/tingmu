@@ -2,7 +2,7 @@
 
 [简体中文](portable.md)
 
-Download the Windows x64 portable ZIP, extract the entire archive to a writable folder with enough free space, then open the extracted `Tingmu` folder and double-click `Tingmu.exe`. The folder includes Python, the Qt Quick player and its multimedia plugins, four bundled fonts, and the basic study tools. Component licenses are listed in `THIRD_PARTY_NOTICES.md`. [GitHub Releases](https://github.com/DennyClarkson/tingmu/releases)
+Download the Windows x64 portable ZIP, extract the entire archive to a writable folder with enough free space, then open the extracted `Tingmu` folder and double-click `Tingmu.exe`. The folder includes Python, the Qt Quick player and its multimedia plugins, four bundled fonts, and the basic study tools. Read `LICENSE` for Tingmu’s Apache-2.0 license and `THIRD_PARTY_NOTICES.md` for third-party components, sources and licenses. [GitHub Releases](https://github.com/DennyClarkson/tingmu/releases)
 
 ## Play your first video
 
@@ -53,6 +53,8 @@ Every Agent job needs a teaching model to finish. If one is missing, Tingmu save
 **Local speech recognition.** In **Workspace settings → Speech recognition**, choose built-in Whisper or Qwen and a model suitable for the audio language and your device. Choose the model download action, review the size and confirm. Workspaces in an installation share the weights. For an existing complete CTranslate2 Whisper model, place it under the installation’s `.cache/models/` and select the existing local Whisper model in settings. Choose `auto`, `cpu` or `cuda` as appropriate. Video playback and reading subtitle files require no speech model.
 
 **Voice separation and segmentation.** Voice-separation and speaker-change models are optional downloads. With preprocessing enabled and no separation model installed, spectral processing reduces repeating background sounds. With no speaker-change model, Tingmu uses the recognizer’s segmentation. Study materials retain the original transcript and acoustic timestamps. Display times inferred when a text model splits a long line are estimates. Replay uncertain lines and use **Correct this line → Review and save** to record a correction. [Local speech processing (Chinese)](https://github.com/DennyClarkson/tingmu/blob/main/docs/local-speech.md)
+
+Open the queue settings and choose **Sentence grouping for new jobs**. The default, **Local sentence grouping**, uses timestamps, pauses and punctuation. **Model-assisted grouping** uses the review model permitted by the workspace, or the teaching model if no review model is assigned. The model groups indexed words or captions. Tingmu calculates their timings and uses local results for any group that fails validation. Captions with paired translations keep their original divisions.
 
 **Transcription services.** You can use a running loopback API or specify a remote transcription service. For remote transcription, select the external API, enter its endpoint, model and subtitle format, and explicitly enable **Allow this workspace to send audio**. During transcription Tingmu sends segments of the selected audio track to that endpoint. Playback, extraction and preprocessing run locally. [External transcription settings (Chinese)](https://github.com/DennyClarkson/tingmu/blob/main/docs/external-asr.md)
 

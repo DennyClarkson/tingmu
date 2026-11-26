@@ -19,11 +19,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup.ps1 -Dev -Cp
 .\.venv\Scripts\python.exe -m tingmu gui
 ```
 
-## Prepare subtitles and explanations (0.12)
+## Prepare subtitles and explanations (0.13.0)
 
 1. Add a video to the **Media library** and open the episode you want to study. In **Prepare**, select the audio track and set **Workflow for new tasks**. The default, **Classic**, uses your workspace’s transcription, review, and explanation settings. Choose **Subtitle Agent** if you already have subtitles or want Tingmu to check the video’s embedded subtitle tracks. Each task keeps the workflow selected when you add it to the queue.
 2. To use a specific SRT, ASS, SSA, or VTT file, select **Subtitle Agent → Choose subtitles and queue this video…**. To have Tingmu find matching subtitle files alongside the video (including those with the same base name) and check embedded tracks, select the video in the library and add it to the queue.
 3. Click **Start queue**. The Subtitle Agent checks the subtitle text, series and episode information where available, the selected audio track, and how much of the dialogue the subtitles cover. Expand a task to see which sources it accepted or ruled out, how many original lines and translations it used, and which step is running.
+
+The default **Local sentence grouping** uses source timestamps, pauses and punctuation to split dialogue, keeping titles and names such as `Dr. Smith` together. For multilingual dialogue, open the queue settings before adding the video and choose **Sentence grouping for new jobs → Model-assisted grouping**. With the workspace’s text permissions, the model groups indexed words or lines. Tingmu checks their coverage and calculates their timings locally. In the preparation studio you can follow each batch as it generates text and read the three most recently checked translations alongside their source lines. [Segmentation evidence and results (Chinese)](docs/subtitle-quality.md)
 
 For example, if you know Chinese and are studying English, Tingmu handles the subtitles that pass these checks as follows.
 
@@ -48,3 +50,7 @@ The same rules apply to embedded text tracks. The task also lists image-based tr
 Tingmu uses Python 3.12 and Qt Quick/QML. The development guide covers launching the app, running the offline regression suite, and building a portable package. The handoff notes record checks and known limitations for each version.
 
 [Contributing (Chinese)](CONTRIBUTING.md) · [Local development and testing (Chinese)](docs/development.md) · [Modules and data flow (Chinese)](docs/architecture.md) · [Integration contracts](docs/contracts.md) · [Version handoff notes (Chinese)](handoff.md)
+
+## License and acknowledgments
+
+Tingmu’s original code is licensed under the Apache License 2.0 (`Apache-2.0`). We thank the maintainers of Qt, FFmpeg, Unicode CLDR, Adobe’s Source fonts and the other projects Tingmu uses. Third-party components, fonts, language data and optional models retain their respective licenses. The portable folder includes both the project license and third-party notices. [Project license](LICENSE) · [Third-party notices and acknowledgments](THIRD_PARTY_NOTICES.md)

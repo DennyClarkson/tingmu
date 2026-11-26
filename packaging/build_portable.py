@@ -16,7 +16,7 @@ from filelock import FileLock
 from build_clean_install import (
     RELEASE_DOCUMENTS, copy_app, copy_release_documents, ignore_runtime, release_manifest, validate_core_release,
 )
-from bundle_files import compile_launcher, copy_packages, launcher_hash, precompile
+from bundle_files import compile_launcher, copy_packages, launcher_hash, precompile, publish, unlinked
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "dist" / "Tingmu"
@@ -46,12 +46,6 @@ def copy_runtime(environment, target):
         if any(line.strip() and not line.startswith(("#", "import ")) and Path(line.strip()).is_absolute()
                for line in path.read_text(encoding="utf-8").splitlines()):
             raise RuntimeError(f"Nonportable package search path: {path}")
-
-
-def unlinked(path):
-    if path.resolve() != Path(os.path.abspath(path)) or path.is_symlink() or path.is_junction():
-        raise ValueError(f"Unexpected linked build destination: {path}")
-    return path
 
 
 def copy_missing_tree(source, target):
@@ -109,44 +103,6 @@ def import_data():
         "copied_from": str(source), "source_preserved": True, "database_method": "SQLite online backup",
         "files": files, "timestamp": datetime.now(timezone.utc).isoformat(),
     }, indent=2), encoding="utf-8")
-
-
-def publish(stage, destination, names):
-    """Roll back the whole program on a failed rename; keep blocked recovery copies."""
-    for name in names:
-        unlinked(destination / name)
-        if not (stage / name).exists():
-            raise FileNotFoundError(stage / name)
-    # A rollback blocked by a Windows file lock must survive stage cleanup.
-    backup = Path(tempfile.mkdtemp(prefix=".tingmu-previous-", dir=destination))
-    saved = []
-    installed = []
-    try:
-        for name in names:
-            target = destination / name
-            if target.exists():
-                (backup / name).parent.mkdir(parents=True, exist_ok=True)
-                target.rename(backup / name)
-                saved.append(name)
-            (stage / name).rename(target)
-            installed.append(name)
-    except BaseException:
-        failures = []
-        for name in reversed(installed):
-            try:
-                (destination / name).rename(stage / name)
-            except OSError as exc:
-                failures.append(exc)
-        for name in reversed(saved):
-            try:
-                (backup / name).rename(destination / name)
-            except OSError as exc:
-                failures.append(exc)
-        if failures:
-            raise RuntimeError(f"Rollback blocked. Previous program files are in {backup}") from failures[0]
-        shutil.rmtree(backup)
-        raise
-    shutil.rmtree(backup)
 
 
 def build(refresh_app):

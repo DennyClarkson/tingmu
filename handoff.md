@@ -1,3 +1,11 @@
+# Handoff — 2026-11-26 · 0.13.0 开源发行
+
+听幕原创项目采用 [Apache License 2.0](LICENSE)，版权署名为 DennyClarkson and Tingmu Contributors。源码、Python 包及 Windows 便携包均提供许可文本。[第三方声明](THIRD_PARTY_NOTICES.md) 区分实际分发的运行库、字体、语言数据和图标，以及由用户选择的外部工具、引擎与模型。界面「帮助 → 关于听幕」用当前界面语言显示版本、项目许可证和第三方声明的位置。
+
+[双语发版说明源](.github/release-changes/v0.13.0.toml) 记录了本版的字幕质量检查、智能分句、准备工作室和下载反馈。[v0.13.0 发布页](https://github.com/DennyClarkson/tingmu/releases/tag/v0.13.0) 提供 Windows 便携包和对应的 `SHA256SUMS.txt`。
+
+本地离线回归通过 **1,565 项测试及 113 项子测试**，Ruff、离线依赖锁、版本校验与 Hatchling wheel 许可元数据检查均通过。便携包内有 3,647 个文件，检查 70 个 PE，模型权重为零。离屏及 Windows 实窗搬迁后，双音轨切换与播放通过，QML 警告、运行异常、新字节码均为零。测试安装的程序与本地 ZIP 逐文件一致；对 `data/`、`.cache/` 和 `runtime/asr/` 中 24,084 个文件核对数量、SHA-256、大小与修改时间，前后差异为零。
+
 # Handoff — 2026-11-26 · 双语发布与正式 Logo
 
 [中文首页](README.md) 与 [English README](README.en.md) 可互相切换。便携 ZIP 的 `使用说明.md` 收录两种语言的完整指南，语言切换在离线时也可用。后续版本在 `.github/release-changes/v<版本>.toml` 维护成对的更新条目。GitHub 上的 [v0.12.0](https://github.com/DennyClarkson/tingmu/releases/tag/v0.12.0) 已更新为双语标题与说明。已复核该次发布的两个附件，原 ZIP 的 SHA-256 为 `aefe5ff630a3a91f1fb997b8063eec245e7884ca4bac15be8b9ff94652984d7b`。

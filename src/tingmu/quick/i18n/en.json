@@ -265,6 +265,7 @@
   "听幕 %1 · 当前工作区：%2": "Tingmu %1 · Current workspace: %2",
   "听幕 · 全局文本模型": "Tingmu · Global text models",
   "听幕 · 全屏": "Tingmu · Fullscreen",
+  "听幕采用 Apache-2.0 许可证。第三方组件的许可见 THIRD_PARTY_NOTICES.md。": "Tingmu is licensed under Apache-2.0. See THIRD_PARTY_NOTICES.md for third-party licenses.",
   "听幕放映室": "Tingmu screening room",
   "听幕界面未能加载，请检查便携文件夹是否完整": "Unable to load the Tingmu interface. Check that the portable folder is complete.",
   "启用全局文本模型": "Enable global text models",

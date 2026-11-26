@@ -8,12 +8,17 @@ import shutil
 import tempfile
 import tomllib
 
-from bundle_files import compile_launcher, copy_packages, launcher_hash, precompile
+from bundle_files import compile_launcher, copy_packages, launcher_hash, precompile, publish
 from qml_runtime import qml_asset_manifest, validate_qml_runtime
+from runtime_pruning import check_wheel_licenses
 
 ROOT = Path(__file__).resolve().parents[1]
 BUNDLE = ROOT / "dist/Tingmu"
-RELEASE_DOCUMENTS = {"使用说明.md": "docs/portable.md", "THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md"}
+RELEASE_DOCUMENTS = {
+    "LICENSE": "LICENSE",
+    "THIRD_PARTY_NOTICES.md": "THIRD_PARTY_NOTICES.md",
+    "使用说明.md": "docs/portable.md",
+}
 PACKAGE_ASSETS = {
     "tagger.pickle", "nagisa_v001.dict", "nagisa_v001.hp", "nagisa_v001.model",
     "trained_models", "test_data", "tests", "test", "__pycache__", "direct_url.json",
@@ -62,12 +67,9 @@ def validate_model_free_runtime(root, folders=("app", "runtime", "bin")):
     return {"files_checked": count, "model_payloads": 0}
 
 
-def validate_core_release(root):
+def validate_core_release(root, repository=None):
     """Reject even empty heavyweight package directories left behind by stale wheels."""
-    for name in RELEASE_DOCUMENTS:
-        document = root / name
-        if not document.is_file() or not document.stat().st_size:
-            raise ValueError(f"Missing or empty release document: {document}")
+    validate_release_documents(repository or ROOT, root)
     packages = root / "runtime/python/Lib/site-packages"
     blocked = {"av", "ctranslate2", "faster_whisper", "hf_xet", "nvidia", "onnxruntime",
                "tokenizers", "torch", "qwen_asr"}
@@ -78,6 +80,7 @@ def validate_core_release(root):
         name = path.name.lower().split("-")[0].split(".")[0]
         if name in blocked or name.startswith("nvidia_"):
             raise ValueError(f"Unexpected inference package in release: {path}")
+    check_wheel_licenses(packages)
     return validate_model_free_runtime(root)
 
 
@@ -99,6 +102,22 @@ def copy_release_documents(repository, root):
         (root / name).write_bytes(release_document_bytes(repository, name))
 
 
+def validate_release_documents(repository, root):
+    for name in RELEASE_DOCUMENTS:
+        document = root / name
+        if not document.is_file() or not document.stat().st_size:
+            raise ValueError(f"Missing or empty release document: {document}")
+        if document.read_bytes() != release_document_bytes(repository, name):
+            raise ValueError(f"Release document differs from its source: {name}")
+    app = repository / "src/tingmu"
+    for pattern in ("**/*LICENSE*", "assets/licenses/**/*"):
+        for source in app.glob(pattern):
+            if source.is_file():
+                target = root / "app/tingmu" / source.relative_to(app)
+                if not target.is_file() or target.read_bytes() != source.read_bytes():
+                    raise ValueError(f"Missing or stale bundled license: {target}")
+
+
 def copy_app(root):
     source = ROOT / "src/tingmu"
 
@@ -118,6 +137,7 @@ def release_manifest(marker, app_root, runtime_root):
     result = {**marker, "version": version, "built": datetime.now(timezone.utc).isoformat(),
               "qml_runtime": validate_qml_runtime(runtime_root), "qml_assets": qml_asset_manifest(app_root)}
     if app_root != runtime_root:  # App-only refresh keeps the installed runtime.
+        validate_release_documents(ROOT, app_root)
         if result.get("startup_bytecode"):
             caches = [p for folder in (app_root / "app", runtime_root / "runtime/python/Lib")
                       for p in folder.rglob("*.pyc")]
@@ -139,28 +159,13 @@ def refresh(destination):
     with tempfile.TemporaryDirectory(prefix=".tingmu-update-", dir=destination) as folder:
         stage = Path(folder)
         copy_app(stage)
+        copy_release_documents(ROOT, stage)
         if marker.get("startup_bytecode"):
             precompile(stage / "app", destination / "runtime/python/python.exe", include_runtime=False)
         replacement = release_manifest(marker, stage, destination)
         staged_marker = stage / manifest_path.name
         staged_marker.write_text(json.dumps(replacement, ensure_ascii=False, indent=2), encoding="utf-8")
-        # Keep the backup outside the temporary directory so a blocked rollback
-        # on Windows cannot discard the last working program.
-        previous = stage.with_name(stage.name + ".previous")
-        if previous.resolve().parent != destination or previous.exists():
-            raise ValueError("Unexpected application backup path")
-        app.rename(previous)
-        try:
-            (stage / "app").rename(app)
-            try:
-                staged_marker.replace(manifest_path)
-            except OSError:
-                app.rename(stage / "app")
-                raise
-        except OSError:
-            previous.rename(app)
-            raise
-        shutil.rmtree(previous)
+        publish(stage, destination, ("app", *RELEASE_DOCUMENTS, manifest_path.name))
     print(f"Updated portable application: {destination}")
 
 

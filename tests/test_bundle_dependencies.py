@@ -1,3 +1,5 @@
+import base64
+import hashlib
 import io
 from pathlib import Path
 
@@ -50,6 +52,30 @@ def test_qwen_keeps_audio_loader_stubs_and_assets(tmp_path, monkeypatch):
     assert not ignore(tmp_path / "faster_whisper/assets", ["silero_vad.onnx"])
     assert not ignore(tmp_path / "pycantonese", ["data", "jyutping"])
     assert not ignore(tmp_path / "certifi", ["cacert.pem"])
+
+
+def test_missing_wheel_notice_restored_only_from_matching_record(tmp_path, monkeypatch):
+    monkeypatch.syspath_prepend(str(Path(__file__).parents[1] / "packaging"))
+    from runtime_pruning import check_wheel_licenses
+
+    relative = Path("example-1.dist-info/licenses/upstream/include/LICENSE.txt")
+    packages, old, environment = (tmp_path / name for name in ("staged", "old", "environment"))
+    (packages / relative.parts[0]).mkdir(parents=True)
+    record = packages / relative.parts[0] / "RECORD"
+    notice = b"copyright and terms"
+    digest = base64.urlsafe_b64encode(hashlib.sha256(notice).digest()).rstrip(b"=").decode()
+    record.write_text(f"{relative.as_posix()},sha256={digest},{len(notice)}\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="Missing wheel license"):
+        check_wheel_licenses(packages)
+    source = environment / relative
+    source.parent.mkdir(parents=True)
+    source.write_bytes(notice)
+    check_wheel_licenses(packages, copy_from=(old, environment))
+    assert (packages / relative).read_bytes() == notice
+    check_wheel_licenses(packages)
+    (packages / relative).write_bytes(b"stale")
+    with pytest.raises(ValueError, match="RECORD"):
+        check_wheel_licenses(packages)
 
 
 @pytest.mark.parametrize(("status", "content_range", "body", "works"), [

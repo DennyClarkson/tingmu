@@ -93,6 +93,7 @@ def test_build_stages_owned_files_and_refresh_preserves_caches(builder, tmp_path
     write(repo, "src/tingmu/quick/brand/app-icon.ico", b"fixture icon")
     write(repo, "docs/portable.md", b"docs")
     write(repo, "docs/portable.en.md", b"English guide")
+    write(repo, "LICENSE", b"license")
     write(repo, "THIRD_PARTY_NOTICES.md", b"notices")
     for name in ("old", "new"):
         write(repo, ".cache/speech-models/" + name, b"source")
@@ -117,6 +118,7 @@ def test_build_stages_owned_files_and_refresh_preserves_caches(builder, tmp_path
         assert not list((root / "runtime").rglob("*.onnx"))
         assert b"English guide" in (root / "使用说明.md").read_bytes()
         assert (root / "THIRD_PARTY_NOTICES.md").read_bytes() == b"notices"
+        assert (root / "LICENSE").read_bytes() == b"license"
         return {"model_payloads": 0}
 
     def manifest(marker, stage, runtime):
@@ -142,6 +144,7 @@ def test_build_stages_owned_files_and_refresh_preserves_caches(builder, tmp_path
     guide = (installation / "使用说明.md").read_bytes()
     assert b"docs" in guide and b"English guide" in guide
     assert (installation / "THIRD_PARTY_NOTICES.md").read_bytes() == b"notices"
+    assert (installation / "LICENSE").read_bytes() == b"license"
     marker = json.loads((installation / "tingmu-portable.json").read_bytes())
     assert marker["launcher_source_sha256"]
     assert marker["clean_install"] == (was_clean if refresh else True)
