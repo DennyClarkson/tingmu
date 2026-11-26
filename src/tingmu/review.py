@@ -16,6 +16,7 @@ from .agent import (
 from .language import learning_text
 from .llm_compat import legacy_learning_complete, legacy_learning_request
 from .models import Cue, LanguagePair
+from .sentence_punctuation import protected_period_boundaries
 from .timeline import MAX_LINE_WIDTH, MIN_SPLIT_MS, display_width, readable_split_ends, split_display_text
 
 REVIEW_VERSION = "text-review-v4.1-readable-splits"
@@ -121,16 +122,19 @@ def _repair_display_parts(text: str, parts: list[str]):
     """Repair layout only after raw reconstruction and content guards have passed.
 
     Never edit text or borrow from another source cue. Model boundaries are kept
-    wherever possible; full deterministic splitting is needed only for a too-wide
-    model part or context-sensitive script conversion across a proposed boundary.
+    wherever possible, including when a title and a name need to be rewrapped.
     """
     widths = [display_width(part) for part in parts]
     width = display_width(text)
     max_parts = 1 if width <= MAX_LINE_WIDTH else (
         width + MAX_LINE_WIDTH // 2 - 1) // (MAX_LINE_WIDTH // 2)
     issues = []
+    protected_cuts = (protected_period_boundaries(text).intersection(accumulate(map(len, parts[:-1])))
+                      if len(parts) > 1 else set())
     if "".join(parts) != text:
         issues.append("contextual_script_boundary")
+    elif protected_cuts:
+        issues.append("abbreviation_boundary")
     if any(w > MAX_LINE_WIDTH for w in widths):
         issues.append("overlong_segment")
     if len(parts) > max_parts:
@@ -139,8 +143,18 @@ def _repair_display_parts(text: str, parts: list[str]):
         return parts, None
     if width <= MAX_LINE_WIDTH:
         fixed, method = [text], "join_exact_parts"
-    elif "contextual_script_boundary" in issues or "overlong_segment" in issues:
+    elif ("contextual_script_boundary" in issues or "overlong_segment" in issues
+          or (protected_cuts and "overfragmented" in issues)):
         fixed, method = split_display_text(text), "split_verified_text"
+    elif "abbreviation_boundary" in issues:
+        # Rewrap only consecutive pieces separated at a protected period.
+        fixed, group = [], ""
+        for part, end in zip(parts, accumulate(map(len, parts))):
+            group += part
+            if end not in protected_cuts:
+                fixed.extend(split_display_text(group))
+                group = ""
+        method = "rewrap_abbreviation"
     else:
         # Only remove boundaries between consecutive pieces of THIS source. No
         # whitespace stripping, punctuation rewriting or source-cue merging.

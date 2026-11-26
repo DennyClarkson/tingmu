@@ -19,6 +19,7 @@ import pysubs2
 from . import embedded_subtitles as decoder
 from .media import SUBTITLE_EXTENSIONS, TranscriptionCancelled, _cue_id
 from .models import Cue, LanguagePair
+from .sentence_punctuation import ends_with_abbreviation
 from .storage import media_fingerprint
 
 
@@ -201,6 +202,21 @@ def _identify(line, languages):
     return winners[0] if best and len(winners) == 1 else ""
 
 
+def _language_chunks(line, languages):
+    pieces = re.split(r"(\s*[|｜]\s*|\s+/\s+|(?<=[.!?。！？])\s+)", line)
+    chunks = [pieces[0]]
+    for separator, right in zip(pieces[1::2], pieces[2::2]):
+        if separator.isspace() and ends_with_abbreviation(chunks[-1]):
+            # Independent language evidence can still mark an inline translation
+            # after a genuine sentence-final abbreviation such as "Inc.".
+            left_code, right_code = _identify(chunks[-1], languages), _identify(right, languages)
+            if not (left_code and right_code and left_code != right_code):
+                chunks[-1] += separator + right
+                continue
+        chunks.append(right)
+    return chunks
+
+
 def _parts(event, raw_text, languages):
     from .locale_catalog import resolve_language
 
@@ -245,7 +261,7 @@ def _parts(event, raw_text, languages):
             continue
         # Preserve punctuation in ordinary dialogue. Only split a separator if
         # both sides carry independent evidence for different languages.
-        chunks = re.split(r"\s*[|｜]\s*|\s+/\s+|(?<=[.!?。！？])\s+", line)
+        chunks = _language_chunks(line, languages)
         if len(chunks) > 1:
             codes = [_identify(chunk, languages) for chunk in chunks]
             explicit = re.search(r"[|｜]|\s/\s", line)
@@ -502,13 +518,15 @@ def load_learning_subtitles(path, language, *, cancelled=None, metadata_out=None
 
 
 def _wrapped_target(row, target):
-    """Allow a lowercase continuation of an unfinished line in the same script."""
+    """Recognize unfinished lines and title/name wraps in the same script."""
     if set(row.by_language) != {target} or LANG_TAG.search(row.raw) or re.search(r"[|｜]|\s/\s", row.raw):
         return False
     lines = row.display.splitlines()
     scripts = [{unicodedata.name(c, "").split(" ")[0] for c in line if c.isalpha()} for line in lines]
-    return (len(lines) > 1 and all(s == scripts[0] for s in scripts) and all(not re.search(r"[.!?。！？]$", a)
-            and b[:1].islower() for a, b in zip(lines, lines[1:])))
+    return (len(lines) > 1 and all(s == scripts[0] for s in scripts)
+            and all((ends_with_abbreviation(a) and b[:1].isalpha())
+                    or (not re.search(r"[.!?。！？]$", a) and b[:1].islower())
+                    for a, b in zip(lines, lines[1:])))
 
 
 def _classic_projection(rows, language, make_id):

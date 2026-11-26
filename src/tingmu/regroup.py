@@ -18,7 +18,8 @@ from .llm_client import BatchOutput, LlmClient
 from .models import Cue, MAX_LLM_CONCURRENCY
 from .providers import ProviderError, RequestCancelled
 from .review import validate_review
-from .timeline import MAX_LINE_WIDTH, MIN_SPLIT_MS, display_width
+from .sentence_punctuation import nonterminal_period
+from .timeline import MAX_LINE_WIDTH, MIN_SPLIT_MS, display_width, splits_abbreviation
 
 
 VERSION = "regroup-2"
@@ -56,6 +57,7 @@ speaker and context to choose sentence or clause boundaries. Keep an independent
 Aim for 1–5 seconds per caption. Let a short lead-in, vocative, dependent clause or trailing
 question stay with its own sentence. In compressed speech, combine neighboring brief clauses
 when that avoids a flash under 600 ms. Never attach a clear independent speaker's reply.
+Keep a title or initial with the name that follows it (Mr. White, J. P. Wynne).
 Soft speaker_change_hint and quiet_hint_ms may be imprecise; hard boundaries are authoritative.
 Do not output every acoustic token separately or collect unrelated sentences into one caption.
 Cover ALL zero-based integer indices once in ascending order, without omission, repetition or
@@ -125,7 +127,8 @@ def _cut_ok(text, at):
         return True
     left, right = text[at - 1 : at + 1]
     if (
-        unicodedata.category(right).startswith("M")
+        splits_abbreviation(text, at)
+        or unicodedata.category(right).startswith("M")
         or "\u200d" in (left, right)
         or left in "'’"
         or right in "'’"
@@ -356,9 +359,24 @@ def _fallback(units, a, b, kind="fallback"):
 def _boundary_quality(units, index):
     """Prefer a real turn, sentence, or word break to bisecting a word at the middle."""
     left, right = units[index - 1], units[index]
-    char = left["text"].rstrip().rstrip('”’）)]」』"').rstrip()[-1:]
+    last = left["text"].rstrip().rstrip('”’）)]」』"').rstrip()
+    char = last[-1:]
     if right.get("boundary_before"):
         return 5
+    abbreviation = False
+    if ((left["text"].rstrip().endswith(".") and right["text"].lstrip()[:1].isalnum())
+            or right["text"].startswith(".")):
+        # Literal word alignments can put a period in its own timed unit.
+        start = index - 1
+        # Keep local spelling and preceding words for split initialisms and
+        # sentence-final pronouns such as "so can I.".
+        while start > max(0, index - 4) and not units[start].get("boundary_before"):
+            start -= 1
+        context = _raw(units, start, index, 0, len(right["text"]))
+        cut = len(context) - len(right["text"])
+        abbreviation = splits_abbreviation(context, cut)
+    if abbreviation:
+        return 0
     if char and char in "。！？.!?؟۔।॥":
         return 4
     if (left["source_id"] != right["source_id"] or not left.get("literal") or not right.get("literal")) and (
@@ -520,7 +538,7 @@ def _materialize(recipes, units, sources):
             "timing_basis": basis,
             "kind": row["kind"],
             **(
-                {"boundary_repair": "short_incomplete_clause", "model_ranges": row["model_ranges"]}
+                {"boundary_repair": row["boundary_repair"], "model_ranges": row["model_ranges"]}
                 if "model_ranges" in row
                 else {}
             ),
@@ -587,10 +605,10 @@ def _stitch_fallbacks(rows, units):
 
 
 def _readable_rows(rows, units):
-    """Join an unfinished fine-unit clause and its flash-length tail with the original anchors."""
+    """Keep a title with its continuation and a brief fine-unit tail with its clause."""
     result = []
     for row in rows:
-        if result and row["kind"] == result[-1]["kind"] == "model":
+        if result and row["kind"] == result[-1]["kind"] and row["kind"] != "protected":
             before = result[-1]
             a, b = before["start_index"], before["end_index"]
             c, d = row["start_index"], row["end_index"]
@@ -600,18 +618,31 @@ def _readable_rows(rows, units):
             short = (
                 min(left["end"] - units[a]["start"], units[d]["end"] - right["start"]) < MIN_SPLIT_MS / 1000
             )
-            if (
-                c == b + 1
+            title_seam = (
+                left_text.endswith(".")
+                and right_text[:1].isalnum()
+                and nonterminal_period(left_text + " " + right_text, len(left_text) - 1)
+                and all(u.get("timing_basis") not in {"caption_updates", "caption_event"} for u in (left, right))
+                and right["start"] - left["end"] >= -0.12
+                and not right.get("speaker_change_hint")
+                and not right.get("quiet_hint_ms")
+            )
+            short_clause = (
+                row["kind"] == "model"
                 and short
                 and left.get("literal")
                 and right.get("literal")
+                and left_text
+                and (left_text[-1].isalnum() or (same_source and left_text[-1] in ",，、"))
+                and (same_source or sum(ch.isalnum() for ch in right_text) > 3)
+            )
+            if (
+                c == b + 1
+                and (title_seam or short_clause)
                 and not right.get("boundary_before")
                 and right["start"] - left["end"] <= 0.22
                 and units[d]["end"] - units[a]["start"] <= 5.5
-                and left_text
                 and right_text
-                and (left_text[-1].isalnum() or (same_source and left_text[-1] in ",，、"))
-                and (same_source or sum(ch.isalnum() for ch in right_text) > 3)
                 and display_width(left_text) + display_width(right_text) <= MAX_LINE_WIDTH * 2
                 and before["text"] == _raw(units, a, b, 0, len(left["text"]))
                 and row["text"] == _raw(units, c, d, 0, len(units[d]["text"]))
@@ -622,8 +653,12 @@ def _readable_rows(rows, units):
                     "end_char": row["end_char"],
                     "text": _raw(units, a, d, 0, row["end_char"]),
                     "uncertain": before["uncertain"] or row["uncertain"],
-                    "model_ranges": before.get("model_ranges", [[a, b]]) + [[c, d]],
                 }
+                if row["kind"] == "model":
+                    result[-1].update(
+                        boundary_repair="abbreviation" if title_seam else "short_incomplete_clause",
+                        model_ranges=before.get("model_ranges", [[a, b]]) + [[c, d]],
+                    )
                 continue
         result.append(row)
     return result

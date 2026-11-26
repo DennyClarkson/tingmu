@@ -6,6 +6,7 @@ from itertools import accumulate
 import unicodedata
 
 from .models import AppSettings, Cue, Token
+from .sentence_punctuation import protected_period_boundaries
 
 MAX_LINE_WIDTH = 42
 MIN_SPLIT_MS = 600
@@ -21,9 +22,16 @@ def display_width(text: str) -> int:
                for c in text)
 
 
+def splits_abbreviation(text: str, at: int) -> bool:
+    """A cut before a protected period or between it and its continuation."""
+    return 0 < at < len(text) and at in protected_period_boundaries(text)
+
+
 def split_display_text(text: str) -> list[str]:
     """Deterministic fallback for retained model edits; never join source cues."""
     parts = []
+    protected = protected_period_boundaries(text)
+    offset = 0
     while display_width(text) > MAX_LINE_WIDTH:
         width, limit = 0, 0
         for index, char in enumerate(text):
@@ -31,14 +39,15 @@ def split_display_text(text: str) -> list[str]:
             if width > MAX_LINE_WIDTH:
                 break
             limit = index + 1
-        boundaries = [i + 1 for i, char in enumerate(text[:limit]) if char in "，。！？；、,.!?;: \n"]
-        # Prefer a shorter natural word boundary over cutting the next Latin
-        # word merely to fill half a line. Unbroken words wider than the limit
-        # still need a bounded split. Source whitespace remains in its slice.
-        natural = [i for i in boundaries if text[:i].strip()]
-        cut = next((i for i in reversed(natural) if display_width(text[:i]) >= MAX_LINE_WIDTH // 2),
-                   natural[-1] if natural else limit)
+        boundaries = [i + 1 for i, char in enumerate(text[:limit])
+                      if (char.isspace() or char in "，。！？；、,.!?;:") and text[:i + 1].strip()]
+        if text[limit].isspace() and text[:limit].strip():
+            boundaries.append(limit)
+        # If a title and name together exceed a line, keep individual words whole.
+        cut = next((i for i in reversed(boundaries) if offset + i not in protected),
+                   boundaries[-1] if boundaries else limit)
         parts.append(text[:cut])
+        offset += cut
         text = text[cut:]
     if text:
         parts.append(text)

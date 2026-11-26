@@ -16,6 +16,18 @@ def validate(text, parts, *, source=None, reason=""):
     return validate_review(json.dumps({"cues": [row]}), [source], LanguagePair("zh-CN", "en"))
 
 
+def test_verified_layout_moves_title_to_name_and_keeps_other_valid_boundaries():
+    parts = ["We waited outside until morning. ", "Then we went back with Mr. ", "Lambert to speak to the manager."]
+    text = "".join(parts)
+    output, metadata = validate(text, parts)
+    segments = output[0].segmented_texts
+    assert segments[0] == parts[0]
+    assert "".join(segments) == text
+    assert all(display_width(p) <= MAX_LINE_WIDTH for p in segments)
+    assert any("Mr. Lambert" in part for part in segments)
+    assert metadata["source"]["segmentation_repair"]["reason_codes"] == ["abbreviation_boundary"]
+
+
 @pytest.mark.parametrize("separator", [" ", "  ", "\t", "\u00a0"])
 def test_restore_only_segment_edge_spacing_preserves_every_source_character(separator):
     parts = ["When the weather clears,", "we'll take the train", "and meet at five."]

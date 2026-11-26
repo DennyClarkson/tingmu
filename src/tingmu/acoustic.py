@@ -8,6 +8,8 @@ from __future__ import annotations
 import math
 import re
 
+from .sentence_punctuation import protected_period_boundaries
+
 
 def frame_energy(audio, rate=16000):
     """20 ms RMS, measured in blocks to avoid a second full-track float buffer."""
@@ -286,7 +288,8 @@ def repair_times(times, weights, duration, pauses, limits=()):
     return spans, affected | clipped, reports
 
 
-_SENTENCE_END = re.compile(r"""[。！？!?；;…؟۔।॥።]|\.(?:[”’"'）)]*\s|[”’"'）)]*$)""")
+_OTHER_SENTENCE_END = re.compile(r"[。！？!?；;…؟۔।॥።]|\.{2,}")
+_PERIOD_END = re.compile(r"""\.[”’"'）)\]}»」』】〉》]*(?:\s|$)""")
 _CLAUSE = re.compile(r"[,，、：:،؛]")
 
 
@@ -295,16 +298,35 @@ def sentence_breaks(text, ends, separators, spans, turns, pauses):
     n = len(spans)
     if n < 2:
         return {n}
-    ends_sentence = {i for i in range(1, n) if _SENTENCE_END.search(separators[i - 1])}
-    clauses = {i for i in range(1, n) if _CLAUSE.search(separators[i - 1])}
+    # Whisper ends include attached punctuation; Qwen ends point just before
+    # it. Resolve both against the original text, including standalone tokens.
+    protected_offsets = protected_period_boundaries(text)
+    protected = set()
+    ends_sentence = set()
+    clauses = set()
+    for i in range(1, n):
+        separator = separators[i - 1]
+        if _OTHER_SENTENCE_END.search(separator):
+            ends_sentence.add(i)
+        elif ends[i - 1] in protected_offsets:
+            protected.add(i)
+        elif _PERIOD_END.search(separator):
+            ends_sentence.add(i)
+        if i not in protected and _CLAUSE.search(separator):
+            clauses.add(i)
     gaps = [0.0] + [max(0.0, spans[i][0] - spans[i - 1][1]) for i in range(1, n)]
     centers = [0.0] + [(spans[i][0] + spans[i - 1][1]) / 2 for i in range(1, n)]
     cuts = set(ends_sentence)
     hard = set(ends_sentence)
     for i in range(1, n):
+        witnessed = max((min(b, spans[i][0]) - max(a, spans[i - 1][1]) for a, b in pauses), default=0.0)
+        if i in protected:
+            if witnessed >= 1.8 - 1e-9:
+                cuts.add(i)
+                hard.add(i)
+            continue
         if i in clauses and gaps[i] >= 0.30:
             cuts.add(i)
-        witnessed = max((min(b, spans[i][0]) - max(a, spans[i - 1][1]) for a, b in pauses), default=0.0)
         if gaps[i] < 0.65 or (gaps[i] < 1.8 and witnessed < 0.35 and i not in clauses):
             continue
         # Qwen frequently places the first character of a new clause just
@@ -333,7 +355,9 @@ def sentence_breaks(text, ends, separators, spans, turns, pauses):
 
         i = max(nearby, key=score)
         # A change inside a multi-character word is too weak on its own.
-        if i in ends_sentence or i in clauses or separators[i - 1].isspace() or i in hard:
+        if i not in protected and (
+            i in ends_sentence or i in clauses or separators[i - 1].isspace() or i in hard
+        ):
             cuts.add(i)
     # If soft cues flank a one-to-three-character fragment, retain the better
     # evidenced boundary; genuine punctuated short replies remain independent.

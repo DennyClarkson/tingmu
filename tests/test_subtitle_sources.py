@@ -31,6 +31,21 @@ def stream(index, codec, lang="eng", *, forced=0):
             "disposition": {"forced": forced}}
 
 
+def test_inline_bilingual_evidence_preserves_titles_and_finishing_abbreviations(tmp_path):
+    from tingmu.media import load_subtitles
+
+    path = tmp_path / "paired.srt"
+    path.write_bytes(captions(["I spoke with Mr. White. 我跟白先生谈过。",
+                               "We work at Example Inc. 我们在这家公司工作。",
+                               "I spoke with Mr.\nLambert,"]))
+    cues = load_subtitles(path, learning_language=PAIR)
+    assert [(cue.text, cue.translation) for cue in cues] == [
+        ("I spoke with Mr. White.", "我跟白先生谈过。"),
+        ("We work at Example Inc.", "我们在这家公司工作。"),
+        ("I spoke with Mr.\nLambert,", ""),
+    ]
+
+
 @pytest.fixture
 def media(tmp_path, monkeypatch):
     video = tmp_path / "Example S01E02 Long Title (1080p).mkv"

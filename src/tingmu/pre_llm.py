@@ -10,6 +10,7 @@ import re
 import unicodedata
 
 from .models import Cue
+from .sentence_punctuation import nonterminal_period
 from .timeline import display_width
 
 
@@ -61,8 +62,11 @@ def _words(text):
     return found
 
 
-def _terminal(text):
-    return text.rstrip().rstrip(_CLOSERS).endswith(tuple(_STOP + "."))
+def _terminal(text, following=""):
+    ending = text.rstrip().rstrip(_CLOSERS)
+    if ending.endswith("."):
+        return not nonterminal_period(ending + " " + following, len(ending) - 1)
+    return ending.endswith(tuple(_STOP))
 
 
 def _letters(text):
@@ -294,16 +298,19 @@ def _fragment_join(left, right, barriers, asr):
         or not _same_voice(a, b)
         or not x
         or not y
-        or _terminal(x)
+        or _terminal(x, y)
         or gap < -0.12
         or gap > (0.80 if asr else 0.10)
         or b.end - a.start > 8
         or display_width(x) + display_width(y) > 100
     ):
         return None
+    title_seam = x.rstrip(_CLOSERS).endswith(".")
+    if title_seam and not (asr and x.endswith(".") and y[0].isalnum()):
+        return None
     lo, hi = sorted((a.end, b.start))
     nl, nr = _letters(x), _letters(y)
-    single_tail = asr and nl >= 2 and nr == 1 and b.end - b.start <= 0.12 and _terminal(y)
+    single_tail = asr and not title_seam and nl >= 2 and nr == 1 and b.end - b.start <= 0.12 and _terminal(y)
     if barriers.strong_pause_at(lo - 0.02, hi + 0.02):
         return None
     if not single_tail and (
@@ -317,7 +324,7 @@ def _fragment_join(left, right, barriers, asr):
     suffix = nl >= 2 and 1 <= nr <= 3 and b.end - b.start <= 0.22 and (nl >= 3 or nr == 1)
     prefix = nl == 1 and nr >= 4 and a.end - a.start <= 0.22
     word_seam = x.endswith(("-", "‐", "‑")) and y[0].isalnum()
-    if not (suffix or prefix or word_seam):
+    if not (title_seam or suffix or prefix or word_seam):
         return None
     if a.text[-1].isspace() or b.text[0].isspace() or word_seam or _unspaced(x[-1]) or _unspaced(y[0]):
         return ""
@@ -360,12 +367,7 @@ def _split(row, barriers):
         p = m.end()
         added = _letters(c.text[counted:p])
         counted, left_letters, remaining = p, left_letters + added, remaining - added
-        # Single initials, honorifics, numbers and ellipses do not establish a new sentence.
-        if m.group().startswith(".") and re.search(
-            r"\b[A-Za-z]{1,2}\.$",
-            c.text[max(0, m.start() - 12) : m.start() + 1],
-            re.I,
-        ):
+        if m.group().startswith(".") and nonterminal_period(c.text, m.start()):
             continue
         if min(left_letters, remaining) >= 4:
             cuts.append(p)
