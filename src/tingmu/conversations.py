@@ -1,11 +1,11 @@
 """Independent durable chat sessions, with non-destructive legacy migration."""
 
-from datetime import datetime, timezone
 import json
 import math
 import uuid
 
 from .storage import canonical_path
+from .timestamps import utc_timestamp
 
 _PRIVATE_FIELDS = {
     "signature", "thinking_signature", "encrypted_content", "encrypted", "redacted_thinking",
@@ -13,10 +13,6 @@ _PRIVATE_FIELDS = {
     "reasoning_text", "reasoning_summary",
 }
 _PRIVATE_BLOCK_TYPES = {"thinking", "redacted_thinking", "reasoning", "encrypted", "encrypted_content"}
-
-
-def _now():
-    return datetime.now(timezone.utc).isoformat()
 
 
 def _text(value, name, maximum=1000):
@@ -93,7 +89,7 @@ def _messages(messages):
             raise ValueError("对话消息内容无效。")
         row = {"id": message.get("id") or uuid.uuid4().hex, "role": message["role"],
                "content": content, "status": message.get("status", "completed"),
-               "model": message.get("model", ""), "created_at": message.get("created_at") or _now()}
+               "model": message.get("model", ""), "created_at": message.get("created_at") or utc_timestamp()}
         for key in ("id", "status", "created_at"):
             _text(row[key], key)
         if not isinstance(row["model"], str) or len(row["model"]) > 1000:
@@ -120,7 +116,7 @@ class ConversationStore:
     def list_sessions(self, target_language):
         with self.store._connection() as db:
             rows = db.execute("SELECT id,title,media_path,source_language,target_language,created_at,updated_at "
-                              "FROM chat_sessions WHERE target_language=? ORDER BY updated_at DESC,id",
+                              "FROM chat_sessions WHERE target_language=? ORDER BY updated_at DESC,rowid DESC,id DESC",
                               (target_language,)).fetchall()
         return [dict(row) for row in rows]
 
@@ -130,8 +126,9 @@ class ConversationStore:
         _text(language.target, "学习语言", 80)
         if not isinstance(media_path, str) or "\x00" in media_path:
             raise ValueError("视频路径无效。")
-        session_id, now = uuid.uuid4().hex, _now()
-        with self.store._connection() as db:
+        session_id = uuid.uuid4().hex
+        with self.store._connection(immediate=True) as db:
+            now = utc_timestamp()
             db.execute("INSERT INTO chat_sessions VALUES (?,?,?,?,?,?,?,?)",
                        (session_id, title, canonical_path(media_path) if media_path else "",
                         language.source, language.target, "[]", now, now))
@@ -154,7 +151,7 @@ class ConversationStore:
             row = db.execute("UPDATE chat_sessions SET messages=?,title=COALESCE(?,title),updated_at=? "
                              "WHERE id=? RETURNING id,title,media_path,source_language,target_language,"
                              "created_at,updated_at",
-                             (json.dumps(clean, ensure_ascii=False), title, _now(), session_id)).fetchone()
+                             (json.dumps(clean, ensure_ascii=False), title, utc_timestamp(), session_id)).fetchone()
             if row is None:
                 raise ValueError("对话不存在。")
             session = {**dict(row), "messages": clean}
@@ -188,9 +185,9 @@ class ConversationStore:
 
     def rename(self, session_id, title):
         _text(title, "标题", 200)
-        with self.store._connection() as db:
+        with self.store._connection(immediate=True) as db:
             cursor = db.execute("UPDATE chat_sessions SET title=?,updated_at=? WHERE id=?",
-                                (title, _now(), session_id))
+                                (title, utc_timestamp(), session_id))
             if not cursor.rowcount:
                 raise ValueError("对话不存在。")
         return self.load(session_id)
@@ -218,7 +215,7 @@ class ConversationStore:
             if not old:
                 return None
             clean = _messages(json.loads(old[0]))
-            session_id, now = uuid.uuid4().hex, _now()
+            session_id, now = uuid.uuid4().hex, utc_timestamp()
             db.execute("INSERT INTO chat_sessions VALUES (?,?,?,?,?,?,?,?)",
                        (session_id, "导入的对话", *identity, json.dumps(clean, ensure_ascii=False), now, now))
             db.execute("INSERT INTO chat_legacy_migrations VALUES (?,?,?,?)", (*identity, session_id))

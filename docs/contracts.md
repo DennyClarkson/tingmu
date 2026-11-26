@@ -1,6 +1,12 @@
 # Integration contracts
 
-In 0.13.0, both preparation workflows check source timing before review and teaching. The optional model-assisted grouping step uses the same source evidence. See [subtitle acquisition](#subtitle-acquisition-before-text-models), [source-indexed grouping](#source-indexed-subtitle-regrouping) and [live preparation and transfers](#live-preparation-and-transfers) for the current contracts. The module map and development guide cover implementation and verification. [Module map](architecture.md) · [Development guide](development.md)
+Both preparation workflows check source timing before review and teaching. The optional model-assisted grouping step uses the same source evidence. See [subtitle acquisition](#subtitle-acquisition-before-text-models), [source-indexed grouping](#source-indexed-subtitle-regrouping) and [live preparation and transfers](#live-preparation-and-transfers) for the current contracts. The module map and development guide cover implementation and verification. [Module map](architecture.md) · [Development guide](development.md)
+
+## Notebook and conversation order in 0.13.1
+
+Notebook notes and topics follow creation time, oldest first. Editing a note keeps its position. When a learner collects the same word from another line, Tingmu looks for the most recently updated eligible note for that word. The conversation list also uses update time, newest first, so saving or renaming an older session moves it to the top.
+
+Within one process, notebook and conversation writes receive strictly increasing UTC timestamps with six fractional digits, including when the system clock repeats or moves backwards. For existing rows with equal timestamps, SQLite `rowid` breaks ties in insertion order for notebook display and reverse insertion order for citation lookup and the conversation list. The actual order of edits to tied historical rows is unknown.
 
 ## Optional subtitle Agent and interface language in 0.12
 

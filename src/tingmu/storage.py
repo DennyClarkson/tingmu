@@ -3,7 +3,7 @@
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import asdict, fields
-from datetime import datetime, timezone
+from datetime import datetime
 import csv
 from functools import cached_property
 import hashlib
@@ -15,6 +15,7 @@ import uuid
 
 from .models import AppSettings, Cue, LanguagePair, StudyDocument, Token
 from .database import Database, word_key as word_key
+from .timestamps import utc_timestamp
 
 
 def canonical_path(path: str | Path) -> str:
@@ -343,14 +344,14 @@ class Store:
                               note=COALESCE(?, entries.note), sentence=excluded.sentence
                 RETURNING id
             """, (kind, canonical_path(media_path), cue.id, cue.start, text, reading, meaning, note or "",
-                  cue.text, language.source, language.target, datetime.now(timezone.utc).isoformat(), note)).fetchone()[0]
+                  cue.text, language.source, language.target, utc_timestamp(), note)).fetchone()[0]
 
     def save_word(self, media_path: str, cue: Cue, token: Token, language: LanguagePair) -> None:
         with self._connection() as db:
             self._save_entry(db, "word", media_path, cue, language, token.text, token.reading, token.meaning, note=None)
 
     def save_note(self, media_path: str, cue: Cue, note: str | None, language: LanguagePair) -> None:
-        with self._connection() as db:
+        with self._connection(immediate=True) as db:
             self._save_entry(db, "note", media_path, cue, language, cue.text,
                              meaning=cue.translation, note=note)
 
@@ -441,12 +442,12 @@ class Store:
         """Persist text chat separately from lesson documents; no API credentials."""
         clean = [{"role": str(m["role"]), "content": str(m["content"])} for m in messages
                  if m.get("role") in ("user", "assistant") and isinstance(m.get("content"), str)]
-        with self._connection() as db:
+        with self._connection(immediate=True) as db:
             db.execute("INSERT INTO conversations VALUES (?,?,?,?,?) "
                        "ON CONFLICT(media_path,source_language,target_language) DO UPDATE SET "
                        "messages=excluded.messages,updated_at=excluded.updated_at",
                        (canonical_path(media_path) if media_path else "", language.source, language.target,
-                        json.dumps(clean, ensure_ascii=False), datetime.now(timezone.utc).isoformat()))
+                        json.dumps(clean, ensure_ascii=False), utc_timestamp()))
 
     def load_conversation(self, media_path: str, language: LanguagePair) -> list[dict]:
         with self._connection() as db:

@@ -19,7 +19,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup.ps1 -Dev -Cp
 .\.venv\Scripts\python.exe -m tingmu gui
 ```
 
-## 准备字幕和讲解（0.13.0）
+## 准备字幕和讲解（0.13.1）
 
 1. 在媒体库添加视频，打开要学习的那一集，再到「准备」选择音轨和「新任务流程」。默认的**经典流程**沿用工作区已有的识别、复核和讲解设置。**字幕 Agent** 适合手头已有字幕，或想让听幕检查视频内嵌字幕的情况。流程在任务入队时确定。
 2. 有指定字幕时，选择「字幕 Agent → 为当前视频选字幕并入队…」。支持 SRT、ASS、SSA 和 VTT。要自动检查同名或匹配的外挂与内嵌字幕，直接在媒体库勾选视频并加入处理队列。

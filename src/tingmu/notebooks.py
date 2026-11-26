@@ -16,6 +16,7 @@ from .learning_notes import (
     language_name, literal as _literal, render_topic_body,
 )
 from .storage import canonical_path, word_key
+from .timestamps import utc_timestamp
 
 BEGIN = "<!-- tingmu:collected:start -->"
 END = "<!-- tingmu:collected:end -->"
@@ -241,7 +242,7 @@ class NotebookManager:
                     except (KeyError, TypeError, ValueError):
                         pass  # The real Markdown links remain authoritative if old metadata is damaged.
                 known = sorted(available & linked)
-                now = datetime.now(timezone.utc).isoformat()
+                now = utc_timestamp()
                 for entry_id in known:
                     db.execute("INSERT INTO notebook_collections(entry_id,organized_at) VALUES (?,?) "
                                "ON CONFLICT(entry_id) DO UPDATE SET organized_at=CASE WHEN organized_at='' "
@@ -355,7 +356,7 @@ class NotebookManager:
             entries = self._entries(language)
             with self.store._connection() as db:
                 notes = [self._view_note(row, markdown) for row in db.execute(
-                    "SELECT * FROM notebook_notes WHERE language=? ORDER BY created_at,id", (language,))]
+                    "SELECT * FROM notebook_notes WHERE language=? ORDER BY created_at, rowid, id", (language,))]
                 languages = {r[0] for r in db.execute("SELECT language FROM notebook_v5_migrations")}
                 counts = dict(db.execute("SELECT target_language,count(*) FROM entries GROUP BY target_language"))
                 linked = {i for n in notes for i in n["entry_ids"]}
@@ -441,10 +442,10 @@ class NotebookManager:
                 raise NotebookConflict("条目备注已修改，请重新加载后保存。")
             if old and old != note:
                 db.execute("INSERT INTO notebook_entry_note_history(entry_id,entry_note,revision,saved_at) "
-                           "VALUES (?,?,?,?)", (entry_id, old, _revision(old), datetime.now(timezone.utc).isoformat()))
+                           "VALUES (?,?,?,?)", (entry_id, old, _revision(old), utc_timestamp()))
             db.execute("INSERT INTO notebook_collections(entry_id,entry_note,updated_at) VALUES (?,?,?) "
                        "ON CONFLICT(entry_id) DO UPDATE SET entry_note=excluded.entry_note,updated_at=excluded.updated_at",
-                       (entry_id, note, datetime.now(timezone.utc).isoformat()))
+                       (entry_id, note, utc_timestamp()))
         return next(e for e in self._entries(entry[0]) if e["id"] == entry_id)
 
     def _source_markdown(self, entries, *, heading=True):
@@ -466,10 +467,9 @@ class NotebookManager:
         self._check_text(body, 200000)
         if any(c in title for c in "\r\n") or "<!-- tingmu:" in body or "<!-- tingmu:" in title:
             raise ValueError("笔记不能包含保留的管理标记。")
-        now = datetime.now(timezone.utc).isoformat()
         return {"id": uuid.uuid4().hex, "language": language, "title": title, "body": body,
                 "entry_ids": [e["id"] for e in entries], "sources_markdown": self._source_markdown(entries),
-                "source_language": source_language, "origin": origin, "created_at": now, "updated_at": now}
+                "source_language": source_language, "origin": origin}
 
     def _render_note(self, note):
         start, end, sources = self._markers(note["id"])
@@ -489,8 +489,8 @@ class NotebookManager:
                        and row["cue_id"] == source["cue_id"]}
         self._archive_source(db, source)
         # A topic may have been reorganized several times. Extend its most recent intact note.
-        for row in db.execute("SELECT * FROM notebook_notes WHERE language=? ORDER BY updated_at DESC,id",
-                              (language.target,)):
+        for row in db.execute("SELECT * FROM notebook_notes WHERE language=? "
+                              "ORDER BY updated_at DESC, rowid DESC, id DESC", (language.target,)):
             note = self._view_note(row, markdown)
             if not prior_ids.intersection(note["entry_ids"]) or note["detached"]:
                 continue
@@ -508,8 +508,7 @@ class NotebookManager:
             revised = self._append_blocks(markdown[:insert], citation) + markdown[insert:]
             sources = self._append_blocks(note["sources_markdown"], citation).strip()
             db.execute("UPDATE notebook_notes SET entry_ids=?,sources_markdown=?,updated_at=? WHERE id=?",
-                       (json.dumps([*note["entry_ids"], entry_id]), sources,
-                        datetime.now(timezone.utc).isoformat(), note["id"]))
+                       (json.dumps([*note["entry_ids"], entry_id]), sources, utc_timestamp(), note["id"]))
             write(revised, _revision(markdown))
             return
         # Notes may have been deleted, detached by the Markdown editor, or migrated without markers.
@@ -525,12 +524,14 @@ class NotebookManager:
 
     @staticmethod
     def _store_note(db, note):
+        now = utc_timestamp()
         db.execute("INSERT INTO notebook_notes VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
                    "title=excluded.title,body=excluded.body,entry_ids=excluded.entry_ids,"
                    "sources_markdown=excluded.sources_markdown,origin=excluded.origin,updated_at=excluded.updated_at",
                    (note["id"], note["language"], note["title"], note["body"], json.dumps(note["entry_ids"]),
                     note["sources_markdown"], note["source_language"], note["origin"],
-                    note["created_at"], note["updated_at"]))
+                    note.get("created_at", now), now))
+        return now
 
     @contextmanager
     def _book_transaction(self, language):
@@ -568,7 +569,7 @@ class NotebookManager:
             if delete_id is not None:
                 db.execute("DELETE FROM notebook_notes WHERE id=? AND language=?", (delete_id, language))
             for note in notes:
-                self._store_note(db, note)
+                updated_at = self._store_note(db, note)
                 for entry_id in note["entry_ids"]:
                     source = next((e for e in original["collections"] if e["id"] == entry_id), None)
                     if source:
@@ -576,7 +577,7 @@ class NotebookManager:
                     if organize_ids is None or entry_id in organize_ids:
                         db.execute("INSERT INTO notebook_collections(entry_id,organized_at) VALUES (?,?) "
                                    "ON CONFLICT(entry_id) DO UPDATE SET organized_at=CASE WHEN organized_at='' "
-                                   "THEN excluded.organized_at ELSE organized_at END", (entry_id, note["updated_at"]))
+                                   "THEN excluded.organized_at ELSE organized_at END", (entry_id, updated_at))
             db.execute("INSERT OR IGNORE INTO notebook_v5_migrations VALUES (?)", (language,))
             write(markdown, original["revision"])
         return self.snapshot(language)

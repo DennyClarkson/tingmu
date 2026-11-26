@@ -1,0 +1,11 @@
+previous_tag = "v0.13.0"
+
+[[changes]]
+zh = "修复同一时钟刻度内连续整理或追加笔记时，随机 UUID 打乱列表顺序的问题。笔记和主题列表现在与 Markdown 正文的追加顺序一致。编辑较早的笔记会保留它在列表中的位置。从另一句对白再次收藏同一个词时，新出处会补到最近修改且可追加出处的相关笔记中。"
+en = "Fixed an ordering bug where random UUIDs could shuffle notes added or organized on the same clock tick. Notes and topics now follow the order in which they were appended to the Markdown notebook. Editing an earlier note keeps its place. Collecting the same word from another line adds the citation to the most recently edited eligible note for that word."
+author = "DennyClarkson"
+
+[[changes]]
+zh = "会话列表按最近修改时间排序，同一时刻连续新建、保存或重命名会话时，最后操作的会话排在最前。听幕在同一进程内为笔记和会话写入分配严格递增的微秒级 UTC 时间戳。旧记录时间戳相同时，听幕使用 SQLite rowid 区分插入先后。笔记列表先显示早插入的记录，查找出处和列出会话时优先选取晚插入的记录。"
+en = "Conversations appear most recently updated first, even when several are created, saved or renamed on the same clock tick. Notebook and conversation writes receive strictly increasing microsecond UTC timestamps within the running process. For older records with identical timestamps, SQLite rowid breaks the tie by insertion order. Earlier rows appear first in the notebook, and later rows take precedence for citation lookup and the conversation list."
+author = "DennyClarkson"

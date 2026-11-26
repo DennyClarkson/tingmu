@@ -19,7 +19,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup.ps1 -Dev -Cp
 .\.venv\Scripts\python.exe -m tingmu gui
 ```
 
-## Prepare subtitles and explanations (0.13.0)
+## Prepare subtitles and explanations (0.13.1)
 
 1. Add a video to the **Media library** and open the episode you want to study. In **Prepare**, select the audio track and set **Workflow for new tasks**. The default, **Classic**, uses your workspace’s transcription, review, and explanation settings. Choose **Subtitle Agent** if you already have subtitles or want Tingmu to check the video’s embedded subtitle tracks. Each task keeps the workflow selected when you add it to the queue.
 2. To use a specific SRT, ASS, SSA, or VTT file, select **Subtitle Agent → Choose subtitles and queue this video…**. To have Tingmu find matching subtitle files alongside the video (including those with the same base name) and check embedded tracks, select the video in the library and add it to the queue.

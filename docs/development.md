@@ -1,4 +1,4 @@
-# 听幕 0.13.0 Windows 开发入门
+# 听幕 0.13.1 Windows 开发入门
 
 从源码启动、运行离线回归、定位改动，都可以从仓库根目录（含 `pyproject.toml`）完成。以下使用 Windows x64 与 PowerShell。项目声明支持 Python `>=3.12,<3.14`，安装脚本与 Windows 回归使用 3.12。
 
