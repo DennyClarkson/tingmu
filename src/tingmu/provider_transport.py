@@ -92,6 +92,7 @@ class _Response(AbstractContextManager):
         self.key = key
         self.connection = connection
         self.response = response
+        self.headers = response.headers
         self.watch = watch
 
     def read(self, amount=None):

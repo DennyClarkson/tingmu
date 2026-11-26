@@ -45,15 +45,16 @@ Item {
     }
     Rectangle {
         id: surface
+        objectName: dock.moduleId + "Surface"
         parent: dock.detached ? floating.contentItem : dock.dockHost
         onParentChanged:if(dock.moduleId==="player"){Qt.callLater(function(){backend.refreshVideo()});videoSceneSettled.restart()}
         anchors.fill: parent
         color: Theme.panel
         radius: Theme.radiusMd
         clip: true
-        border.color: Theme.line
         ColumnLayout {
             anchors.fill: parent
+            anchors.margins: 1
             spacing: 0
             Item {
                 Layout.fillWidth: true; Layout.preferredHeight: 40
@@ -101,9 +102,18 @@ Item {
             Rectangle { Layout.fillWidth: true; height: 1; color: Theme.line }
             Loader { id: loader; Layout.fillWidth: true; Layout.fillHeight: true; sourceComponent: dock.panelContent }
         }
+        Rectangle {
+            anchors.fill: parent
+            z: 1
+            radius: surface.radius
+            color: Theme.transparent
+            border.width: 1
+            border.color: Theme.line
+            enabled: false
+        }
     }
     Rectangle {
-        anchors.fill:parent;z:1000;radius:8
+        anchors.fill:parent;z:1000;radius:Theme.radiusMd
         visible:!!dock.workspace && dock.workspace.dropTarget===dock.moduleId
         color:Theme.dropTint;border.color:Theme.accent;border.width:2
         Text { textFormat:Text.PlainText;anchors.centerIn:parent;text:qsTranslate("Tingmu", "放到这里");color:Theme.text;font.family:Theme.font;font.pixelSize:16}

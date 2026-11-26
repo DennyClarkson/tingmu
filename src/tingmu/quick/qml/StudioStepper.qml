@@ -10,26 +10,43 @@ GridLayout {
     columns: Math.min(Math.max(1, studio.plan.length), Math.max(2, Math.floor(width / 80)))
     columnSpacing: 0; rowSpacing: 7
     Repeater {
-        model: stepper.studio.plan
+        model: stepper.studio.plan.length
         delegate: Item {
             id: step
             required property int index
-            required property string modelData
+            readonly property string modelData: stepper.studio.plan[index] || ""
             readonly property var studio: stepper.studio
             readonly property bool current: studio.stageIndex === index && !studio.complete
             readonly property bool done: !current && (studio.job.stage_history ? studio.job.stage_history.includes(modelData)
                         : studio.complete || index < studio.stageIndex)
             Layout.fillWidth: true; Layout.preferredWidth: 1; Layout.alignment: Qt.AlignTop
             implicitHeight: caption.implicitHeight + 26
+            objectName: "studioStep:" + index
+            property alias leadingFraction: leading.value
+            property alias trailingFraction: trailing.value
             Rectangle {
                 visible: step.index % stepper.columns !== 0
                 x: 0; y: 10; width: parent.width / 2; height: 2
-                color: step.done || step.current ? Theme.accent : Theme.line
+                color: Theme.line
+                Rectangle {
+                    height: parent.height; width: parent.width * leading.value; color: Theme.accent
+                    StudioValue {
+                        id: leading; destination: step.done || step.current ? 1 : 0
+                        permitted: step.studio.onScreen(step)
+                    }
+                }
             }
             Rectangle {
                 visible: (step.index + 1) % stepper.columns !== 0 && step.index < step.studio.plan.length - 1
                 x: parent.width / 2; y: 10; width: parent.width / 2; height: 2
-                color: step.done ? Theme.accent : Theme.line
+                color: Theme.line
+                Rectangle {
+                    height: parent.height; width: parent.width * trailing.value; color: Theme.accent
+                    StudioValue {
+                        id: trailing; destination: step.done ? 1 : 0
+                        permitted: step.studio.onScreen(step)
+                    }
+                }
             }
             Rectangle {
                 id: halo
@@ -45,10 +62,20 @@ GridLayout {
                 }
             }
             Rectangle {
-                anchors.horizontalCenter: parent.horizontalCenter; y: 4
-                width: 15; height: 15; radius: 8
-                color: step.done || step.current ? Theme.accent : Theme.surfaceElevated
-                border.color: step.done || step.current ? Theme.accent : Theme.line
+                id: dot
+                objectName: "studioStepDot:" + step.index
+                anchors.horizontalCenter: parent.horizontalCenter; y: 11.5 - height / 2
+                width: 13 + 5 * activeSize.value; height: width; radius: width / 2
+                color: Theme.tint(Theme.surfaceElevated, Theme.accent, filled.value)
+                border.color: Theme.tint(Theme.line, Theme.accent, filled.value)
+                StudioValue {
+                    id: activeSize; destination: step.current ? 1 : 0
+                    permitted: step.studio.onScreen(step)
+                }
+                StudioValue {
+                    id: filled; destination: step.done || step.current ? 1 : 0
+                    permitted: step.studio.onScreen(step)
+                }
                 Image {
                     visible: step.done; anchors.centerIn: parent; width: 11; height: 11
                     source: Icons.source("check", Theme.onAccent); sourceSize.width: 16; sourceSize.height: 16

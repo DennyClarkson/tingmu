@@ -80,6 +80,7 @@ class PreparationContext:
     progress: Callable | None = None
     cancelled: Callable | None = None
     force_asr: bool = False
+    stream_for_stage: Callable | None = None
     log_event: Callable | None = None
     audio_permission: Callable | None = None
     allow_model_downloads: bool = False
@@ -108,9 +109,20 @@ class PreparationContext:
         if self.progress:
             self.progress(message)
 
+    def stream_options(self, stage, target):
+        if not self.stream_for_stage or not _accepts_delta(target):
+            return {}
+        return {"on_delta": self.stream_for_stage(stage)}
+
     def check_cancel(self):
         if self.cancelled and self.cancelled():
             raise PreparationCancelled("已取消；已完成的转写和学习材料已保存")
+
+
+def _accepts_delta(target):
+    # Third-party/batch test backends may still implement the non-streaming interface.
+    from inspect import signature
+    return "on_delta" in signature(target).parameters
 
 
 def _compatible_asr_cache(cached, spec):
@@ -151,7 +163,7 @@ def _needs_text_configuration(error):
 
 
 
-def review_document(document, settings, store, spec, report, check_cancel, cancelled, profile=None, *, ports):
+def review_document(document, settings, store, spec, report, check_cancel, cancelled, profile=None, *, ports, on_delta=None):
     """Checkpoint the whole-film reviewer independently from lesson annotation."""
     metadata = document.metadata
     same = metadata.get("review_spec") == spec
@@ -221,7 +233,8 @@ def review_document(document, settings, store, spec, report, check_cancel, cance
                         done=len(completed), total=len(document.cues), unit="句"))
         if pending:
             result = reviewer.review(pending, document.language, progress=report,
-                                     cancelled=cancelled, checkpoint=checkpoint, context_cues=original_cues)
+                                     cancelled=cancelled, checkpoint=checkpoint, context_cues=original_cues,
+                                     **({"on_delta": on_delta} if on_delta and _accepts_delta(reviewer.review) else {}))
             checkpoint(result)
         check_cancel()
         metadata.update(review_stage="ready", stage="reviewed", review_finished_at=time.time())
@@ -731,7 +744,8 @@ def run_review_stage(ctx: PreparationContext):
     if not smart and ctx.plan.review_spec and not ctx.reuse_existing_transcript:
         ctx.report(Progress("开始文本复核", stage="文本复核", stage_code="review"))
         try:
-            ctx.ports.review_document(ctx.document, ctx.settings, ctx.store, ctx.plan.review_spec, ctx.report, ctx.check_cancel, ctx.cancelled, ctx.plan.review_profile)
+            ctx.ports.review_document(ctx.document, ctx.settings, ctx.store, ctx.plan.review_spec, ctx.report, ctx.check_cancel, ctx.cancelled, ctx.plan.review_profile,
+                                      **ctx.stream_options("文本复核", ctx.ports.review_document))
         except ProviderError as exc:
             if ctx.plan.agent_workflow and _needs_text_configuration(exc):
                 ctx.document.metadata.update(stage="partial", lesson_status="needs_teaching", error=type(exc).__name__)
@@ -846,7 +860,8 @@ def run_teaching_stage(ctx: PreparationContext):
                 raw = ctx.document.metadata.get("raw_display_text", {})
                 context = [replace(c, original_text=raw.get(c.id, c.text)) for c in context]
             result = ctx.agent.annotate(ctx.pending, ctx.language, progress=ctx.report, cancelled=ctx.cancelled,
-                                        checkpoint=checkpoint, context_cues=context)
+                                        checkpoint=checkpoint, context_cues=context,
+                                        **ctx.stream_options("逐句讲解", ctx.agent.annotate))
             checkpoint(result)
         if not all(c.translation.strip() and c.explanation.strip() for c in ctx.document.cues):
             raise ValueError("仍有字幕缺少逐句译文或讲解。")
@@ -858,7 +873,10 @@ def run_verification_stage(ctx: PreparationContext):
     if len(ctx.provided) != len(ctx.document.cues):
         ctx.report(Progress("开始核验新生成的译稿", stage="译稿核验", stage_code="verification", done=len(ctx.review["verified"]),
                         total=len(ctx.document.cues) - len(ctx.provided), unit="句"))
-        ctx.ports.verify_document(ctx.document, ctx.agent, ctx.store, ctx.report, ctx.check_cancel)
+        options = ctx.stream_options("译稿核验", ctx.ports.verify_document)
+        if options:
+            options["cancelled"] = ctx.cancelled
+        ctx.ports.verify_document(ctx.document, ctx.agent, ctx.store, ctx.report, ctx.check_cancel, **options)
     elif all(translation_available(c, ctx.review) for c in ctx.document.cues):
         ctx.review["status"] = "ready"
     else:

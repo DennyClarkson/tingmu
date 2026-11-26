@@ -32,25 +32,26 @@ def _ports():
     )
 
 
-def _review_document(document, settings, store, spec, report, check_cancel, cancelled, profile=None):
+def _review_document(document, settings, store, spec, report, check_cancel, cancelled, profile=None, *, on_delta=None):
     return preparation.review_document(document, settings, store, spec, report,
-                                       check_cancel, cancelled, profile, ports=_ports())
+                                       check_cancel, cancelled, profile, ports=_ports(), on_delta=on_delta)
 
 
-def _verify_document(document, agent, store, report, check_cancel):
+def _verify_document(document, agent, store, report, check_cancel, *, on_delta=None, cancelled=None):
     from .translation_verifier import verify_document
-    return verify_document(document, agent, store, report, check_cancel, event_factory=Event)
+    return verify_document(document, agent, store, report, check_cancel, event_factory=Event,
+                           on_delta=on_delta, cancelled=cancelled)
 
 
 def prepare_media(media_path: Path, settings: AppSettings, store: Store,
                   subtitle_path: Path | None = None, start: float = 0,
                   duration: float | None = None, progress=None, cancelled=None,
                   force_asr: bool = False, audio_permission=None, allow_model_downloads: bool = False,
-                  reuse_existing_transcript: bool = False, *, log_event=None) -> StudyDocument:
+                  reuse_existing_transcript: bool = False, *, log_event=None, stream_for_stage=None) -> StudyDocument:
     ctx = preparation.PreparationContext(
         media_path=media_path, settings=deepcopy(settings), store=store, ports=_ports(),
         subtitle_path=subtitle_path, start=start, duration=duration, progress=progress,
-        cancelled=cancelled, force_asr=force_asr, audio_permission=audio_permission,
+        stream_for_stage=stream_for_stage, cancelled=cancelled, force_asr=force_asr, audio_permission=audio_permission,
         allow_model_downloads=allow_model_downloads, reuse_existing_transcript=reuse_existing_transcript, log_event=log_event,
     )
     preparation.plan_preparation(ctx)

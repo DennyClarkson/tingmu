@@ -133,10 +133,19 @@ Item {
                         property bool evidenceOpen: false
                         readonly property bool current: ListView.isCurrentItem
                         readonly property bool running: modelData.status === "running"
+                        readonly property bool marked: root.selected(modelData.id)
+                        readonly property bool onScreen: root.panelShown && Theme.canAnimate(jobCard)
+                            && jobCard.y + height > jobs.contentY && jobCard.y < jobs.contentY + jobs.height
                         width: Math.max(0, jobs.width - 10); height: jobContents.implicitHeight + 20
                         radius: Theme.radiusMd
-                        color: current ? Theme.tint(Theme.panel, Theme.accent, 0.075) : Theme.surfaceElevated
-                        border.color: current ? Theme.accent : Theme.line
+                        color: Theme.tint(Theme.surfaceElevated, Theme.accent, cardAccent.value * 0.12)
+                        border.color: Theme.tint(Theme.line, Theme.accent, cardAccent.value)
+                        StudioValue {
+                            id: cardAccent; duration: 200
+                            destination: Math.min(1, (jobCard.current ? 0.67 : 0) + (jobCard.running ? 0.22 : 0)
+                                                     + (jobCard.marked ? 0.42 : 0))
+                            permitted: jobCard.onScreen
+                        }
                         MouseArea {
                             anchors.fill: parent; cursorShape: Qt.PointingHandCursor
                             onClicked: jobs.inspect(jobCard.index, jobCard.modelData.id)
@@ -190,8 +199,7 @@ Item {
                                 objectName: "queueStageProgressBar"; Layout.fillWidth: true; implicitHeight: 3
                                 value: jobCard.modelData.progress || 0
                                 indeterminate: jobCard.running && !(jobCard.modelData.stage_total > 0)
-                                animationEnabled: root.panelShown && root.visible && !!root.Window.window
-                                    && root.Window.window.visible && root.Window.window.visibility !== Window.Minimized
+                                animationEnabled: root.panelShown && Theme.canAnimate(rowBar)
                                     && jobCard.y + rowBar.mapToItem(jobCard, 0, 0).y >= jobs.contentY
                                     && jobCard.y + rowBar.mapToItem(jobCard, 0, 0).y < jobs.contentY + jobs.height
                             }

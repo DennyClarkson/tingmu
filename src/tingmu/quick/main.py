@@ -76,7 +76,8 @@ def _open_session(application, catalog, workspace_id, show_setup, initial_path, 
     if switch_summary:
         bridge.chat.create_setup_summary(switch_summary)
     engine = QQmlApplicationEngine()
-    engine.rootContext().setContextProperty("onscreenAnimations", application.platformName() not in ("offscreen", "minimal"))
+    animations = application.platformName() not in ("offscreen", "minimal") and "--portable-smoke" not in sys.argv
+    engine.rootContext().setContextProperty("onscreenAnimations", animations)
     language = application._tingmu_language
     engine.rootContext().setContextProperty("interfaceLanguage", language)
     language.changed.connect(engine.retranslate)

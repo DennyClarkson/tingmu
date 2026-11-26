@@ -35,18 +35,26 @@ def text_server(release_text_response):
             calls.append((self.path, "discover", self.headers.get("Authorization")))
             self.respond(b'{"data":[{"id":"local-test"}]}')
 
+        def completion(self, answer, stream):
+            if stream:
+                event = {"model": "local-test", "choices": [{"delta": {"content": answer}, "finish_reason": "stop"}]}
+                self.respond(("data: " + json.dumps(event) + "\n\ndata: [DONE]\n\n").encode(), "text/event-stream")
+            else:
+                self.respond(json.dumps({"model": "local-test", "choices": [{"finish_reason": "stop",
+                    "message": {"role": "assistant", "content": answer}}]}).encode())
+
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-            if body.get("stream"):
-                calls.append((self.path, "companion", self.headers.get("Authorization")))
-                event = {"model": "local-test", "choices": [{"delta": {"content": "本机回复"}, "finish_reason": "stop"}]}
-                self.respond(("data: " + json.dumps(event) + "\n\ndata: [DONE]\n\n").encode(), "text/event-stream")
+            stream = body.get("stream", False)
+            if stream and not body.get("response_format"):
+                calls.append((self.path, "companion", self.headers.get("Authorization"), stream))
+                self.completion("本机回复", stream)
                 return
             data = json.loads(body["messages"][-1]["content"])
             role = "review" if "document_context" in data else "annotation"
             if "segments" in data["cues"][0] and "translation" in data["cues"][0]:
                 role = "translation_review"
-            calls.append((self.path, role, self.headers.get("Authorization")))
+            calls.append((self.path, role, self.headers.get("Authorization"), stream))
             if not release_text_response.wait(timeout=15):
                 self.send_error(503)
                 return
@@ -61,9 +69,7 @@ def text_server(release_text_response):
                     row = {**cue, "translation": "测试译文", "explanation": "测试讲解", "uncertain": False,
                            "tokens": [{"text": text, "reading": "", "meaning": "释义", "learn": False}]}
                 rows.append(row)
-            answer = json.dumps({"cues": rows})
-            self.respond(json.dumps({"model": "local-test", "choices": [{"finish_reason": "stop",
-                "message": {"role": "assistant", "content": answer}}]}).encode())
+            self.completion(json.dumps({"cues": rows}), stream)
 
         def log_message(self, *unused):
             pass
@@ -162,6 +168,7 @@ def test_preparation_queue_shows_simultaneous_model_requests(quick, qtbot, tmp_p
     doc = bridge.store.load_document(str(movie), bridge._settings.language)
     assert len(doc.cues) == 84
     assert all(cue.translation == "经复核的译文" for cue in doc.cues)
+    assert all(call[3] is True for call in calls)
 
 
 def test_loopback_authentication_and_remote_role_boundaries(tmp_path):

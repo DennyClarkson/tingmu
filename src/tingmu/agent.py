@@ -11,8 +11,8 @@ from dataclasses import asdict, replace
 from urllib.parse import urlsplit
 
 from .models import MAX_LLM_CONCURRENCY, Cue, LanguagePair, Token
-from .providers import ProviderError as AgentError
-from .llm_client import LlmClient, default_config, environment
+from .providers import ProviderError as AgentError, RequestCancelled
+from .llm_client import BatchOutput, LlmClient, default_config, environment
 from .batch_scheduler import BatchResponse, ConcurrentBatchScheduler, PartialBatchResult, RepairPolicy
 from .task_progress import Progress, batch_progress
 
@@ -630,15 +630,27 @@ class TextBatchTask:
     def _request(self, path, body=None, *, on_reasoning=None):
         return self.client.request(path, body, on_reasoning=on_reasoning)
 
+    _builtin_request = _request
+
+    def _completion_request(self):
+        return self._request if self._request != self._builtin_request else None
+
     def stream_request(self, body, *, on_delta=None, cancelled=None, on_reasoning=None):
         return self.client.stream_request(body, on_delta=on_delta, cancelled=cancelled, on_reasoning=on_reasoning)
 
     def _stream_request(self, body, *, on_delta=None, cancelled=None, on_reasoning=None):
         return self.client.stream_request(body, on_delta=on_delta, cancelled=cancelled, on_reasoning=on_reasoning)
 
+    def bind_batch(self, batch_id, on_delta, cancelled):
+        self._batch_output = BatchOutput(batch_id, on_delta)
+        self._batch_cancelled = cancelled
+
     def complete(self, system, payload, schema=None):
-        return self.client.complete(system, payload, schema, request=self._request,
-                                    annotation_version=ANNOTATION_VERSION)
+        output = getattr(self, "_batch_output", None)
+        return self.client.complete(system, payload, schema, request=self._completion_request(),
+                                    annotation_version=ANNOTATION_VERSION,
+                                    on_delta=output.next_response() if output else None,
+                                    cancelled=getattr(self, "_batch_cancelled", None))
 
     def _complete(self, system, payload, schema=None):
         return self.complete(system, payload, schema)
@@ -829,8 +841,8 @@ class LearningAgent(TextBatchTask):
                     "apostrophes; do not expand contractions. All required keys and correct types are mandatory."
                 )
 
-    def annotate(self, cues, language, progress=None, cancelled=None, checkpoint=None, context_cues=None):
-        return run_annotation(self, cues, language, progress, cancelled, checkpoint, context_cues)
+    def annotate(self, cues, language, progress=None, cancelled=None, checkpoint=None, context_cues=None, *, on_delta=None):
+        return run_annotation(self, cues, language, progress, cancelled, checkpoint, context_cues, on_delta=on_delta)
 
     def verify_translations(self, cues, language, context):
         """Independently check the teacher's drafts, returning only known-language translations."""
@@ -945,7 +957,7 @@ def run_annotation(
     cancelled=None,
     checkpoint=None,
     context_cues: list[Cue] | None = None,
-    *, stage_label="语言分析", cancellation_label="学习分析",
+    *, stage_label="语言分析", cancellation_label="学习分析", on_delta=None,
 ) -> list[Cue]:
     if len({cue.id for cue in cues}) != len(cues):
         raise AnnotationValidationError("输入字幕 ID 重复。")
@@ -1009,6 +1021,9 @@ def run_annotation(
 
     def execute(job, stopped):
         worker = batch_worker(template)
+        # A failed sibling stops submissions. Only a user cancellation should
+        # abort an already-issued request that could still produce valid cues.
+        worker.bind_batch(job.index, on_delta, cancelled)
         worker.repair_feedback = dict(job.feedback)
         worker.repair_attempt = job.attempt
         start, end = job.indices[0], job.indices[-1] + 1
@@ -1070,7 +1085,7 @@ def run_annotation(
         keys=[cue.id for cue in cues], plans=plans, execute=execute, max_workers=template.max_workers,
         result_key=lambda cue: cue.id, recoverable=splittable_batch_error, make_error=locate_error,
         policy=RepairPolicy(split_invalid=template.split_invalid_batches), cancelled=cancelled,
-        cancelled_error=lambda exc: isinstance(exc, _BatchCancelled), feedback=self.pending_repair_errors,
+        cancelled_error=lambda exc: isinstance(exc, (_BatchCancelled, RequestCancelled)), feedback=self.pending_repair_errors,
         before_submit=before_submit, on_update=publish, checkpoint=checkpoint, thread_name="tingmu-language")
     self.pending_repair_errors = scheduler.pending_errors
     self.checkpoint_metadata = scheduler.checkpoint_metadata

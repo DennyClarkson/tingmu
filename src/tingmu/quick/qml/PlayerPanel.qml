@@ -71,7 +71,13 @@ Item {
             textPosition=prefs.textPosition || null;bitmapPosition=prefs.bitmapPosition || null
         }
     }
-    Timer { id:hideControls; interval:root.hideDelay*1000; onTriggered:if(root.autoHide && backend.playbackDetails.playing && !barHover.hovered && !overlayDrag.pressed && !resizeGrip.pressed && !settingsPopup.opened)root.controlsVisible=false }
+    Timer {
+        id: hideControls
+        interval: root.hideDelay * 1000
+        onTriggered: if (root.fullscreen && root.autoHide && root.playing && !transport.interacting
+                         && !overlayDrag.pressed && !resizeGrip.pressed && !settingsPopup.opened)
+                         root.controlsVisible = false
+    }
     Timer {
         id: singleClick
         property string mediaPath
@@ -211,7 +217,7 @@ Item {
             readonly property real bitmapTop:embeddedBitmap.y + (bitmap.y || 0)*embeddedBitmap.height
             readonly property real bitmapBottom:bitmapTop + (bitmap.height || 0)*embeddedBitmap.height
             readonly property string embeddedCaption:backend.playbackDetails.embeddedText || ""
-            readonly property real controlsClearance:root.fullscreen && !root.reserveBar && root.controlsVisible ? Math.max(0, y+height-fullWindow.height+transport.height+8) : 0
+            readonly property real controlsClearance:root.fullscreen && !root.reserveBar && root.controlsVisible ? Math.max(0, y+height-transport.y+8) : 0
             clearance:Math.max(controlsClearance, !placement && bitmap.height && bitmapTop>height/2 ? height-bitmapTop+5 : 0)
             topClearance:bitmap.height && bitmapTop<=height/2 ? bitmapBottom+5 : 0
             fontScale:root.fullscreen ? 1.2 : 1
@@ -232,8 +238,17 @@ Item {
         onHeightChanged:if(visible){root.fullscreenGeometryReady=false;sceneSettled.restart()}
         onVisibilityChanged:sceneSettled.restart()
         PlaybackShortcuts{player:root;active:root.fullscreen}
+        // The film does not receive mouse movement in the reserved space around the pod.
+        MouseArea {
+            anchors.fill: parent
+            acceptedButtons: Qt.NoButton
+            hoverEnabled: root.fullscreen
+            cursorShape: root.controlsVisible ? Qt.ArrowCursor : Qt.BlankCursor
+            onPositionChanged: root.showControls()
+        }
         Item {
-            id:fullVideoHost;objectName:"fullscreenVideoArea";anchors.fill:parent;anchors.bottomMargin:root.reserveBar ? transport.height : 0
+            id:fullVideoHost;objectName:"fullscreenVideoArea";anchors.fill:parent
+            anchors.bottomMargin:root.reserveBar ? transport.height + transport.anchors.bottomMargin : 0
         }
         Rectangle {
             anchors.top:parent.top; width:parent.width; height:fullscreenHeader.implicitHeight+24
@@ -270,7 +285,7 @@ Item {
                         property point lastGlobal
                         onPressed:function(mouse){lastGlobal=mapToGlobal(mouse.x,mouse.y);root.showControls()}
                         onPositionChanged:function(mouse){if(pressed){var p=mapToGlobal(mouse.x,mouse.y);overlay.x+=p.x-lastGlobal.x;overlay.y+=p.y-lastGlobal.y;lastGlobal=p;root.clampOverlay()}}
-                        onReleased:root.saveOverlay()
+                        onReleased:{root.saveOverlay();root.showControls()}
                     }
                     TButton { anchors.right:parent.right; iconSource:"close"; quiet:true; implicitHeight:26; tip:qsTranslate("Tingmu", "隐藏伴侣浮层"); onClicked:{root.overlayVisible=false;root.saveOverlay()} }
                 }
@@ -293,7 +308,7 @@ Item {
                 property real initialHeight
                 onPressed:function(mouse){origin=mapToGlobal(mouse.x,mouse.y);initialWidth=overlay.width;initialHeight=overlay.height;root.showControls()}
                 onPositionChanged:function(mouse){if(pressed){var p=mapToGlobal(mouse.x,mouse.y);overlay.width=Math.max(280,Math.min(fullWindow.width-overlay.x,initialWidth+p.x-origin.x));overlay.height=Math.max(180,Math.min(fullVideoHost.height-overlay.y,initialHeight+p.y-origin.y))}}
-                onReleased:root.saveOverlay()
+                onReleased:{root.saveOverlay();root.showControls()}
                 Image {
                     anchors.centerIn: parent
                     width: 18; height: 18
@@ -302,12 +317,19 @@ Item {
                 }
             }
         }
-        Rectangle {
-            id:transport;objectName:"fullscreenTransport"
-            anchors.bottom:parent.bottom; width:parent.width; height:fullControls.implicitHeight+8; visible:root.controlsVisible
-            color:Theme.surfaceElevated
-            PlayerControls { id:fullControls;anchors.centerIn:parent;width:Math.min(parent.width,1160);settings:root;fullscreen:true;onFullscreenRequested:root.toggleFullscreen();onSettingsRequested:root.openSettings() }
-            HoverHandler { id:barHover;onHoveredChanged:root.showControls() }
+        PlayerControls {
+            id: transport
+            objectName: "fullscreenTransport"
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: 16
+            width: Math.max(0, Math.min(parent.width - 32, 1160))
+            height: implicitHeight
+            visible: root.controlsVisible
+            fullscreen: true
+            settings: root
+            onFullscreenRequested: root.toggleFullscreen()
+            onSettingsRequested: root.openSettings()
         }
     }
     SettingPopup {

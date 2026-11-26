@@ -14,9 +14,9 @@ import unicodedata
 from .agent import AnnotationValidationError, _json_loads
 from .batch_scheduler import BatchResponse, ConcurrentBatchScheduler
 from .language import learning_text
-from .llm_client import LlmClient
+from .llm_client import BatchOutput, LlmClient
 from .models import Cue, MAX_LLM_CONCURRENCY
-from .providers import ProviderError, RequestCancelled, request as provider_request
+from .providers import ProviderError, RequestCancelled
 from .review import validate_review
 from .timeline import MAX_LINE_WIDTH, MIN_SPLIT_MS, display_width
 
@@ -384,7 +384,7 @@ def _subdivide(units, begin, stop):
     return max(candidates, key=lambda i: (_boundary_quality(units, i), -abs(i - middle), -i))
 
 
-def _run_chunk(units, a, b, language, worker, stopped, protected):
+def _run_chunk(units, a, b, language, worker, stopped, protected, output, cancelled):
     calls = []
 
     def solve(start, stop, depth):
@@ -417,13 +417,7 @@ def _run_chunk(units, a, b, language, worker, stopped, protected):
             metadata = {}
             try:
                 if type(worker) is LlmClient:
-
-                    def request(path, body):
-                        return provider_request(
-                            worker.transport_config(), path, body, timeout=worker.timeout, cancelled=stopped
-                        )
-
-                    reply = worker.complete(SYSTEM, payload, SCHEMA, request=request)
+                    reply = worker.complete(SYSTEM, payload, SCHEMA, on_delta=output.next_response(), cancelled=cancelled)
                 else:
                     reply = getattr(worker, "complete", worker)(SYSTEM, deepcopy(payload), deepcopy(SCHEMA))
                 if isinstance(reply, str):
@@ -651,6 +645,7 @@ def regroup(
     resume=None,
     progress=None,
     client=None,
+    on_delta=None,
 ):
     """Return (cues, audit, lineage). Progress receives one text message.
 
@@ -738,7 +733,7 @@ def regroup(
         i = job.indices[0]
         a, b = plans[i]
         worker = client.fork() if client is not None and hasattr(client, "fork") else client
-        entry = _run_chunk(units, a, b, language, worker, stopped, locked[a])
+        entry = _run_chunk(units, a, b, language, worker, stopped, locked[a], BatchOutput(i, on_delta), cancelled)
         key = str(i)
         entry["digest"] = _hash([fingerprint, key, entry["groups"], entry["responses"]])
         return BatchResponse(value=[(key, entry)])

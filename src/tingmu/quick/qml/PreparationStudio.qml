@@ -34,11 +34,45 @@ ColumnLayout {
     onJobChanged: if (running) clockMs = Date.now()
     spacing: compact ? 9 : 14
 
-    function onScreen(item) {
-        if (!panelShown || !visible || !viewport || !Theme.canAnimate(item))
+    function onScreen(item, collapseAnchor) {
+        if (!panelShown || !visible || !viewport || !Theme.canAnimate(collapseAnchor || item))
             return false
-        const top = item.mapToItem(viewport.contentItem, 0, 0).y - viewport.contentY
-        return item.width > 0 && item.height > 0 && top < viewport.height && top + item.height > 0
+        // Reading ancestor positions keeps bindings current while a layout moves or resizes.
+        let top = 0, left = 0
+        let bottom = Math.max(item.height, collapseAnchor ? 1 : 0), right = item.width
+        let node = item
+        while (node && node !== viewport.contentItem) {
+            top += node.y; bottom += node.y
+            left += node.x; right += node.x
+            node = node.parent
+            if (node && node.clip && node !== viewport.contentItem) {
+                top = Math.max(0, top); bottom = Math.min(node.height, bottom)
+                left = Math.max(0, left); right = Math.min(node.width, right)
+            }
+        }
+        return !!node && right > left && bottom > top && top < viewport.contentY + viewport.height
+            && bottom > viewport.contentY && left < viewport.contentX + viewport.width && right > viewport.contentX
+    }
+    readonly property string streamIdentity: JSON.stringify([job.id, job.matrix_stage, job.stage_name,
+        job.status, slots.map(b => [b.id, b.status])])
+    onStreamIdentityChanged: Qt.callLater(refreshStreams)
+    function refreshStreams(visibleOnly) {
+        if (!panelShown || !visible || !hasJob || !slots.length || !workers) return
+        const streams = backend.studioStreams(job.id, job.matrix_stage || job.stage_name || "")
+        for (let i = 0; i < workers.count; ++i) {
+            const worker = workers.itemAt(i)
+            if (!worker || worker.batch.id === undefined || (visibleOnly && !worker.streamVisible)) continue
+            const sample = streams[String(worker.batch.id)]
+            if (sample) worker.stream.accept(sample)
+            else if (worker.streamVisible) worker.stream.snapOnNext = false
+        }
+    }
+    Timer {
+        id: streamPoll
+        objectName: "studioStreamPoll"
+        interval: 50; repeat: true
+        running: studio.running && studio.onScreen(matrixCard) && workers.haveVisibleRequest
+        onTriggered: studio.refreshStreams(true)
     }
     function outcome(status) {
         switch (status) {
@@ -94,9 +128,10 @@ ColumnLayout {
     }
     component Card: Rectangle {
         default property alias contents: stack.data
+        readonly property real contentsHeight: stack.implicitHeight + 24
         Layout.fillWidth: true
         Layout.preferredWidth: 1; Layout.alignment: Qt.AlignTop
-        implicitHeight: stack.implicitHeight + 24
+        implicitHeight: contentsHeight
         color: Theme.surfaceElevated
         border.color: Theme.line
         radius: Theme.radiusMd
@@ -213,7 +248,12 @@ ColumnLayout {
                 spacing: 1; Layout.fillWidth: true; Layout.preferredWidth: 1.18
                 Label {
                     objectName: "studioOverallPercent"
-                    text: studio.complete || studio.stageIndex >= 0 || studio.measured ? Math.floor(100 * studio.overall) + "%" : "—"
+                    text: studio.complete || studio.stageIndex >= 0 || studio.measured
+                        ? Math.floor(100 * percentMotion.value) + "%" : "—"
+                    StudioValue {
+                        id: percentMotion; destination: studio.overall
+                        permitted: studio.onScreen(metrics)
+                    }
                     font.family: Theme.mono; font.pixelSize: studio.width >= 610 ? 39 : studio.width >= 350 ? 30 : 22
                     font.weight: Font.DemiBold; color: Theme.accent
                 }
@@ -228,12 +268,12 @@ ColumnLayout {
         }
         AppProgressBar {
             id: stageBar
-            objectName: "studioStageProgressBar"; Layout.fillWidth: true; value: studio.overall
+            objectName: "studioStageProgressBar"; Layout.fillWidth: true; value: progressMotion.value
             indeterminate: studio.running && studio.stageIndex <= 0 && !studio.measured
             animationEnabled: studio.onScreen(stageBar)
-            Behavior on value {
-                enabled: studio.running && studio.onScreen(stageBar)
-                NumberAnimation { duration: 260; easing.type: Easing.OutCubic }
+            StudioValue {
+                id: progressMotion; destination: studio.overall
+                permitted: studio.onScreen(stageBar)
             }
         }
         StudioStepper { studio: studioRoot }
@@ -254,7 +294,13 @@ ColumnLayout {
             id: matrixCard
             Layout.columnSpan: studio.samples.length > 0 ? 1 : detailGrid.columns
             objectName: "studioBatchMatrix"
-            visible: studio.hasJob && studio.slots.length > 0
+            visible: studio.hasJob && (studio.slots.length > 0 || matrixReveal.value > 0)
+            implicitHeight: contentsHeight * matrixReveal.value
+            opacity: matrixReveal.value; clip: true
+            StudioValue {
+                id: matrixReveal; destination: studio.slots.length > 0 ? 1 : 0
+                permitted: studio.onScreen(matrixCard, detailGrid)
+            }
             Heading { text: qsTranslate("Tingmu", "并发批次") }
             Label {
                 color: Theme.muted; font.pixelSize: 11
@@ -265,49 +311,20 @@ ColumnLayout {
                 columns: Math.min(studio.capacity, width >= 640 ? 4 : width >= 425 ? 3 : 2)
                 columnSpacing: 4; rowSpacing: 4
                 Repeater {
+                    id: workers
                     model: studio.capacity
-                    delegate: Rectangle {
-                        id: slot
-                        required property int index
-                        readonly property var batch: studio.slots[index] || ({})
-                        readonly property color ink: batch.status === "failed" ? Theme.danger
-                            : batch.repair || batch.status === "partial" || batch.status === "split" ? Theme.warning
-                            : batch.status === "running" || batch.status === "completed" ? Theme.accent : Theme.muted
-                        Layout.fillWidth: true; Layout.preferredWidth: 1
-                        implicitHeight: slotContents.implicitHeight + 12
-                        radius: Theme.radiusSm; color: Theme.tint(Theme.panel, ink, batch.status ? 0.10 : 0.03)
-                        border.color: Theme.tint(Theme.line, ink, batch.status === "running" ? 0.6 : 0.10)
-                        ColumnLayout {
-                            id: slotContents
-                            anchors { top: parent.top; left: parent.left; right: parent.right; margins: 6 }
-                            spacing: 3
-                            Label {
-                                text: (slot.batch.id !== undefined ? "#" + String(slot.batch.id).padStart(2, "0") : "·") + "  " + studio.outcome(slot.batch.status)
-                                font.pixelSize: 12; font.weight: Font.DemiBold; color: slot.ink
-                            }
-                            Label {
-                                visible: !!slot.batch.label
-                                font.pixelSize: 12; color: Theme.muted
-                                text: (slot.batch.repair ? qsTranslate("Tingmu", "重试 · ") : "")
-                                    + (/^分块 /.test(slot.batch.label || "") ? qsTranslate("Tingmu", "分块 %1").arg(slot.batch.label.slice(3))
-                                    : qsTranslate("TingmuStatus", slot.batch.label || ""))
-                            }
-                            Label {
-                                visible: slot.batch.total !== undefined
-                                text: (slot.batch.done || 0) + " / " + (slot.batch.total || 0)
-                                color: Theme.text; font.pixelSize: 12; font.family: Theme.mono
-                            }
-                            AppProgressBar {
-                                id: batchBar
-                                objectName: "queueBatchProgressBar"
-                                readonly property var batch: slot.batch
-                                Layout.fillWidth: true; implicitHeight: 3
-                                indeterminate: studio.running && batch.status === "running"
-                                animationEnabled: studio.onScreen(batchBar)
-                                value: batch.total ? batch.done / batch.total : 0
-                            }
+                    property int revision: 0
+                    onItemAdded: { revision++; Qt.callLater(studio.refreshStreams) }
+                    onItemRemoved: revision++
+                    readonly property bool haveVisibleRequest: {
+                        const revisionRead = revision
+                        for (let i = 0; i < count; ++i) {
+                            const worker = itemAt(i)
+                            if (worker && worker.processing && worker.streamVisible) return true
                         }
+                        return false
                     }
+                    delegate: StudioWorker { studio: studioRoot }
                 }
             }
             Label {
@@ -319,19 +336,7 @@ ColumnLayout {
         Card {
             objectName: "studioVerifiedPreview"; visible: studio.samples.length > 0
             Heading { text: qsTranslate("Tingmu", "最近核验的双语字幕") }
-            Repeater {
-                model: studio.samples
-                delegate: RowLayout {
-                    required property var modelData
-                    Layout.fillWidth: true; spacing: 9
-                    Rectangle { Layout.fillHeight: true; implicitWidth: 2; color: Theme.accent }
-                    ColumnLayout {
-                        Layout.fillWidth: true; spacing: 2
-                        Label { text: modelData.source; font.weight: Font.DemiBold; wrapMode: Text.WrapAnywhere }
-                        Label { text: modelData.translation; color: Theme.muted; wrapMode: Text.WrapAnywhere }
-                    }
-                }
-            }
+            VerifiedRows { studio: studioRoot }
         }
         Card {
             objectName: "studioSourceEvidence"
@@ -359,32 +364,50 @@ ColumnLayout {
                 value: studio.counts[0] ? studio.counts[1] / studio.counts[0] : 0
             }
             TButton {
+                id: evidenceToggle
+                objectName: "studioEvidenceToggle"
                 visible: !!(studio.job.evidence_notes || []).length || !!(studio.job.track_evidence || []).length
                 quiet: true; implicitHeight: Theme.compactHeight
                 text: studio.evidenceOpen ? qsTranslate("Tingmu", "收起字幕检查详情") : qsTranslate("Tingmu", "字幕检查详情")
                 onClicked: studio.evidenceOpen = !studio.evidenceOpen
             }
-            Repeater {
-                model: studio.evidenceOpen ? studio.job.track_evidence || [] : []
-                delegate: ColumnLayout {
-                    required property var modelData
-                    Layout.fillWidth: true; spacing: 2
-                    Label {
-                        text: [(modelData.name.startsWith("内嵌字幕轨 ") ? qsTranslate("TingmuStatus", modelData.name) : modelData.name),
-                            modelData.codec, modelData.language].filter(Boolean).join(" · ")
-                        font.weight: Font.DemiBold; wrapMode: Text.WrapAnywhere
+            Item {
+                id: evidenceBody
+                objectName: "studioEvidenceBody"
+                Layout.fillWidth: true
+                visible: expansion.value > 0
+                implicitHeight: evidenceContent.implicitHeight * expansion.value
+                opacity: expansion.value; clip: true
+                StudioValue {
+                    id: expansion; destination: studio.evidenceOpen ? 1 : 0
+                    permitted: studio.onScreen(evidenceToggle)
+                }
+                ColumnLayout {
+                    id: evidenceContent
+                    width: parent.width; spacing: 6
+                    Repeater {
+                        model: studio.job.track_evidence || []
+                        delegate: ColumnLayout {
+                            required property var modelData
+                            Layout.fillWidth: true; spacing: 2
+                            Label {
+                                text: [(modelData.name.startsWith("内嵌字幕轨 ") ? qsTranslate("TingmuStatus", modelData.name) : modelData.name),
+                                    modelData.codec, modelData.language].filter(Boolean).join(" · ")
+                                font.weight: Font.DemiBold; wrapMode: Text.WrapAnywhere
+                            }
+                            Label {
+                                text: [modelData.source ? qsTranslate("Tingmu", "采用原文") : "", modelData.reference ? qsTranslate("Tingmu", "参考译文") : "",
+                                    qsTranslate("TingmuEvidence", modelData.reason || "")].filter(Boolean).join(" · ")
+                                visible: !!text; color: Theme.muted; font.pixelSize: 11
+                            }
+                        }
                     }
                     Label {
-                        text: [modelData.source ? qsTranslate("Tingmu", "采用原文") : "", modelData.reference ? qsTranslate("Tingmu", "参考译文") : "",
-                            qsTranslate("TingmuEvidence", modelData.reason || "")].filter(Boolean).join(" · ")
-                        visible: !!text; color: Theme.muted; font.pixelSize: 11
+                        visible: !!text
+                        text: (studio.job.screening_notes || studio.job.evidence_notes || []).map(note => qsTranslate("TingmuEvidence", note)).join("\n")
+                        font.pixelSize: 11; color: Theme.muted
                     }
                 }
-            }
-            Label {
-                visible: studio.evidenceOpen && !!text
-                text: (studio.job.screening_notes || studio.job.evidence_notes || []).map(note => qsTranslate("TingmuEvidence", note)).join("\n")
-                font.pixelSize: 11; color: Theme.muted
             }
         }
         Card {

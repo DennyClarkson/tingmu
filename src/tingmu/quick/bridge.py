@@ -207,7 +207,7 @@ class Bridge(QObject):
         if not self._layout and self._settings.subtitle_gap_ms == 180:
             self._settings.subtitle_gap_ms = 500
         self.catalog = MediaLibrary(store)
-        self.queue = PreparationQueue(store)
+        self.queue = PreparationQueue(store, stream_preview=True)
         self._player = QMediaPlayer(self)
         self.audio = QAudioOutput(self)
         self.audio.setVolume(0.7)
@@ -553,6 +553,10 @@ class Bridge(QObject):
     @Property(QObject, constant=True)
     def messageModel(self):
         return self._message_model
+
+    @Slot(str, str, result="QVariantMap")
+    def studioStreams(self, job_id, stage):
+        return self.queue.streams.snapshot(job_id, stage)
 
     @Property(QObject, constant=True)
     def jobModel(self):

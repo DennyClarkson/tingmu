@@ -299,6 +299,14 @@ class TranscriptReviewer(TextBatchTask):
         options = {"on_reasoning": on_reasoning} if on_reasoning is not None else {}
         return legacy_learning_request(self, path, body, **options)
 
+    _builtin_request = _request
+
+    def _completion_request(self):
+        from .agent import LearningAgent
+        if LearningAgent._request is not TextBatchTask._builtin_request:
+            return self._request
+        return super()._completion_request()
+
     def _annotate_batch(self, cues, language, cursor, end, stopped, context_texts, context_positions):
         batch = cues[cursor:end]
         ids = request_ids(batch)
@@ -357,7 +365,7 @@ class TranscriptReviewer(TextBatchTask):
         return PartialBatchResult(result, errors) if errors else result
 
     def review(self, cues: list[Cue], language: LanguagePair, progress=None, cancelled=None,
-               checkpoint=None, context_cues: list[Cue] | None = None) -> list[Cue]:
+               checkpoint=None, context_cues: list[Cue] | None = None, *, on_delta=None) -> list[Cue]:
         timeline = copy.deepcopy(cues if context_cues is None else context_cues)
         self._review_context = _document_context(timeline, language)
         self.context_metadata = {key: value for key, value in self._review_context.items() if key != "text"}
@@ -377,6 +385,6 @@ class TranscriptReviewer(TextBatchTask):
         try:
             return run_annotation(self, cues, language, progress=progress, cancelled=cancelled,
                                   checkpoint=save, context_cues=timeline,
-                                  stage_label="全文复核", cancellation_label="全文复核")
+                                  stage_label="全文复核", cancellation_label="全文复核", on_delta=on_delta)
         finally:
             sync_metadata()

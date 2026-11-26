@@ -9,12 +9,20 @@ Rectangle {
     property bool fullscreen: false
     signal fullscreenRequested()
     signal settingsRequested()
-    implicitHeight: 86
+    implicitHeight: fullscreen ? 94 : 86
     color: fullscreen ? Theme.surfaceElevated : Theme.panel
+    radius: fullscreen ? Theme.radiusLg : 0
+    bottomLeftRadius: fullscreen ? radius : Theme.radiusMd - 1
+    bottomRightRadius: bottomLeftRadius
+    border.width: fullscreen ? 1 : 0
+    border.color: Theme.line
     readonly property bool hasMedia: !!backend.mediaState.mediaPath
     readonly property bool wide: width >= 590
     readonly property bool tight: width < 285
     readonly property real position: seek.pressed ? seek.value : backend.playbackPosition
+    readonly property bool interacting: barHover.hovered || seek.pressed || volume.pressed || rate.popup.visible
+    onInteractingChanged: if (fullscreen && visible) settings.showControls()
+    HoverHandler { id: barHover; enabled: root.fullscreen }
 
     component Tool: TButton {
         quiet: true
@@ -25,10 +33,10 @@ Rectangle {
         Accessible.name: tip || text
     }
     component Rule: Rectangle { implicitWidth: 1; implicitHeight: 16; color: Theme.line }
-    Rectangle { anchors.top: parent.top; width: parent.width; height: 1; color: Theme.line }
+    Rectangle { visible: !root.fullscreen; anchors.top: parent.top; width: parent.width; height: 1; color: Theme.line }
     ColumnLayout {
         anchors.fill: parent; anchors.leftMargin: root.wide ? 18 : 9; anchors.rightMargin: anchors.leftMargin
-        anchors.topMargin: 5; anchors.bottomMargin: 7; spacing: 1
+        anchors.topMargin: root.fullscreen ? 9 : 5; anchors.bottomMargin: root.fullscreen ? 11 : 7; spacing: 1
         RowLayout {
             Layout.fillWidth: true; spacing: 9
             Text { text: S.time(root.position); color: Theme.text; font.family: Theme.mono; font.pixelSize: 12 }
@@ -94,7 +102,7 @@ Rectangle {
                 onActivated: backend.command("setRate",{value:rates[currentIndex]})
             }
             Tool { visible: root.width>=370;iconSource:backend.playbackDetails.muted ? "volume-off" : "volume";tip:qsTranslate("Tingmu", "静音 · M");onClicked:backend.command("setMuted",{value:!backend.playbackDetails.muted}) }
-            TrackSlider { visible:root.wide;Accessible.name:qsTranslate("Tingmu", "音量");Layout.preferredWidth:58;from:0;to:1;value:backend.playbackDetails.volume;onMoved:backend.command("setVolume",{value:value}) }
+            TrackSlider { id:volume;visible:root.wide;Accessible.name:qsTranslate("Tingmu", "音量");Layout.preferredWidth:58;from:0;to:1;value:backend.playbackDetails.volume;onMoved:backend.command("setVolume",{value:value}) }
             Rule { visible: root.width>=420 }
             Tool { objectName:root.fullscreen ? "fullscreenSettings" : "openPlayerSettings";iconSource:"settings";tip:qsTranslate("Tingmu", "播放器设置");onClicked:root.settingsRequested() }
             Tool { objectName:root.fullscreen ? "leaveFullscreen" : "enterFullscreen";iconSource:root.fullscreen ? "minimize" : "maximize";tip:root.fullscreen ? qsTranslate("Tingmu", "退出全屏 · Esc") : qsTranslate("Tingmu", "全屏 · F");onClicked:root.fullscreenRequested() }

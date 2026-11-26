@@ -3,6 +3,7 @@
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import fields
+import functools
 import hashlib
 import json
 from pathlib import Path
@@ -12,6 +13,7 @@ import time
 from .models import AppSettings, preparation_identity_settings
 from .diagnostics import redact_text
 from .preparation_stages import stage_code, stage_label
+from .studio_stream import StudioStreams
 from .studio_metrics import CueRate, LIVE_FIELDS, quality_summary, record_batch_slot, verified_examples
 from .translation_review import TRANSLATION_REVIEW_VERSION
 from .storage import Store, atomic_json, canonical_path, media_fingerprint
@@ -110,13 +112,14 @@ def subtitle_inputs(media, subtitle):
 
 
 class PreparationQueue:
-    def __init__(self, store: Store):
+    def __init__(self, store: Store, *, stream_preview=False):
         self.store = store
         self.path = store.data_dir / "preparation-queue.json"
         self._lock = threading.RLock()
         self._subscribers = []
         self._revision = 0
         self._saved_payload = None
+        self.streams = StudioStreams() if stream_preview else None
         self._previews = {}  # Local presentation only. Never part of a durable job or its public snapshot.
         self._pause = threading.Event()
         self._running = False
@@ -433,6 +436,8 @@ class PreparationQueue:
                             prior = [r for r in self._previews.get(job["id"], ()) if r["id"] not in ids]
                             self._previews[job["id"]] = (prior + examples)[-3:]
                         _apply_progress(job, details)
+                        if self.streams and "batch" in details:
+                            self.streams.sync(job["id"], job["stage_name"], job["batch_slots"])
                         if cached:
                             job["total_cues"] = len(cached.cues)
                             stage = cached.metadata.get("stage")
@@ -459,6 +464,8 @@ class PreparationQueue:
 
                 try:
                     extra = {"force_asr": True} if job.get("force_asr") else {}
+                    if self.streams:
+                        extra["stream_for_stage"] = functools.partial(self.streams.bind, job["id"])
                     if log_event is not None:
                         extra["log_event"] = log_event
                     if job.get("reuse_existing_transcript"):
@@ -524,6 +531,9 @@ class PreparationQueue:
                     if on_error:
                         on_error(exc)
                     report(f"{job['name']} · {details['progress']}：{details['error_message']}")
+                finally:
+                    if self.streams:
+                        self.streams.clear()
             return self.snapshot()
         finally:
             with self._mutation():

@@ -3,14 +3,15 @@
 from copy import deepcopy
 from threading import Event
 
-from .agent import AnnotationValidationError, batch_worker, splittable_batch_error
+from .agent import AnnotationValidationError, TextBatchTask, batch_worker, splittable_batch_error
 from .batch_scheduler import BatchResponse, ConcurrentBatchScheduler, RepairPolicy
+from .providers import RequestCancelled
 from .task_progress import Progress, batch_progress
 from .translation_review import lesson_digest, translation_available
 from .studio_metrics import verified_examples
 
 
-def verify_document(document, agent, store, report, check_cancel, *, event_factory=Event):
+def verify_document(document, agent, store, report, check_cancel, *, event_factory=Event, on_delta=None, cancelled=None):
     review = document.metadata["translation_review"]
     total = len(document.cues) - len(review.get("provided", {}))
     review["status"] = "running"
@@ -37,6 +38,8 @@ def verify_document(document, agent, store, report, check_cancel, *, event_facto
 
     def execute(job, stopped):
         worker = batch_worker(template)
+        if isinstance(worker, TextBatchTask):
+            worker.bind_batch(job.index + 1, on_delta, cancelled)
         worker.allow_partial_translations = True
         worker.repair_feedback = dict(job.feedback)
         pending = deepcopy([document.cues[index] for index in job.indices])
@@ -91,7 +94,8 @@ def verify_document(document, agent, store, report, check_cancel, *, event_facto
         result_key=lambda result: result[0].id, recoverable=splittable_batch_error, make_error=located_error,
         policy=RepairPolicy(stop_singleton_after_retry=False, split_partial_after_retry=False,
                             retry_invalid_singleton=True, reset_attempt_on_split=True),
-        check_cancel=check_cancel, stop_event=event_factory(), feedback=pending_errors,
+        check_cancel=check_cancel, cancelled=cancelled, cancelled_error=lambda exc: isinstance(exc, RequestCancelled),
+        stop_event=event_factory(), feedback=pending_errors,
         before_submit=before_submit, on_update=publish, checkpoint=lambda _: store.save_document(document),
         thread_name="tingmu-translation")
     review["pending_errors"] = scheduler.pending_errors
@@ -99,6 +103,8 @@ def verify_document(document, agent, store, report, check_cancel, *, event_facto
     agent.checkpoint_metadata = scheduler.checkpoint_metadata
     scheduler.run()
     check_cancel()
+    if cancelled and cancelled():
+        raise RequestCancelled("译文核验已取消。")
     if not all(translation_available(cue, review) for cue in document.cues):
         raise ValueError("仍有译文未通过核验。")
     review["status"] = "ready"

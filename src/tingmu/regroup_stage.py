@@ -91,6 +91,7 @@ def regroup_document(ctx, *, source_kind):
             profile=ctx.plan.review_profile, max_workers=ctx.settings.llm_workers,
             protected_ids=protected, source_cues=sources, quiet_intervals=meta.get("asr_quiet_intervals", ()),
             cancelled=ctx.cancelled, checkpoint=checkpoint, resume=resume, progress=ctx.report,
+            **ctx.stream_options("智能分块重组", regroup),
         )
         ctx.check_cancel()
     except Exception:

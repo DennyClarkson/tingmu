@@ -587,7 +587,11 @@ def request(config, path, body=None, *, timeout=120, on_delta=None, cancelled=No
                 watch.bind(getattr(getattr(response.fp, "raw", None), "_sock", None))
             _check_cancel(cancelled)
             if body and body.get("stream"):
-                return _stream_response(config, response, on_delta, cancelled, emit_reasoning)
+                # Some compatible endpoints ignore stream and send the complete
+                # JSON envelope. Accept it through normal bounded validation once.
+                media_type = getattr(response, "headers", {}).get("Content-Type", "").partition(";")[0]
+                if media_type.strip().lower() != "application/json":
+                    return _stream_response(config, response, on_delta, cancelled, emit_reasoning)
             raw = response.read(8_000_001)
             _check_cancel(cancelled)
             if len(raw) > 8_000_000:

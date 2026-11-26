@@ -56,6 +56,32 @@ def notebook_is_formatted(window):
     return heading and link and table and code
 
 
+def open_smoke_studio(window, bridge):
+    """Render a bounded synthetic lane with the Qt modules in the shipped package."""
+    from PySide6.QtCore import Q_ARG, QMetaObject
+
+    stage = "逐句讲解"
+    slots = [{"id": 1, "status": "running", "label": "第 1 句", "done": 0, "total": 1}]
+    delta = bridge.queue.streams.bind("smoke", stage)
+    bridge.queue.streams.sync("smoke", stage, slots)
+    delta(1, '{"cues":[{"id":"hidden","translation":"Smoke 字幕')
+    bridge._jobs = [{"id": "smoke", "name": "Studio", "status": "running", "worker_limit": 1,
+                     "plan": [stage], "stage_name": stage, "matrix_stage": stage, "batch_slots": slots}]
+    bridge.jobsChanged.emit()
+    QMetaObject.invokeMethod(window, "changeView", Q_ARG("QVariant", "prepare"))
+
+
+def studio_is_rendered(window):
+    items = [window.contentItem()]
+    while items:
+        item = items.pop()
+        if item.objectName() == "studioWorkerStream:0":
+            return (item.property("displayed") == "Smoke 字幕" and not item.property("revealing")
+                    and not item.property("cursorBlinking"))
+        items.extend(item.childItems())
+    return False
+
+
 def check_workspace(window, bridge, checks):
     """Observe initial visibility before requesting the lazily loaded settings form."""
     from PySide6.QtCore import QMetaObject, QObject
@@ -115,6 +141,7 @@ def run_smoke(root: Path, media: Path | None = None) -> int:
         "frames": 0, "errors": [], "blocked_network_events": blocked_network_events, "checks": {},
     }
     report["checks"]["qml_window"] = report["window_visible"] and bool(windows)
+    report["checks"]["studio_animations_disabled"] = engine.rootContext().contextProperty("onscreenAnimations") is False
     report["checks"]["isolated_data"] = bridge.store.data_dir == isolated_data
     report["checks"]["portable_imports"] = all(Path(path).is_relative_to(root) for path in sys.path)
     report["checks"]["bundled_open_fonts"] = all(name in QFontDatabase.families() for name in (
@@ -122,6 +149,7 @@ def run_smoke(root: Path, media: Path | None = None) -> int:
     report["checks"]["v4_learning_workspace"] = bool(bridge.notebooks.get("revision")) and bool(bridge.activeSessionId)
     report["checks"]["model_presets"] = len(bridge.modelPresets) >= 7
     report["checks"]["notebook_markdown_preview"] = False
+    report["checks"]["studio_worker_preview"] = False
     poll_workspace = None
     expect_first_run = is_clean_install()
     skipped = False
@@ -205,8 +233,15 @@ def run_smoke(root: Path, media: Path | None = None) -> int:
             open_smoke_notebook(windows[0], bridge)
             phase = "formatting_notebook"
         elif phase == "formatting_notebook" and notebook_is_formatted(windows[0]):
-            from PySide6.QtCore import Q_ARG
             report["checks"]["notebook_markdown_preview"] = True
+            open_smoke_studio(windows[0], bridge)
+            phase = "rendering_studio"
+        elif phase == "rendering_studio" and studio_is_rendered(windows[0]):
+            from PySide6.QtCore import Q_ARG
+            report["checks"]["studio_worker_preview"] = True
+            bridge.queue.streams.clear()
+            bridge._jobs = []
+            bridge.jobsChanged.emit()
             QMetaObject.invokeMethod(windows[0], "changeView", Q_ARG("QVariant", "watch"))
             phase = "waiting_for_video"
         elif phase == "waiting_for_video":

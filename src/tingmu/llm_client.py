@@ -5,13 +5,28 @@ accounting only; neither credentials nor response bodies enter that accounting.
 """
 from __future__ import annotations
 
-from copy import deepcopy
+from copy import copy, deepcopy
+from functools import partial
 import json
 import os
 import time
 from urllib.parse import urlsplit
 
-from .providers import ProviderError as AgentError, request as provider_request, safe_metadata
+from .providers import ProviderError as AgentError, RequestCancelled, request as provider_request, safe_metadata
+
+
+class BatchOutput:
+    """Scope deltas to one worker. A second completion starts a fresh JSON document."""
+
+    def __init__(self, batch_id, on_delta):
+        self.emit = partial(on_delta, batch_id) if on_delta is not None else None
+        self.started = False
+
+    def next_response(self):
+        if self.started and self.emit is not None:
+            self.emit(None)
+        self.started = True
+        return self.emit
 
 
 def environment(names: tuple[str, ...]) -> str:
@@ -87,10 +102,13 @@ class LlmClient:
 
     def fork(self):
         """Create a fresh request context without rereading environment or credentials."""
-        child = LlmClient("local")
+        # Preserve the concrete transport and its injected callables while
+        # isolating request configuration and response accounting.
+        child = copy(self)
         for key in ("provider", "model", "_profile", "_key", "_base", "timeout",
                     "max_completion_tokens", "reasoning_effort"):
             setattr(child, key, deepcopy(getattr(self, key)))
+        child.last_response_metadata, child.response_metadata = {}, []
         return child
 
     def transport_config(self):
@@ -102,14 +120,19 @@ class LlmClient:
         """Legacy transport inspection hook; new collaborators use transport_config."""
         return self.transport_config()
 
-    def request(self, path, body=None, *, on_reasoning=None):
+    def request(self, path, body=None, *, on_reasoning=None, cancelled=None):
         options = {"on_reasoning": on_reasoning} if on_reasoning is not None else {}
+        if cancelled is not None:
+            options["cancelled"] = cancelled
         return self._request(path, body, **options)
 
-    def _request(self, path, body=None, *, on_reasoning=None):
+    def _request(self, path, body=None, *, on_reasoning=None, cancelled=None):
         """Compatibility hook for existing injected provider fixtures."""
         return provider_request(self.transport_config(), path, body,
-                                timeout=self.timeout, on_reasoning=on_reasoning)
+                                timeout=self.timeout, on_reasoning=on_reasoning, cancelled=cancelled)
+
+    _builtin_request = request
+    _builtin_private_request = _request
 
     def stream_request(self, body, *, on_delta=None, cancelled=None, on_reasoning=None):
         options = {"on_reasoning": on_reasoning} if on_reasoning is not None else {}
@@ -126,7 +149,7 @@ class LlmClient:
                       if isinstance(item, dict) and isinstance(item.get("id"), str))
 
     def complete(self, system: str, payload: dict, schema: dict | None = None, *,
-                 request=None, annotation_version=None) -> str:
+                 request=None, annotation_version=None, on_delta=None, cancelled=None) -> str:
         body = {
             "model": self.model,
             "messages": [
@@ -161,13 +184,33 @@ class LlmClient:
             # schema in the trusted instruction. Local validation is never relaxed.
             body["messages"][0]["content"] += "\nRequired JSON schema: " + json.dumps(schema, ensure_ascii=False)
         started = time.monotonic()
-        for format_attempt in range(3):
+        # An injected ordinary request owns the transport, including when the UI
+        # asks for a preview. Its positional signature predates stream callbacks.
+        if request is None and (self.request != self._builtin_request or self._request != self._builtin_private_request):
+            request = self.request
+        streaming = on_delta is not None and request is None
+        while True:
+            if cancelled and cancelled():
+                raise RequestCancelled("回答已停止。")
             try:
-                response = (request or self.request)("/chat/completions", body)
+                if streaming:
+                    response = self.stream_request({**body, "stream": True}, on_delta=on_delta, cancelled=cancelled)
+                elif request is not None:
+                    response = request("/chat/completions", body)
+                else:
+                    options = {"cancelled": cancelled} if cancelled is not None else {}
+                    response = self.request("/chat/completions", body, **options)
                 break
             except AgentError as exc:
+                if streaming:
+                    if exc.status not in (400, 422) or exc.category != "invalid_request" or not body.get("response_format"):
+                        raise
+                    # Some gateways reject the combination. Keep the same schema
+                    # for the first ordinary request before negotiating the format.
+                    streaming = False
+                    continue
                 if (exc.status not in (400, 422) or exc.category in ("tool_schema", "reasoning_parameter")
-                        or not body.get("response_format") or format_attempt == 2):
+                        or not body.get("response_format")):
                     raise
                 if body["response_format"]["type"] == "json_schema":
                     body["response_format"] = {"type": "json_object"}
