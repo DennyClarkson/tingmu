@@ -25,9 +25,12 @@ def quick(qapp, tmp_path, qtbot):
         if os.path.isfile(font):
             QFontDatabase.addApplicationFont(font)
     app, bridge, engine = create_qml_app(tmp_path / "data")
+    bridge.setting("developer_mode", True)
     window = engine.rootObjects()[0]
     qtbot.wait(100)
     yield app, bridge, engine, window
+    window.setProperty("closingSession", True)
+    window.close()
     bridge.shutdown()
     for child in app.topLevelWindows():
         child.hide()
@@ -61,6 +64,60 @@ def test_watch_prepare_and_independent_chat_share_existing_modules(quick, qtbot)
     assert engine._tingmu_warnings == []
 
 
+def test_student_companion_and_chat_share_sidebar_above_live_subtitles(quick, qtbot):
+    _, bridge, engine, window = quick
+    bridge.setting("developer_mode", False)
+    window.setProperty("studying", True)
+    bridge._set_document(StudyDocument("lesson.mkv", LanguagePair(), [
+        Cue("one", 0, 2, "第一句"), Cue("two", 3, 6, "第二句")]))
+    bridge._sync_cue(3500)
+    qtbot.wait(100)
+
+    def click(name):
+        item = find(window, name)
+        assert item.isVisible() and item.isEnabled()
+        invoke(item, "click")
+        qtbot.wait(50)
+
+    companion = find(window, "companionSurface")
+    subtitles = find(window, "subtitlesSurface")
+    chat = find(window, "chatSurface")
+    subtitle_list = find(window, "subtitleList")
+    panel = find(window, "subtitleModule").property("loadedItem")
+    assert companion.isVisible() and subtitles.isVisible() and not chat.isVisible()
+    assert companion.mapToScene(QPointF(0, companion.height())).y() < subtitles.mapToScene(QPointF()).y()
+    assert panel.property("follow") and panel.property("activeId") == "two"
+    assert subtitle_list.property("count") == 2
+
+    click("learningViewButton")
+    assert find(window, "learningWorkspace").isVisible() and not subtitles.isVisible()
+    assert not find(window, "prepareViewButton").isVisible()
+    for tab in ("notesTab", "reviewTab", "collectionsTab"):
+        click(tab)
+    click("watchViewButton")
+    assert subtitles.isVisible() and not find(window, "learningWorkspace").isVisible()
+
+    click("studentChatTab")
+    assert chat.isVisible() and subtitles.isVisible() and not companion.isVisible()
+    assert find(window, "newChatButton").isVisible()
+    find(window, "subtitleSearch").setProperty("text", "第一句")
+    qtbot.waitUntil(lambda: subtitle_list.property("count") == 1)
+    click("studentCueTab_chat")
+    assert companion.isVisible() and subtitle_list.property("count") == 1
+    dock = find(window, "subtitleModule")
+    host = subtitles.parentItem()
+    click("subtitlesDetach")
+    assert dock.property("floatingPanel") and subtitles.parentItem() != host
+    click("subtitlesDetach")
+    assert subtitles.parentItem() == host and subtitles.isVisible()
+    assert not dock.property("detached")
+    click("subtitlesSettings")
+    popup = find(panel, "moduleSettingsPopup")
+    assert popup.property("opened")
+    invoke(popup, "close")
+    assert engine._tingmu_warnings == []
+
+
 def test_overlay_stays_fixed_and_bottom_right_drag_resizes_then_persists(quick, qtbot):
     app, bridge, engine, window = quick
     bridge._set_document(StudyDocument("video.mkv", LanguagePair(), [
@@ -74,7 +131,7 @@ def test_overlay_stays_fixed_and_bottom_right_drag_resizes_then_persists(quick, 
     fullscreen = find(window, "fullscreenWindow")
     overlay = find(window, "companionOverlay")
     assert fullscreen.isVisible()
-    assert video.window() is fullscreen
+    assert fullscreen.contentItem().isAncestorOf(video)
     old = (overlay.width(), overlay.height())
     for position in (1100, 3500, 2200, 1100):
         bridge._sync_cue(position)
@@ -93,7 +150,7 @@ def test_overlay_stays_fixed_and_bottom_right_drag_resizes_then_persists(quick, 
     invoke(player, "toggleFullscreen")
     qtbot.wait(50)
     assert not fullscreen.isVisible()
-    assert video.window() is window
+    assert window.contentItem().isAncestorOf(video)
     assert bridge.player.videoSink() is sink
     assert engine._tingmu_warnings == []
 
@@ -127,11 +184,10 @@ def test_all_module_settings_open_without_runtime_errors(quick, qtbot):
         panel = dock.property("loadedItem")
         invoke(panel, "openSettings")
         qtbot.wait(70)
-        opened = [obj for obj in panel.findChildren(QObject)
-                  if obj.metaObject().indexOfProperty("opened") >= 0 and obj.property("opened")]
-        assert opened, name
-        for popup in opened:
-            invoke(popup, "close")
+        popup = find(panel, "playerSettingsPopup" if name == "playerModule" else "moduleSettingsPopup")
+        assert popup.property("opened"), name
+        invoke(popup, "close")
+        qtbot.waitUntil(lambda: not popup.property("opened"))
         invoke(dock, "detach")
     assert engine._tingmu_warnings == []
 

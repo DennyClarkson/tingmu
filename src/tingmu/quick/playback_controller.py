@@ -33,6 +33,8 @@ class PlaybackState:
     sources: Any = None
     embedded: Any = None
     restore_embedded_pending: bool = False
+    study_audio_track: int | None = None
+    pending_audio_track: int | None = None
     document: StudyDocument | None = None
     media_path: str = ""
     timeline: SubtitleTimeline = field(default_factory=lambda: SubtitleTimeline([]))
@@ -44,6 +46,7 @@ class PlaybackState:
     playback_details: dict = field(default_factory=dict)
     playback_position: int = 0
     resume_position: int | None = None
+    restoring_saved_position: bool = False
     resume_seek_queued: bool = False
     loop_a: int = -1
     loop_b: int = -1
@@ -96,6 +99,7 @@ class PlaybackController:
         self.notify_timer.setSingleShot(True)
         self.notify_timer.setTimerType(Qt.TimerType.PreciseTimer)
         self.notify_timer.timeout.connect(self._emit_playback)
+        self.state.player.tracksChanged.connect(self._apply_study_track)
         self._last_tick = None
 
     def attachVideo(self, sink):
@@ -115,7 +119,13 @@ class PlaybackController:
                 # can be uploaded by the new window without playing/seeking.
                 sink.setVideoFrame(QVideoFrame(image))
 
-    def open_media(self, raw_path):
+    def _apply_study_track(self):
+        track = self.state.pending_audio_track
+        if track is not None and 0 <= track < len(self.state.player.audioTracks()):
+            self.state.pending_audio_track = None
+            self.state.player.setActiveAudioTrack(track)
+
+    def open_media(self, raw_path, *, study_track=None):
         path = Path(raw_path).expanduser().resolve()
         if not path.is_file():
             raise ValueError("视频文件不存在")
@@ -126,6 +136,8 @@ class PlaybackController:
         self.notify_timer.stop()
         self._last_tick = None
         self.state.media_path = str(path)
+        self.state.study_audio_track = study_track
+        self.state.pending_audio_track = study_track
         self.state.embedded.select(self.state.media_path, -1, 0)
         self.state.sources.open(self.state.media_path)
         self.state.restore_embedded_pending = self.state.sources.embeddedChoice["show"]
@@ -136,10 +148,12 @@ class PlaybackController:
         self.ports.catalog.add([path])
         with self.ports.store.database.session():
             self.state.resume_position = self.ports.store.load_position(self.state.media_path)
+            self.state.restoring_saved_position = True
             self.ports.set_state(mediaPath=self.state.media_path, mediaName=path.name, error="", status="")
             self.ports.load_document()
             self.ports.load_personal()
         self.state.player.setSource(QUrl.fromLocalFile(self.state.media_path))
+        self._apply_study_track()
         self.ports.restore_embedded_choice()
         self.state.player.play()
         self.ports.refresh_library()
@@ -156,7 +170,8 @@ class PlaybackController:
             doc
             and not spec.get("subtitle")
             and "audio_track" in spec
-            and spec["audio_track"] != self.ports.settings().audio_track
+            and spec["audio_track"] != (self.state.study_audio_track if self.state.study_audio_track is not None
+                                        else self.ports.settings().audio_track)
         ):
             doc = None
         self.ports.set_document(doc)
@@ -276,7 +291,11 @@ class PlaybackController:
                 return
             if not self.state.player.isSeekable() or self.state.player.duration() <= 0:
                 return
-            position = max(0, min(self.state.resume_position, self.state.player.duration() - 100))
+            duration = self.state.player.duration()
+            position = max(0, min(self.state.resume_position, duration - 100))
+            if self.state.restoring_saved_position and self.state.resume_position >= duration - min(3000, duration // 10):
+                position = 0
+            self.state.restoring_saved_position = False
             self.state.resume_position = None
             self._set_player_position(position)
             self.ports.sync_cue(position)
@@ -405,6 +424,7 @@ class PlaybackController:
                 self.state.last_position_request = position
 
     def _seek(self, position):
+        self.state.restoring_saved_position = False
         if (
             not self.state.player.isSeekable()
             or self.state.player.duration() <= 0

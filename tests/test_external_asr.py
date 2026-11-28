@@ -166,6 +166,32 @@ def test_wav_chunk_tail_and_truncated_data(tmp_path, monkeypatch):
         list(external_asr._wav_chunks(path))
 
 
+def test_openai_missing_audio_key_fails_before_extraction(tmp_path, monkeypatch):
+    settings = AppSettings(asr_backend="external", allow_audio_upload=True, asr_key_env="")
+    monkeypatch.setattr(media, "prepared_audio", lambda *a, **kw: pytest.fail("unexpected extraction"))
+    with pytest.raises(ProviderError, match="OpenAI.*密钥"):
+        external_asr.transcribe_external(tmp_path / "movie.mp4", settings, tmp_path)
+
+
+def test_failed_upload_releases_wav_before_temp_cleanup(tmp_path, monkeypatch):
+    def extract(_media, output, *args, **kwargs):
+        with wave.open(str(output), "wb") as writer:
+            writer.setparams((1, 2, 16000, 0, "NONE", "not compressed"))
+            writer.writeframes(bytes(32000))
+        return output
+
+    def reject(*args):
+        raise ProviderError("语音服务返回 HTTP 401")
+
+    monkeypatch.setattr(media, "_cache_root", lambda: tmp_path)
+    monkeypatch.setattr(media, "extract_audio", extract)
+    monkeypatch.setattr(external_asr, "_post", reject)
+    settings = AppSettings(asr_backend="local_api", suppress_bgm=False)
+    with pytest.raises(ProviderError, match="HTTP 401"):
+        external_asr.transcribe_external(tmp_path / "movie.mp4", settings, tmp_path)
+    assert not list(tmp_path.glob("speech-*"))
+
+
 def test_audio_permission_revoked_stops_following_uploads(tmp_path, monkeypatch):
     source = tmp_path / "track.wav"
     with wave.open(str(source), "wb") as writer:
@@ -218,6 +244,135 @@ def test_local_api_without_remote_permission_or_proxy(tmp_path, monkeypatch, ser
 def test_bad_timing_or_missing_requested_speakers_fails(payload):
     with pytest.raises(ProviderError):
         external_asr._segments(payload, source="x", offset=5, duration=3, namespace="", diarized=True)
+
+
+def test_last_overlapping_segment_clips_to_uploaded_chunk_and_keeps_reported_time():
+    evidence = {}
+    rows = external_asr._segments({"segments": [{"start": 597, "end": 599, "text": "Test."}]},
+                                  source="x", offset=1789.04, duration=597.18, namespace="",
+                                  diarized=False, chunk=4, evidence=evidence)
+    row, = rows
+    assert row.start == pytest.approx(2386.04)
+    assert row.end == pytest.approx(2386.22)
+    assert evidence[row.id]["reported_end"] == 599
+
+
+def test_optional_null_speaker_and_empty_boundary_keep_source_times():
+    blanks = []
+    rows = external_asr._segments({"segments": [
+        {"start": 0, "end": 1, "text": "Hello", "speaker": None},
+        {"start": 1, "end": 1, "text": " ", "speaker": None},
+    ]}, source="x", offset=5, duration=1, namespace="", diarized=False, chunk=2, blanks=blanks)
+    assert [(row.start, row.end, row.speaker) for row in rows] == [(5, 6, "")]
+    assert blanks == [{"chunk": 2, "segment_index": 1, "offset": 5, "reported_start": 1, "reported_end": 1}]
+
+
+@pytest.mark.parametrize(("entry", "reason"), [
+    ({"start": 0, "end": 1, "text": None}, "text"),
+    ({"start": None, "end": 1, "text": "private"}, "start"),
+    ({"start": 1, "end": 1, "text": "private"}, "没有可播放的时长"),
+    ({"start": 2, "end": 1, "text": "private"}, "时间超出有效范围"),
+    ({"start": 1, "end": 2, "text": "private", "speaker": None}, "speaker"),
+])
+def test_segment_errors_identify_field_and_position_without_content(entry, reason):
+    with pytest.raises(ProviderError) as err:
+        external_asr._segments({"segments": [
+            {"start": 0, "end": 1, "speaker": "A", "text": "working"}, entry,
+        ]}, source="x", offset=0, duration=3, namespace="", diarized=True, chunk=4)
+    assert "第 4 个音频片段、第 2 条字幕" in str(err.value)
+    assert reason in str(err.value) and "private" not in str(err.value)
+
+
+def test_outside_tail_kept_as_evidence_without_moving_it_to_next_chunk():
+    entries = [{"start": 597, "end": 599, "text": "tail"},
+               {"start": 599, "end": 601, "text": " outside "}]
+    outside = []
+    args = dict(source="x", offset=1789.04, duration=597.18, namespace="", diarized=False, chunk=4)
+    rows = external_asr._segments({"segments": entries}, **args, outside=outside)
+    assert [(row.text, row.end) for row in rows] == [("tail", pytest.approx(2386.22))]
+    assert outside == [{"chunk": 4, "segment_index": 1, "duration": 597.18, "offset": 1789.04,
+                        "reported_start": 599, "reported_end": 601, "text": " outside ", "speaker": ""}]
+    with pytest.raises(ProviderError, match="全部非空字幕都在片外"):
+        external_asr._segments({"segments": entries[1:]}, **args)
+
+
+@pytest.mark.parametrize("change,expected_posts", [
+    ("restart", [4, 5]), ("reset", [1, 2, 3, 4, 5]), ("changed_pcm", [2, 4, 5]),
+    ("cancel", [4, 5]), ("save_failure", []),
+])
+def test_queue_resumes_durable_asr_parts_after_restart(tmp_path, monkeypatch, change, expected_posts):
+    source = tmp_path / "movie.mp4"
+    source.write_bytes(b"test movie")
+    wav = tmp_path / "track.wav"
+    def write_track(changed=False):
+        with wave.open(str(wav), "wb") as stream:
+            stream.setparams((1, 2, 16000, 0, "NONE", "not compressed"))
+            for index in range(1, 6):
+                stream.writeframes(bytes([index, int(changed and index == 2)]) * 16000)
+    write_track()
+
+    @contextmanager
+    def prepared(*args, **kwargs):
+        yield wav
+
+    posts = []
+    fail = True
+    def post(_url, _key, _fields, pcm):
+        number = pcm[44]
+        posts.append(number)
+        if fail and change not in ("cancel", "save_failure") and number == 4:
+            raise ProviderError("测试连接中断")
+        return {"segments": [{"start": .1, "end": .9, "text": f"Sentence {number}."}]}
+
+    monkeypatch.setattr(media, "prepared_audio", prepared)
+    monkeypatch.setattr(external_asr, "CHUNK_SECONDS", 1)
+    monkeypatch.setattr("tingmu.acoustic.pcm_windows", lambda total, size, energy, rate:
+                        [(begin, min(begin + size, total)) for begin in range(0, total, size)])
+    monkeypatch.setattr(external_asr, "_post", post)
+    path = tmp_path / "workspace"
+    store = Store(path)
+    settings = AppSettings(asr_backend="external", allow_audio_upload=True, asr_key_env="",
+                           asr_endpoint="https://example.invalid/v1/audio/transcriptions", target_language="en",
+                           cloud_text_enabled=False, suppress_bgm=False, review_enabled=False)
+    store.save_settings(settings)
+    queue = PreparationQueue(store)
+    queue.enqueue([source], settings)
+    parts = store.asr_checkpoint_dir(source, settings.language)
+    if change == "cancel":
+        job, = queue.run(cancelled=lambda: len(list(parts.glob("*.json"))) == 3)
+        assert job["status"] == "paused" and posts == [1, 2, 3]
+    elif change == "save_failure":
+        def fail_save(doc):
+            raise OSError("test checkpoint write failure")
+        monkeypatch.setattr(store, "save_document", fail_save)
+        job, = queue.run()
+        assert job["status"] == "failed" and job["error"] == "OSError"
+        assert posts == [1, 2, 3, 4, 5]
+    else:
+        job, = queue.run()
+        assert job["status"] == "failed" and posts == [1, 2, 3, 4]
+    assert len(list(parts.glob("*.json"))) == (5 if change == "save_failure" else 3)
+    assert store.load_document(source, settings.language) is None
+    store.close()
+
+    store = Store(path)
+    queue = PreparationQueue(store)
+    fail = False
+    posts.clear()
+    if change == "reset":
+        queue.reset([job["id"]], "all", requeue=True)
+    else:
+        if change == "changed_pcm":
+            write_track(changed=True)
+        queue.retry(job["id"])
+    job, = queue.run()
+    assert job["status"] == "completed", job.get("error_message")
+    assert posts == expected_posts
+    doc = store.load_document(source, settings.language)
+    assert len(doc.metadata["asr_segment_sources"]) == 5
+    if change != "changed_pcm":
+        assert not list(parts.glob("*.json"))
+    store.close()
 
 
 def test_endpoint_and_secret_validation(tmp_path):

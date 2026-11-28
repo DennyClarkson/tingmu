@@ -119,6 +119,9 @@ class Store:
         key = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:32]
         return self.data_dir / "documents" / f"{key}.json"
 
+    def asr_checkpoint_dir(self, media_path, language):
+        return self._document_path(media_path, language).with_suffix(".asr-parts")
+
     @contextmanager
     def _material_write(self):
         # Coordinate independent Store instances, including a second app process.
@@ -239,11 +242,14 @@ class Store:
             # An unreadable cache still requires a byte-for-byte recovery copy.
             return {}, None
 
-    def save_document(self, document: StudyDocument, *, replace_existing=False, publish_subtitles=False) -> Path:
+    def save_document(self, document: StudyDocument, *, replace_existing=False, publish_subtitles=False,
+                      only_if_missing=False) -> Path:
         with self._material_write():
             path = self._document_path(document.media_path, document.language)
             self._recover_material(path)
             if path.exists():
+                if only_if_missing:
+                    return path
                 previous, had_plan = self._previous_material(path)
                 replaced_corrections = previous and previous != document.metadata.get("cue_corrections", {})
                 if replaced_corrections and not replace_existing:
@@ -311,7 +317,15 @@ class Store:
         with self._material_write():
             path = self._document_path(media_path, language)
             self._recover_material(path)
-            return self._reset_material(path, mode)
+            reset = self._reset_material(path, mode)
+            if mode == "all":
+                parts = self.asr_checkpoint_dir(media_path, language)
+                if parts.exists():
+                    backup = self.data_dir / "material-backups" / uuid.uuid4().hex
+                    backup.mkdir(parents=True)
+                    parts.rename(backup / parts.name)
+                    reset = True
+            return reset
 
     def _reset_material(self, path, mode):
         if not path.exists():

@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -17,6 +18,20 @@ def write(root, name, value):
     path = root / name
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(value)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="NTFS permission inheritance")
+def test_launcher_inherits_installation_acl_after_publish(builder, tmp_path):
+    installation = tmp_path / "听幕"
+    installation.mkdir()
+    write(installation, "reference.exe", b"reference")
+    with builder.release_stage(installation, ".stage-") as stage:
+        write(stage, "Tingmu.exe", b"program")
+        builder.publish(stage, installation, ("Tingmu.exe",))
+    subprocess.run(["icacls", "*.exe", "/save", "permissions.txt", "/Q"], cwd=installation, check=True)
+    lines = (installation / "permissions.txt").read_text("utf-16-le").splitlines()
+    permissions = dict(zip(lines[::2], lines[1::2], strict=True))
+    assert permissions["Tingmu.exe"] == permissions["reference.exe"]
 
 
 @pytest.mark.parametrize("blocked_restore", [False, True])
@@ -160,11 +175,11 @@ def test_cli_builds_only_model_free_release(builder, tmp_path, monkeypatch, flag
     calls = []
     monkeypatch.setattr(builder, "OUT", tmp_path)
     monkeypatch.setattr(builder.sys, "argv", ["build_portable.py", *flags])
-    monkeypatch.setattr(builder, "build", lambda refresh: calls.append(refresh))
+    monkeypatch.setattr(builder, "build", lambda refresh, study_source: calls.append((refresh, study_source)))
     if flags:
         with pytest.raises(SystemExit):
             builder.main()
         assert calls == []
     else:
         builder.main()
-        assert calls == [False]
+        assert calls == [(False, None)]

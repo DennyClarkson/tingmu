@@ -13,6 +13,7 @@ from tingmu.runtime import data_root, portable_root
 from tingmu.storage import Store
 from tingmu.workspaces import DEFAULT_ID, WorkspaceCatalog, ensure_folders
 from .bridge import Bridge
+from .home import StudyHome
 from .localization import InterfaceLanguage, ui_text
 from .system_tray import SystemTray
 from .workspace_controller import WorkspaceController
@@ -26,7 +27,8 @@ def _register_bundled_font(path):
         raise RuntimeError("随附字体无法读取，请检查便携文件夹是否完整")
 
 
-def create_qml_app(data_dir=None, initial_path=None, *, show_setup=False, runtime_setup_dir=None):
+def create_qml_app(data_dir=None, initial_path=None, *, show_setup=False, runtime_setup_dir=None,
+                   prompt_on_launch=False):
     # QML loads its native Quick plugins. Avoid pulling the QtQuick/OpenGL
     # Python bindings into the portable runtime solely to select a style.
     portable = portable_root() is not None
@@ -64,11 +66,11 @@ def create_qml_app(data_dir=None, initial_path=None, *, show_setup=False, runtim
         notice = str(exc)
         workspace_id = DEFAULT_ID
     return _open_session(application, catalog, workspace_id, bool(show_setup or notice), initial_path, notice,
-                         runtime_setup_dir=runtime_setup_dir)
+                         runtime_setup_dir=runtime_setup_dir, prompt_on_launch=prompt_on_launch)
 
 
 def _open_session(application, catalog, workspace_id, show_setup, initial_path, notice="", *, switch_summary="",
-                  runtime_setup_dir=None):
+                  runtime_setup_dir=None, prompt_on_launch=False):
     directory = catalog.directory(workspace_id)
     ensure_folders(directory)
     store = Store(directory)
@@ -76,6 +78,8 @@ def _open_session(application, catalog, workspace_id, show_setup, initial_path, 
     if switch_summary:
         bridge.chat.create_setup_summary(switch_summary)
     engine = QQmlApplicationEngine()
+    engine.rootContext().setContextProperty("promptOnLaunch", prompt_on_launch)
+    engine.rootContext().setContextProperty("directMediaLaunch", bool(initial_path and Path(initial_path).is_file()))
     animations = application.platformName() not in ("offscreen", "minimal") and "--portable-smoke" not in sys.argv
     engine.rootContext().setContextProperty("onscreenAnimations", animations)
     language = application._tingmu_language
@@ -112,6 +116,8 @@ def _open_session(application, catalog, workspace_id, show_setup, initial_path, 
                                      runtime_setup_dir=runtime_setup_dir)
     controller.error = notice
     bridge.workspaces = controller
+    home = StudyHome(bridge, controller, prompt_on_launch=prompt_on_launch)
+    engine.rootContext().setContextProperty("studyHome", home)
     engine.rootContext().setContextProperty("workspaces", controller)
     engine.rootContext().setContextProperty("runtimeSetup", controller.runtime_setup)
     engine.rootContext().setContextProperty("desktopTray", application._tingmu_tray)
@@ -122,7 +128,8 @@ def _open_session(application, catalog, workspace_id, show_setup, initial_path, 
             "file": item.url().fileName(), "line": item.line(), "column": item.column()} for item in items])
     engine.warnings.connect(qml_warning)
     engine._tingmu_warnings = warnings
-    engine.destroyed.connect(bridge.deleteLater)
+    # The engine releases its QML roots before Qt destroys its child controllers.
+    bridge.setParent(engine)
     engine.rootContext().setContextProperty("backend", bridge)
     engine.load(QUrl.fromLocalFile(str(Path(__file__).parent / "qml/Main.qml")))
     if not engine.rootObjects():
@@ -133,12 +140,18 @@ def _open_session(application, catalog, workspace_id, show_setup, initial_path, 
     application.aboutToQuit.connect(bridge.shutdown)
     application._tingmu_quick = (bridge, engine)
     if initial_path and not show_setup:
-        QTimer.singleShot(0, lambda: controller.action("enter", {}))
+        def enter():
+            controller.action("enter", {})
+        if prompt_on_launch or home.setup_required:
+            home.directionAccepted.connect(enter)
+        else:
+            QTimer.singleShot(0, enter)
     return application, bridge, engine
 
 
 def run_app(initial_path=None, data_dir=None):
-    application, bridge, engine = create_qml_app(data_dir, initial_path)
+    # Preview builds ask on each process launch. See the release checklist in handoff.md.
+    application, bridge, engine = create_qml_app(data_dir, initial_path, prompt_on_launch=True)
     previous_hook = sys.excepthook
     def exception_hook(kind, error, trace):
         current = application._tingmu_quick[0]

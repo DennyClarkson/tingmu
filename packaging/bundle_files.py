@@ -1,4 +1,5 @@
 """Shared build-time assembly steps for the base and first-run distributions."""
+from contextlib import contextmanager
 import hashlib
 import json
 import os
@@ -6,6 +7,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+from uuid import uuid4
 
 from pe_bundle import copy_pyside_runtime
 from runtime_pruning import check_wheel_licenses, site_packages_ignore
@@ -56,6 +58,18 @@ def unlinked(path):
     if path.resolve() != Path(os.path.abspath(path)) or path.is_symlink() or path.is_junction():
         raise ValueError(f"Unexpected linked build destination: {path}")
     return path
+
+
+@contextmanager
+def release_stage(parent, prefix):
+    # Windows renames preserve ACLs. Published files must inherit the installation's
+    # permissions when created, including when another account builds the app.
+    stage = parent / (prefix + uuid4().hex)
+    stage.mkdir(mode=0o777 if os.name == "nt" else 0o700)
+    try:
+        yield stage
+    finally:
+        shutil.rmtree(stage)
 
 
 def publish(stage, destination, names):

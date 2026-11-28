@@ -540,6 +540,7 @@ def apply_quality_gate(doc, store, *, source_kind, protected_ids=(), log_event=N
 
 
 def acquire_transcript(ctx: PreparationContext):
+    saved_parts = []
     if ctx.plan.reusable:
         ctx.document = ctx.plan.cached
         ctx.report(f"读取已保存转写：{len(ctx.document.cues)} 句")
@@ -622,7 +623,8 @@ def acquire_transcript(ctx: PreparationContext):
             from .external_asr import transcribe_external
             cues = transcribe_external(ctx.media_path, ctx.settings, ctx.store.data_dir, start=ctx.start, duration=ctx.duration,
                                        progress=ctx.report, cancelled=ctx.cancelled, permission=ctx.audio_permission,
-                                       metadata_out=asr_metadata)
+                                       metadata_out=asr_metadata, saved_parts=saved_parts,
+                                       checkpoint_dir=ctx.store.asr_checkpoint_dir(ctx.media_path, ctx.language))
         else:
             ctx.report("本地语音识别")
             model = ctx.settings.asr_model
@@ -705,6 +707,8 @@ def acquire_transcript(ctx: PreparationContext):
         _refresh_reference_hints(ctx)
     if gated or not ctx.plan.reusable:
         ctx.store.save_document(ctx.document)
+        for part in saved_parts:
+            part.unlink(missing_ok=True)
     if not (ctx.settings.segmentation_mode == "llm_regroup" and ctx.plan.review_spec):
         from .studio_metrics import quality_summary
         ctx.report(Progress("字幕规整质量统计", quality=quality_summary(metadata)))

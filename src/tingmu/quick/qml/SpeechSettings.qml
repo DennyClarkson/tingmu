@@ -27,6 +27,7 @@ ColumnLayout {
     Caption { text: qsTranslate("Tingmu", "字幕识别方式") }
     Choice {
         objectName: "asrBackendChoice"
+        enabled: !studyHome.state.setupRequired
         Layout.fillWidth: true
         translateOptions:true;model:["内置模型 · 本机运行", "本机 API · 本机语音服务", "外部 API · 远程转写"]
         currentIndex: root.external ? 2 : root.localApi ? 1 : 0

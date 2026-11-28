@@ -134,6 +134,7 @@ AppDialog {
             Layout.fillHeight: true; Layout.fillWidth: true; spacing: 20
             ColumnLayout {
                 Layout.preferredWidth: 182; Layout.minimumWidth: 162; Layout.fillHeight: true; spacing: 8
+                visible: !studyHome.state.setupRequired
                 SectionTitle { text: qsTranslate("Tingmu", "我的工作区") }
                 ListView {
                     Layout.fillWidth: true; Layout.fillHeight: true
@@ -155,12 +156,12 @@ AppDialog {
                 }
                 TButton { Layout.fillWidth: true; text: qsTranslate("Tingmu", "刷新本机工作区"); onClicked: workspaces.action("discover", {}) }
             }
-            Rectangle { Layout.fillHeight: true; width: 1; color: Theme.line }
+            Rectangle { visible: !studyHome.state.setupRequired; Layout.fillHeight: true; width: 1; color: Theme.line }
             ColumnLayout {
                 Layout.fillWidth: true; Layout.fillHeight: true; spacing: 12
                 SectionTitle { text: root.creating ? qsTranslate("Tingmu", "新建学习工作区") : (root.current.id === "default" ? qsTranslate("Tingmu", root.current.name) : root.current.name) }
                 SegmentBar {
-                    visible: !root.creating
+                    visible: !root.creating && !studyHome.state.setupRequired
                     TButton { text: qsTranslate("Tingmu", "语言/方言与文件"); quiet:true; checked: root.section === "general"; onClicked: root.section = "general" }
                     TButton { objectName: "workspaceModelsTab"; text: qsTranslate("Tingmu", "语音识别"); quiet:true; checked: root.section === "models"; onClicked: root.section = "models" }
                     TButton { objectName: "workspaceTextTab"; text: qsTranslate("Tingmu", "文本模型与 API"); quiet:true; checked: root.section === "text"; onClicked: root.section = "text" }
@@ -308,7 +309,8 @@ AppDialog {
                     if (root.creating) {
                         workspaces.action("create", {name: form.item.nameInput.text, source: form.item.knownLanguage.code, target: form.item.learningLanguage.code,
                             textReuseSignature: form.item.reuseToggle.checked ? root.reuseOffer.signature : ""})
-                    } else if (workspaces.action("languages", {source: form.item.knownLanguage.code, target: form.item.learningLanguage.code}) && workspaces.action("enter", {})) root.close()
+                    } else if (studyHome.state.setupRequired) root.close()
+                    else if (workspaces.action("languages", {source: form.item.knownLanguage.code, target: form.item.learningLanguage.code}) && workspaces.action("enter", {})) root.close()
                 }
             }
         }

@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -16,7 +17,7 @@ from filelock import FileLock
 from build_clean_install import (
     RELEASE_DOCUMENTS, copy_app, copy_release_documents, ignore_runtime, release_manifest, validate_core_release,
 )
-from bundle_files import compile_launcher, copy_packages, launcher_hash, precompile, publish, unlinked
+from bundle_files import compile_launcher, copy_packages, launcher_hash, precompile, publish, release_stage, unlinked
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "dist" / "Tingmu"
@@ -105,12 +106,28 @@ def import_data():
     }, indent=2), encoding="utf-8")
 
 
-def build(refresh_app):
+def copy_study_source(source, destination):
+    catalog = json.loads((source / "catalog.json").read_bytes())
+    destination.mkdir()
+    for row in catalog:
+        ident, suffix = row["id"], row["suffix"]
+        if not re.fullmatch(r"[a-z0-9_-]+", ident) or suffix not in (".mp4", ".mkv"):
+            raise ValueError("Invalid bundled study video name")
+        media = destination / (ident + suffix)
+        shutil.copyfile(unlinked(source / media.name), media)
+        with media.open("rb") as stream:
+            if hashlib.file_digest(stream, "sha256").hexdigest() != row["sha256"]:
+                raise ValueError("Bundled video checksum mismatch: " + ident)
+        lesson = unlinked(source / (ident + ".lesson.json"))
+        shutil.copyfile(lesson, destination / lesson.name)
+    (destination / "catalog.json").write_text(json.dumps(catalog, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def build(refresh_app, study_source=None):
     marker_name = "tingmu-portable.json"
     marker_path = unlinked(OUT / marker_name)
     previous = json.loads(marker_path.read_text("utf-8")) if marker_path.is_file() else {}
-    with tempfile.TemporaryDirectory(prefix=".tingmu-build-", dir=OUT) as folder:
-        stage = Path(folder)
+    with release_stage(OUT, ".tingmu-build-") as stage:
         names = []
         runtime_root = OUT if refresh_app else stage
         python = runtime_root / "runtime/python"
@@ -141,6 +158,9 @@ def build(refresh_app):
         if not refresh_app:
             marker["weight_audit"] = validate_core_release(stage)
         manifest = release_manifest(marker, stage, runtime_root)
+        if study_source is not None:
+            copy_study_source(study_source.resolve(), stage / "demo-source")
+            names.append("demo-source")
         (stage / marker_name).write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
         publish(stage, OUT, (*names, "app", launcher.name, *RELEASE_DOCUMENTS, marker_name))
 
@@ -150,6 +170,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--destination", type=Path, default=OUT)
     parser.add_argument("--refresh-app", action="store_true")
+    parser.add_argument("--study-source", type=Path, help="Bundle the selected demo catalog, videos and ready lessons")
     parser.add_argument("--import-user-data", action="store_true")
     args = parser.parse_args()
     if args.import_user_data and not args.refresh_app:
@@ -160,7 +181,7 @@ def main():
     OUT = unlinked(Path(os.path.abspath(args.destination)))
     OUT.mkdir(parents=True, exist_ok=True)
     with FileLock(unlinked(OUT / ".tingmu-build.lock"), timeout=0):
-        build(args.refresh_app)
+        build(args.refresh_app, args.study_source)
         if args.import_user_data:
             import_data()
     print(f"Portable folder ready: {OUT}", flush=True)

@@ -103,6 +103,8 @@ class WorkspaceCatalog:
                 prefs = {}
             source = str(prefs.get("source_language", "zh-CN"))
             target = str(prefs.get("target_language", "yue"))
+            row["source_language"] = source
+            row["target_language"] = target
             row["languages"] = pair_label(source, target)
         return rows
 

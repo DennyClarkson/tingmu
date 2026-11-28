@@ -77,6 +77,7 @@ def test_qml_switch_reopens_isolated_sessions_and_legacy_data(qapp, qtbot, tmp_p
     movie.touch()
     MediaLibrary(legacy).add([movie])
     settings = legacy.load_settings()
+    settings.developer_mode = True
     settings.teaching_preferences = "原工作区偏好"
     legacy.save_settings(settings)
     app, first, engine = create_qml_app(root)
@@ -123,6 +124,8 @@ def test_qml_switch_reopens_isolated_sessions_and_legacy_data(qapp, qtbot, tmp_p
         assert not second_engine._tingmu_warnings
         click(window, window.findChild(QObject, "workspaceContinue"))
         assert not window.findChild(QObject, "workspaceSetup").property("opened")
+        second.setting("developer_mode", True)
+        qtbot.wait(60)
         click(window, window.findChild(QObject, "workspacePicker"))
         assert [row["languages"] for row in second.workspaces.info["items"]] == ["普通话 → 粤语", "英语 → 巴西葡萄牙语"]
         rows = window.findChild(QObject, "workspacePickerList").property("contentItem").childItems()

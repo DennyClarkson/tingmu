@@ -121,6 +121,46 @@ def _backup(store, sources, old, new):
     return folder
 
 
+def remap_study_records(db, remap):
+    from .drafts import remap_draft_media
+    remap_draft_media(db, remap)
+    tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    for table in ("entries", "positions", "conversations", "chat_sessions", "chat_legacy_migrations"):
+        if table not in tables:
+            continue
+        paths = [row[0] for row in db.execute(f"SELECT DISTINCT media_path FROM {table}")]
+        for path in paths:
+            replacement = remap(path)
+            if replacement != path:
+                db.execute(f"UPDATE {table} SET media_path=? WHERE media_path=?", (replacement, path))
+    if "notebook_sources" in tables:
+        for entry_id, raw in db.execute("SELECT entry_id,entry_json FROM notebook_sources").fetchall():
+            entry = json.loads(raw)
+            replacement = remap(entry.get("media_path"))
+            if replacement != entry.get("media_path"):
+                entry["media_path"] = replacement
+                db.execute("UPDATE notebook_sources SET entry_json=? WHERE entry_id=?",
+                           (json.dumps(entry, ensure_ascii=False), entry_id))
+    if "chat_sessions" in tables:
+        for session_id, raw in db.execute("SELECT id,messages FROM chat_sessions").fetchall():
+            messages = json.loads(raw)
+            changed = False
+            for message in messages:
+                context = message.get("request_context")
+                if not isinstance(context, dict):
+                    continue
+                media = context.get("media_path", "")
+                selected = context.get("selected_media", [])
+                replacement = remap(media)
+                moved = [remap(path) for path in selected]
+                if replacement != media or moved != selected:
+                    context.update(media_path=replacement, selected_media=moved)
+                    changed = True
+            if changed:
+                db.execute("UPDATE chat_sessions SET messages=? WHERE id=?",
+                           (json.dumps(messages, ensure_ascii=False), session_id))
+
+
 def migrate_portable_paths(store):
     """Remap the portable installation or a registered study folder after it moves."""
     from .runtime import portable_root
@@ -152,7 +192,7 @@ def migrate_portable_paths(store):
         sources += list((store.data_dir / "documents").glob("*.json"))
         sources += [store.data_dir / name for name in
                     ("settings.json", "preparation-queue.json", "workspace.json",
-                     "media-library.json", "quick-layout.json")
+                     "media-library.json", "quick-layout.json", "home-history.json")
                     if (store.data_dir / name).exists()]
         subtitles = list((store.data_dir / "documents").glob("*.srt"))
         if any(not p.resolve().is_relative_to(store.data_dir) for p in sources + subtitles):
@@ -211,43 +251,7 @@ def migrate_portable_paths(store):
         # First validate every SQL uniqueness constraint. No JSON is modified if this fails.
         with store._connection(immediate=True) as db:
             try:
-                from .drafts import remap_draft_media
-                remap_draft_media(db, lambda path: _remap(path, old, root))
-                tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-                for table in ("entries", "positions", "conversations", "chat_sessions", "chat_legacy_migrations"):
-                    if table not in tables:
-                        continue
-                    paths = [row[0] for row in db.execute(f"SELECT DISTINCT media_path FROM {table}")]
-                    for path in paths:
-                        replacement = _remap(path, old, root)
-                        if replacement != path:
-                            db.execute(f"UPDATE {table} SET media_path=? WHERE media_path=?", (replacement, path))
-                if "notebook_sources" in tables:
-                    for entry_id, raw in db.execute("SELECT entry_id,entry_json FROM notebook_sources").fetchall():
-                        entry = json.loads(raw)
-                        replacement = _remap(entry.get("media_path"), old, root)
-                        if replacement != entry.get("media_path"):
-                            entry["media_path"] = replacement
-                            db.execute("UPDATE notebook_sources SET entry_json=? WHERE entry_id=?",
-                                       (json.dumps(entry, ensure_ascii=False), entry_id))
-                if "chat_sessions" in tables:
-                    for session_id, raw in db.execute("SELECT id,messages FROM chat_sessions").fetchall():
-                        messages = json.loads(raw)
-                        changed = False
-                        for message in messages:
-                            context = message.get("request_context")
-                            if not isinstance(context, dict):
-                                continue
-                            media = context.get("media_path", "")
-                            selected = context.get("selected_media", [])
-                            replacement = _remap(media, old, root)
-                            moved = [_remap(path, old, root) for path in selected]
-                            if replacement != media or moved != selected:
-                                context.update(media_path=replacement, selected_media=moved)
-                                changed = True
-                        if changed:
-                            db.execute("UPDATE chat_sessions SET messages=? WHERE id=?",
-                                       (json.dumps(messages, ensure_ascii=False), session_id))
+                remap_study_records(db, lambda path: _remap(path, old, root))
                 for target, value in writes.items():
                     atomic_json(target, value)
                 for target, source in published.items():

@@ -212,7 +212,8 @@ class PreparationQueue:
         return sum(j["status"] in ("queued", "paused") for j in self.snapshot())
 
     def enqueue(self, paths: list[Path], settings: AppSettings,
-                subtitle_paths: dict[str, str] | None = None, *, automatic: bool = False) -> list[dict]:
+                subtitle_paths: dict[str, str] | None = None, *, automatic: bool = False,
+                include_existing: bool = False, lookup_only: bool = False) -> list[dict]:
         added = []
         with self._mutation():
             for path in paths:
@@ -235,6 +236,8 @@ class PreparationQueue:
                 existing = next((j for j in self._jobs if j["id"] == job_id), None)
                 if existing:
                     if automatic or existing["status"] != "completed":
+                        if include_existing:
+                            added.append(deepcopy(existing))
                         continue
                     if existing.get("preparation_version") == TRANSLATION_REVIEW_VERSION:
                         # One published document per movie and language pair. A second workflow
@@ -245,13 +248,21 @@ class PreparationQueue:
                         if published_mode == settings.segmentation_mode:
                             if doc and doc.metadata.get("stage") == "ready" and bool(plan) == agent_workflow and (
                                     not agent_workflow or plan.get("identity") == existing.get("plan_identity")):
+                                if include_existing:
+                                    added.append(deepcopy(existing))
                                 continue
                             if (not agent_workflow and (not doc or not doc.metadata.get("stage")) and
                                     not any(j["media_path"] == media and j["settings"].get("preparation_workflow") == "subtitle_agent"
                                             for j in self._jobs)):
+                                if include_existing:
+                                    added.append(deepcopy(existing))
                                 continue  # Legacy completed entries without document stage metadata.
+                    if lookup_only:
+                        continue
                     existing.update(status="queued", progress="等待更新学习资料", updated_at=time.time())
                     added.append(deepcopy(existing))
+                    continue
+                if lookup_only:
                     continue
                 job = {"id": job_id, "media_path": media, "name": Path(media).name,
                        "fingerprint": fingerprint, "settings": spec, "subtitle_path": subtitle,
@@ -264,7 +275,8 @@ class PreparationQueue:
                     job["subtitle_inputs"] = parts[-1]
                 self._jobs.append(job)
                 added.append(deepcopy(job))
-            self._save()
+            if not lookup_only:
+                self._save()
         return added
 
     def enqueue_lessons(self, path: Path, settings: AppSettings) -> str:
@@ -315,6 +327,13 @@ class PreparationQueue:
         with self._mutation():
             for job in self._jobs:
                 if job["id"] == job_id and job["status"] in ("failed", "paused", "cleared"):
+                    if job["status"] == "failed":
+                        # An explicit retry should use repaired text-model assignments,
+                        # while preserving the job's media and speech-recognition settings.
+                        active = self.store.load_settings()
+                        job["settings"].update({key: getattr(active, key) for key in (
+                            "text_models_enabled", "cloud_text_enabled", "annotation_profile_id", "review_profile_id",
+                            "provider", "model", "review_provider", "review_model")})
                     if job.get("needs_teaching") and job["settings"].get("preparation_workflow") == "subtitle_agent":
                         # Explicit retry after the user enables or assigns a teaching model.
                         active = self.store.load_settings()

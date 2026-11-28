@@ -33,6 +33,7 @@ class LibraryState:
     inbox_executor: Any = None
     inbox_stop: Any = None
     inbox_paused: bool = False
+    setup_pending: bool = False
     media_inbox: dict = field(default_factory=dict)
     inbox_timer: Any = None
     watcher: Any = None
@@ -130,7 +131,7 @@ class LibraryController:
             self.state.inbox_timer.setInterval(interval)
 
     def _scan_media_inbox(self, *, background=False):
-        if self.ports.is_closed():
+        if self.ports.is_closed() or self.state.setup_pending:
             return
         if self.state.inbox_busy:
             self.state.inbox_requested = True

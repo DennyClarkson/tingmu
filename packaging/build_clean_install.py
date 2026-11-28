@@ -5,10 +5,9 @@ import json
 import os
 from pathlib import Path
 import shutil
-import tempfile
 import tomllib
 
-from bundle_files import compile_launcher, copy_packages, launcher_hash, precompile, publish
+from bundle_files import compile_launcher, copy_packages, launcher_hash, precompile, publish, release_stage
 from qml_runtime import qml_asset_manifest, validate_qml_runtime
 from runtime_pruning import check_wheel_licenses
 
@@ -156,8 +155,7 @@ def refresh(destination):
     if (app.resolve() != app or not (app / "bootstrap.py").is_file() or not (destination / "Tingmu.exe").is_file()
             or marker.get("launcher_source_sha256") != digest):
         raise ValueError("Expected an existing portable app with the current launcher")
-    with tempfile.TemporaryDirectory(prefix=".tingmu-update-", dir=destination) as folder:
-        stage = Path(folder)
+    with release_stage(destination, ".tingmu-update-") as stage:
         copy_app(stage)
         copy_release_documents(ROOT, stage)
         if marker.get("startup_bytecode"):
@@ -176,8 +174,8 @@ def build(destination, source=None, *, bytecode=True):
     marker = json.loads((source / "tingmu-portable.json").read_text("utf-8"))
     launcher_source = ROOT / "packaging/Launcher.cs"
     digest = launcher_hash(launcher_source)
-    with tempfile.TemporaryDirectory(prefix=".tingmu-build-", dir=destination.parent) as staging:
-        root = Path(staging) / "Tingmu"
+    with release_stage(destination.parent, ".tingmu-build-") as staging:
+        root = staging / "Tingmu"
         root.mkdir()
         print("Copying core Windows runtime...", flush=True)
         src = source / "runtime/python"

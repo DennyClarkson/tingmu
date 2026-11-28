@@ -1,6 +1,8 @@
 """Explicit audio transcription at a user-selected OpenAI-compatible endpoint."""
 from __future__ import annotations
 
+from contextlib import closing
+import hashlib
 import io
 import ipaddress
 import json
@@ -17,7 +19,7 @@ from .credentials import protect, unprotect
 from .media import _cue_id, _normalise_language
 from .models import Cue
 from .providers import NoRedirect, ProviderError, RequestCancelled, validate_base_url
-from .storage import atomic_json
+from .storage import atomic_json, media_fingerprint
 from .task_progress import Progress
 
 
@@ -94,6 +96,8 @@ def _connection(settings, data_dir):
     key = _api_key(data_dir, endpoint, env_name, local=local)
     if not local:
         validate_base_url(endpoint, key_source="environment" if key else "none")
+        if urlsplit(endpoint).hostname == "api.openai.com" and not key:
+            raise ProviderError("OpenAI 语音识别缺少 API 密钥。请在「工作区设置 → 语音识别」中填写并保存密钥。")
     return endpoint, key
 
 
@@ -195,25 +199,39 @@ def _post(endpoint, key, fields, audio):
     return _json_request(request, 180)
 
 
-def _segments(data, *, source, offset, duration, namespace, diarized, evidence=None, chunk=1, blanks=None):
+def _segments(data, *, source, offset, duration, namespace, diarized, evidence=None, chunk=1, blanks=None,
+              outside=None):
     if not isinstance(data, dict) or not isinstance(data.get("segments"), list):
         raise ProviderError("语音服务必须返回带起止时间的 segments。请检查模型与返回格式。")
     result = []
+    outside_text = False
     for index, segment in enumerate(data["segments"]):
-        try:
-            start, end, text = segment["start"], segment["end"], segment["text"]
-            if not all(type(v) in (float, int) and math.isfinite(v) for v in (start, end)):
-                raise ValueError()
-            if start < 0 or start >= end or start >= duration or end > duration + 0.25 or not isinstance(text, str):
-                raise ValueError()
-            speaker = segment.get("speaker", "")
-            if not isinstance(speaker, str) or len(speaker) > 128 or any(ord(c) < 32 for c in speaker):
-                raise ValueError()
-            if diarized and not speaker.strip():
-                raise ValueError()
-        except (KeyError, ValueError, TypeError):
-            raise ProviderError("语音服务返回了无效的时间段、正文或说话人标记。") from None
-        if text.strip():
+        where = f"语音服务第 {chunk} 个音频片段、第 {index + 1} 条字幕"
+        if not isinstance(segment, dict) or not isinstance(segment.get("text"), str):
+            raise ProviderError(f"{where}缺少有效的文本字段（text）。")
+        text = segment["text"]
+        start, end = segment.get("start"), segment.get("end")
+        if not all(type(v) in (float, int) and math.isfinite(v) for v in (start, end)):
+            raise ProviderError(f"{where}缺少有效的起止时间（start、end，单位为秒）。")
+        if start < 0 or end < start:
+            raise ProviderError(f"{where}时间超出有效范围（起点 {start:.3f} 秒，终点 {end:.3f} 秒，"
+                                f"片长 {duration:.3f} 秒）。")
+        if text.strip() and start == end and start < duration:
+            raise ProviderError(f"{where}有正文但没有可播放的时长（起点 {start:.3f} 秒，"
+                                f"终点 {end:.3f} 秒，片长 {duration:.3f} 秒）。")
+        speaker = segment.get("speaker")
+        if speaker is None:
+            speaker = ""
+        if not isinstance(speaker, str) or len(speaker) > 128 or any(ord(c) < 32 for c in speaker):
+            raise ProviderError(f"{where}的说话人字段（speaker）格式无效。")
+        if diarized and text.strip() and not speaker.strip():
+            raise ProviderError(f"{where}没有返回所选格式要求的说话人标记（speaker）。")
+        if text.strip() and start >= duration:
+            outside_text = True
+            if outside is not None:
+                outside.append({"chunk": chunk, "segment_index": index, "offset": offset, "duration": duration,
+                                "reported_start": start, "reported_end": end, "text": text, "speaker": speaker})
+        elif text.strip():
             absolute_start, absolute_end = start + offset, min(end, duration) + offset
             ident = _cue_id(source, index, absolute_start, absolute_end)
             if evidence is not None:
@@ -224,11 +242,44 @@ def _segments(data, *, source, offset, duration, namespace, diarized, evidence=N
         elif blanks is not None:
             blanks.append({"chunk": chunk, "segment_index": index, "offset": offset,
                            "reported_start": start, "reported_end": end})
+    if outside_text and not result:
+        raise ProviderError(f"第 {chunk} 个音频片段的全部非空字幕都在片外（片长 {duration:.3f} 秒），"
+                            "无法定位有效字幕。请检查语音服务返回的时间单位。")
     return sorted(result, key=lambda cue: (cue.start, cue.end))
 
 
+def _request_fields(settings):
+    _, model, fmt, _ = api_options(settings)
+    validate_speech_setting("external_asr_model", model)
+    validate_speech_setting("asr_response_format", fmt)
+    fields = {"model": model, "response_format": fmt}
+    language = _normalise_language(settings.target_language)
+    if language and re.fullmatch("[a-z]{2}", language):
+        fields["language"] = language
+    if fmt == "diarized_json":
+        fields["chunking_strategy"] = "auto"
+    return fields
+
+
+def check_transcription(settings, data_dir):
+    if settings.asr_backend != "external" or not settings.allow_audio_upload:
+        raise ProviderError("请在语音设置中选择外部 API，并确认允许此工作区发送音轨。")
+    endpoint, key = _connection(settings, data_dir)
+    if not key:
+        raise ProviderError("请在语音设置中保存此转写地址的密钥，或填写有效的密钥环境变量名。")
+    fields = _request_fields(settings)
+    audio = io.BytesIO()
+    with wave.open(audio, "wb") as writer:
+        writer.setparams((1, 2, 16000, 0, "NONE", "not compressed"))
+        writer.writeframes(bytes(32000))
+    response = _post(endpoint, key, fields, audio.getvalue())
+    _segments(response, source="setup", offset=0, duration=1, namespace="",
+              diarized=fields["response_format"] == "diarized_json")
+
+
 def transcribe_external(media_path, settings, data_dir, *, start=0, duration=None,
-                        progress=None, cancelled=None, permission=None, metadata_out=None):
+                        progress=None, cancelled=None, permission=None, metadata_out=None, checkpoint_dir=None,
+                        saved_parts=None):
     from .media import prepared_audio
     local = settings.asr_backend == "local_api"
 
@@ -245,44 +296,71 @@ def transcribe_external(media_path, settings, data_dir, *, start=0, duration=Non
     check()
     _, model, fmt, _ = api_options(settings)
     endpoint, key = _connection(settings, data_dir)
-    validate_speech_setting("external_asr_model", model)
-    validate_speech_setting("asr_response_format", fmt)
-    fields = {"model": model, "response_format": fmt}
-    language = _normalise_language(settings.target_language)
-    if language and re.fullmatch("[a-z]{2}", language):
-        fields["language"] = language
-    if fmt == "diarized_json":
-        fields["chunking_strategy"] = "auto"
+    fields = _request_fields(settings)
     cues = []
     chunks = 0
     segment_sources = {} if metadata_out is not None else None
     blanks = [] if metadata_out is not None else None
+    outside = [] if metadata_out is not None else None
     quiet = [] if metadata_out is not None else None
     original = {}
+    if checkpoint_dir is not None:
+        identity = [1, media_fingerprint(media_path), settings.asr_backend, endpoint, fields, settings.target_language,
+                    settings.audio_track, settings.suppress_bgm, float(start), duration]
+        request_key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode())
     with prepared_audio(media_path, audio_track=settings.audio_track, start=start, duration=duration,
                         suppress_bgm=settings.suppress_bgm, progress=progress, cancelled=preparation_cancelled,
                         metadata_out=metadata_out, original_out=original) as audio:
         with wave.open(str(audio), "rb") as source:
             length = source.getnframes() / source.getframerate()
         windows = _wav_chunks(audio, check, original=original.get("path"), quiet_out=quiet)
-        for chunks, (offset, seconds, wav, multiple) in enumerate(windows, 1):
-            label = "本机 API" if local else "外部语音识别"
-            if progress:
-                progress(Progress(f"{label} · 第 {chunks} 段（{seconds:.0f} 秒）",
-                                  activity=label, done=offset, total=length, unit="秒"))
-            check()
-            data = _post(endpoint, key, fields, wav)
-            check()
-            source = f"{Path(media_path).resolve()}|{settings.audio_track}|{model}|{chunks}"
-            cues.extend(_segments(data, source=source, offset=start + offset, duration=seconds,
-                                  namespace=f"{chunks}·" if multiple else "", diarized=fmt == "diarized_json",
-                                  evidence=segment_sources, chunk=chunks, blanks=blanks))
-            if progress:
-                progress(Progress(f"{label}已完成第 {chunks} 段", activity=label, done=offset+seconds,
-                                  total=length, unit="秒"))
+        # Release the WAV before prepared_audio removes it, including on a failed POST.
+        with closing(windows):
+            for chunks, (offset, seconds, wav, multiple) in enumerate(windows, 1):
+                label = "本机 API" if local else "外部语音识别"
+                if progress:
+                    progress(Progress(f"{label} · 第 {chunks} 段（{seconds:.0f} 秒）",
+                                      activity=label, done=offset, total=length, unit="秒"))
+                check()
+                part = None
+                data = None
+                if checkpoint_dir is not None:
+                    # Match the exact uploaded samples and their position, even if preprocessing changes.
+                    digest = request_key.copy()
+                    digest.update(f":{chunks}:{round(offset * 16000)}:".encode())
+                    digest.update(wav)
+                    part = checkpoint_dir / f"{digest.hexdigest()[:32]}.json"
+                    try:
+                        cached = json.loads(part.read_text(encoding="utf-8"))
+                        if isinstance(cached, dict) and isinstance(cached.get("segments"), list):
+                            data = cached
+                    except (FileNotFoundError, ValueError):
+                        pass
+                resumed = data is not None
+                if not resumed:
+                    check()
+                    data = _post(endpoint, key, fields, wav)
+                check()
+                source = f"{Path(media_path).resolve()}|{settings.audio_track}|{model}|{chunks}"
+                cues.extend(_segments(data, source=source, offset=start + offset, duration=seconds,
+                                      namespace=f"{chunks}·" if multiple else "", diarized=fmt == "diarized_json",
+                                      evidence=segment_sources, chunk=chunks, blanks=blanks, outside=outside))
+                if part is not None:
+                    if not resumed:
+                        # Keep only transcript evidence. Never persist credentials, request audio or HTTP bodies.
+                        segments = [{k: row[k] for k in ("start", "end", "text", "speaker") if k in row}
+                                    for row in data["segments"]]
+                        atomic_json(part, {"segments": segments})
+                    if saved_parts is not None:
+                        saved_parts.append(part)
+                if progress:
+                    status = "已从断点恢复" if resumed else "已完成"
+                    progress(Progress(f"{label}{status}第 {chunks} 段", activity=label, done=offset+seconds,
+                                      total=length, unit="秒"))
     if metadata_out is not None:
         metadata_out.update(asr_backend=settings.asr_backend, asr_model=model, asr_response_format=fmt,
                             audio_chunks=chunks, asr_segment_sources=segment_sources, asr_blank_segments=blanks,
+                            asr_outside_segments=outside,
                             asr_quiet_intervals=[[start + a, start + b] for a, b in quiet],
                             speaker_source="provider" if any(c.speaker for c in cues) else "")
     return cues

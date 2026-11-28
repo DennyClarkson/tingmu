@@ -89,6 +89,33 @@ def test_well_timed_unpunctuated_fragments_remain_available_for_semantic_regroup
     assert len(gate(cues, "sidecar", "en")[0]) == 2
 
 
+def test_measured_silence_and_fragment_flag_survive_document_save(tmp_path):
+    import numpy as np
+
+    from tingmu.acoustic import quiet_intervals
+    from tingmu.models import StudyDocument
+    from tingmu.storage import Store
+
+    energy = np.ones(160, dtype=np.float32)
+    energy[100:125] = 0
+    pauses = quiet_intervals(energy)
+    language = LanguagePair("zh", "en")
+    source = [Cue("a", 0.1, 1.0, "board-"), Cue("b", 1.02, 1.5, "ing.")]
+    cues, audit, lineage = gate(source, "external_api", language, quiet_intervals=pauses)
+    assert len(cues) == 1 and cues[0].text == "board-ing."
+    doc = StudyDocument(str(tmp_path / "video.mp4"), language, cues, metadata={
+        "asr_quiet_intervals": pauses, "pre_llm_audit": audit, "pre_llm_lineage": lineage,
+    })
+    store = Store(tmp_path / "workspace")
+    try:
+        store.save_document(doc)
+        restored = store.load_document(doc.media_path, language)
+        assert restored.cues[0].uncertain is False
+        assert restored.metadata["asr_quiet_intervals"] == [[2.0, 2.5]]
+    finally:
+        store.close()
+
+
 def test_legacy_dictionary_tokens_are_rebuilt_only_for_changed_text():
     rows = [
         Cue("a", 0, 1, "They keep moving", tokens=[Token("They")]),

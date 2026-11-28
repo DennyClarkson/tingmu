@@ -111,6 +111,43 @@ def test_failed_file_does_not_discard_next_and_retry_is_explicit(tmp_path, monke
     assert queue.snapshot() == []
 
 
+def test_failed_job_retry_uses_updated_text_model_assignment(tmp_path, monkeypatch):
+    store = Store(tmp_path / "data")
+    movie = tmp_path / "film.mkv"
+    movie.touch()
+    original = AppSettings(review_profile_id="", review_provider="openai", review_model="gpt-6-astra")
+    store.save_settings(original)
+    queue = batch.PreparationQueue(store)
+    job = queue.enqueue([movie], original)[0]
+
+    def fail(*_args, **_kwargs):
+        raise ValueError("temporary provider failure")
+
+    monkeypatch.setattr(batch, "prepare_media", fail)
+    assert queue.run()[0]["status"] == "failed"
+
+    updated = AppSettings(review_profile_id="deepseek-profile", review_provider="deepseek",
+                           review_model="deepseek-v4-pro")
+    store.save_settings(updated)
+    queue.retry(job["id"])
+    retried = queue.snapshot()[0]
+    assert retried["settings"]["review_profile_id"] == "deepseek-profile"
+    assert retried["settings"]["review_provider"] == "deepseek"
+    assert retried["settings"]["review_model"] == "deepseek-v4-pro"
+
+    received = []
+    monkeypatch.setattr(
+        batch, "prepare_media",
+        lambda path, settings, *_args, **_kwargs: (
+            received.append(settings) or StudyDocument(str(path), settings.language, [Cue("a", 0, 1, "hello")])
+        ),
+    )
+    assert queue.run()[0]["status"] == "completed"
+    assert received[0].review_profile_id == "deepseek-profile"
+    assert received[0].review_provider == "deepseek"
+    assert received[0].review_model == "deepseek-v4-pro"
+
+
 def test_completed_video_can_be_enqueued_after_sidecar_changed(tmp_path, monkeypatch):
     video = tmp_path / "movie.mkv"
     video.touch()

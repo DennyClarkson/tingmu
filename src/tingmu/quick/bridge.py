@@ -93,6 +93,7 @@ class Bridge(QObject):
     diagnosticsChanged = Signal()
     logsChanged = Signal()
     modelsChanged = Signal()
+    speechCredentialChanged = Signal()
     notebooksChanged = Signal()
     chatSessionsChanged = Signal()
     _completed = Signal(str, object, str)
@@ -144,6 +145,7 @@ class Bridge(QObject):
     _inbox_executor = state_field("_library_state", "inbox_executor")
     _inbox_stop = state_field("_library_state", "inbox_stop")
     _inbox_paused = state_field("_library_state", "inbox_paused")
+    processing_setup_pending = state_field("_library_state", "setup_pending")
     _media_inbox = state_field("_library_state", "media_inbox")
     inbox_timer = state_field("_library_state", "inbox_timer")
     queue = state_field("_queue_state", "queue")
@@ -607,7 +609,10 @@ class Bridge(QObject):
 
     @Slot(str, result=bool)
     def saveSpeechKey(self, secret):
-        return self.settings_controller.saveSpeechKey(secret)
+        saved = self.settings_controller.saveSpeechKey(secret)
+        if saved:
+            self.speechCredentialChanged.emit()
+        return saved
 
     @Slot()
     def chooseWhisperFolder(self):
@@ -889,8 +894,8 @@ class Bridge(QObject):
     def _library_completed(self, result):
         return self._library_controller._library_completed(result)
 
-    def open_media(self, raw_path):
-        return self._playback_controller.open_media(raw_path)
+    def open_media(self, raw_path, *, study_track=None):
+        return self._playback_controller.open_media(raw_path, study_track=study_track)
 
     def _load_document(self):
         return self._playback_controller._load_document()
@@ -1099,6 +1104,7 @@ class Bridge(QObject):
         self.store.save_settings(self._settings)
         self.queue.pause()
         self._closed = True
+        QGuiApplication.instance().focusWindowChanged.disconnect(self._focus_window_changed)
         self._embedded.close()
         self.timer.stop()
         self._unsubscribe_queue()

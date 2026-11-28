@@ -1,5 +1,10 @@
 # 第三方声明 · Third-party notices
 
+### 首页学习片源
+
+- **Sintel** 片段由 Blender Foundation 与 Sintel 团队制作，采用 CC BY 3.0。英语字幕取自 Ian Devlin 的配套播放器示例，去除了测试字幕与注释。[原作与许可](https://durian.blender.org/about/) · [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/) · [片段和字幕示例](https://iandevlin.github.io/mdn/video-player-with-captions/)
+- **一起饮杯茶** 使用 Tatoeba 例句 10650633。粤语录音作者 cantonesespoken，采用 CC BY 4.0；例句作者 nickyeow，采用 CC BY 2.0 FR。听幕添加静态画面、普通话释义与字幕，并将录音编入八秒跟读短片。[原句与录音](https://tatoeba.org/en/sentences/show/10650633) · [录音许可](https://creativecommons.org/licenses/by/4.0/) · [例句许可](https://creativecommons.org/licenses/by/2.0/fr/)
+
 听幕的原创代码和项目资产采用根目录 [LICENSE](LICENSE) 中的 Apache License 2.0。以下列出源码仓库或 Windows x64 便携 ZIP 随附的作品，以及用户可另行安装的组件。各作品的版权、署名、许可和分发条件仍由其权利人规定。
 
 Tingmu’s original code and project assets are licensed under the Apache License 2.0 in the root [LICENSE](LICENSE). The following credits cover works included in the source repository or Windows x64 portable ZIP and components users can install separately. Each third-party work retains its own copyright, attribution, license and distribution terms.

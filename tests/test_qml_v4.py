@@ -28,11 +28,14 @@ def find(item, name):
 @pytest.fixture
 def quick(qapp, qtbot, tmp_path):
     app, bridge, engine = create_qml_app(tmp_path / "data")
+    bridge.setting("developer_mode", True)
     window = engine.rootObjects()[0]
     window.setWidth(1280)
     window.setHeight(720)
     qtbot.wait(60)
     yield app, bridge, engine, window
+    window.setProperty("closingSession", True)
+    window.close()
     bridge.shutdown()
     for child in app.topLevelWindows():
         child.hide()

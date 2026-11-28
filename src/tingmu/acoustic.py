@@ -33,7 +33,8 @@ def quiet_intervals(energy):
         return []
     threshold = min(0.009, max(0.001, float(np.percentile(energy, 75)) * 0.1))
     quiet = np.r_[False, energy <= threshold, False]
-    edges = np.flatnonzero(quiet[1:] != quiet[:-1])
+    # Return Python seconds: downstream comparisons become stored JSON cue flags.
+    edges = np.flatnonzero(quiet[1:] != quiet[:-1]).tolist()
     return [(a / 50, b / 50) for a, b in zip(edges[::2], edges[1::2]) if b - a >= 12]
 
 

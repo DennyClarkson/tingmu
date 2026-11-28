@@ -126,6 +126,11 @@ def run_smoke(root: Path, media: Path | None = None) -> int:
     isolated_data = cache_root() / "portable-smoke" / uuid.uuid4().hex / "data"
     app, bridge, engine = create_qml_app(data_dir=isolated_data, runtime_setup_dir=isolated_data)
     windows = engine.rootObjects()
+    first_page = engine.rootContext().contextProperty("studyHome").state["page"]
+    ordinary_first_run = bool(windows and windows[0].property("atHome") and first_page == "method")
+    bridge.setting("developer_mode", True)
+    if is_clean_install():
+        QMetaObject.invokeMethod(windows[0], "openRuntimeSetup")
     player = bridge.player
     if player.audioOutput():
         player.audioOutput().setMuted(True)
@@ -140,6 +145,7 @@ def run_smoke(root: Path, media: Path | None = None) -> int:
         "window_class": windows[0].metaObject().className() if windows else None,
         "frames": 0, "errors": [], "blocked_network_events": blocked_network_events, "checks": {},
     }
+    report["checks"]["ordinary_first_run"] = ordinary_first_run
     report["checks"]["qml_window"] = report["window_visible"] and bool(windows)
     expected_icon = QIcon(str(root / "app/tingmu/quick/brand/app-icon.ico")).pixmap(32, 32)
     report["checks"]["application_icon"] = bool(

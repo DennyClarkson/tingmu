@@ -27,6 +27,7 @@ reports/asr*.srt
 /logs/
 /diagnostics/
 /examples/
+/demo-source/
 model-profiles.json
 audio-credential.json
 local-audio-credential.json

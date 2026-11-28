@@ -24,6 +24,44 @@ ApplicationWindow {
     readonly property var savedLayout:backend.layout || ({})
     property var layoutDraft: savedLayout
     Connections { target: backend; function onLayoutChanged() { app.layoutDraft = backend.layout } }
+    readonly property bool developer: !!backend.settings.developer_mode
+    property bool studying: directMediaLaunch
+    property bool studentLearning: false
+    readonly property bool atHome: !developer && !studying && !studentLearning
+    readonly property bool learningVisible: developer ? viewMode === "learn" : studentLearning
+    property bool showChat: false
+    function goHome() {
+        if (!flushAllDrafts()) return
+        backend.player.pause()
+        studyHome.refresh()
+        studying = false
+        studentLearning = false
+        showChat = false
+    }
+    function studentHost(key) {
+        if (key === "player") return studyPlayer
+        if (key === "companion") return studyCompanion
+        if (key === "chat") return studyChat
+        if (key === "subtitles") return studySubtitles
+        return null
+    }
+    onDeveloperChanged: {
+        if (!developer && !restoring) {
+            developerPanel.hide()
+            if (playerDock.loadedItem && playerDock.loadedItem.fullscreen) playerDock.loadedItem.toggleFullscreen()
+            goHome()
+        }
+    }
+    Connections {
+        target: studyHome
+        function onDirectionAccepted() { if (promptOnLaunch) app.showStartupSetup() }
+        function onWatch() {
+            app.showChat = false
+            app.studentLearning = false
+            app.studying = true
+            if (app.developer) app.changeView("watch")
+        }
+    }
     property bool restoring:true
     property bool closingSession:false
     property bool pendingWorkspaceSetup:false
@@ -44,6 +82,17 @@ ApplicationWindow {
     function moduleEnabled(key){return !!additionalModules[key] || (viewMode==="prepare" ? key==="library" || key==="queue" : ["library","player","companion","subtitles"].indexOf(key)>=0)}
     function slotEnabled(key){var all=docks();for(var m in all)if((moduleSlots[m] || m)===key)return moduleEnabled(m) && !!all[m] && !all[m].detached;return moduleEnabled(key) && !!all[key] && !all[key].detached}
     function changeView(mode){
+        if (!developer) {
+            if (mode === "learn") {
+                backend.player.pause()
+                backend.command("syncNotebook", {})
+                studentLearning = true
+            } else if (mode === "watch" && learningPanel.flushDrafts()) {
+                studentLearning = false
+                studying = studying || !!backend.mediaState.mediaPath
+            }
+            return
+        }
         if(mode==="learn")backend.command("syncNotebook",{})
         if(mode===viewMode)return
         var layouts=Object.assign({},viewLayouts);layouts[viewMode]=moduleSlots;viewLayouts=layouts
@@ -51,8 +100,16 @@ ApplicationWindow {
         viewMode=mode;moduleSlots=layouts[mode] || defaultSlots(mode);additionalModules=extras[mode] || ({})
         persist.restart()
     }
-    function openModule(key){var d=docks()[key];if(!moduleEnabled(key)){d.detached=true;d.save()}else{d.detached=!d.detached;d.save()}}
-    Connections{target:backend;ignoreUnknownSignals:true;function onAppAction(name,payload){if(name!=="workspace")return;var p=payload || {};if(["watch","prepare","learn"].indexOf(p.view)>=0){if(p.view!=="watch" && playerDock.loadedItem && playerDock.loadedItem.fullscreen)playerDock.loadedItem.toggleFullscreen();app.changeView(p.view);app.raise();app.requestActivate()}if(p.module && app.docks()[p.module]){var dock=app.docks()[p.module];if(!app.moduleEnabled(p.module)){dock.detached=true;dock.save()}dock.present()}}}
+    function openModule(key){
+        if (!developer) {
+            if (key === "chat" && learningPanel.flushDrafts()) {
+                studentLearning = false; studying = true; showChat = true
+            }
+            return
+        }
+        var d=docks()[key];if(!moduleEnabled(key)){d.detached=true;d.save()}else{d.detached=!d.detached;d.save()}
+    }
+    Connections{target:backend;ignoreUnknownSignals:true;function onAppAction(name,payload){if(name!=="workspace" || !app.developer)return;var p=payload || {};if(["watch","prepare","learn"].indexOf(p.view)>=0){if(p.view!=="watch" && playerDock.loadedItem && playerDock.loadedItem.fullscreen)playerDock.loadedItem.toggleFullscreen();app.changeView(p.view);app.raise();app.requestActivate()}if(p.module && app.docks()[p.module]){var dock=app.docks()[p.module];if(!app.moduleEnabled(p.module)){dock.detached=true;dock.save()}dock.present()}}}
     function docks(){return {library:libraryDock,queue:queueDock,player:playerDock,subtitles:subtitleDock,companion:companionDock,chat:chatDock}}
     function dockHost(key){return docks()[moduleSlots[key] || key]}
     function slotModule(key){var all=docks();for(var m in all)if((moduleSlots[m] || m)===key)return all[m];return all[key]}
@@ -84,7 +141,11 @@ ApplicationWindow {
     function savePreference(key,value){var copy=Object.assign({},layoutDraft);var prefs=Object.assign({},copy.preferences || {});prefs[key]=value;copy.preferences=prefs;layoutDraft=copy;persist.restart()}
     function preference(key){return layoutDraft.preferences ? layoutDraft.preferences[key] : null}
     function saveWorkspace(){
-        if(restoring)return
+        if (restoring) return
+        if (!developer) {
+            if (layoutDraft !== savedLayout) backend.saveLayout(layoutDraft)
+            return
+        }
         var copy=Object.assign({},layoutDraft)
         var views=Object.assign({},viewLayouts);views[viewMode]=moduleSlots;viewLayouts=views;copy.viewLayouts=views;copy.viewMode=viewMode
         var extras=Object.assign({},viewExtras);extras[viewMode]=additionalModules;viewExtras=extras;copy.viewExtras=extras
@@ -109,10 +170,14 @@ ApplicationWindow {
         libraryDock.SplitView.preferredHeight=Math.min(w.libraryHeight || 420,app.height*0.62)
         companionDock.SplitView.preferredHeight=Math.min(w.companionHeight || 450,(app.height-104)*0.56)
         restoring=false
-        if (runtimeSetup.firstRun) {
+        if (!promptOnLaunch) showStartupSetup()
+    }
+    function showStartupSetup() {
+        if (studyHome.state.setupRequired) return
+        if (developer && runtimeSetup.firstRun) {
             pendingWorkspaceSetup = !!workspaces.info.showSetup
             Qt.callLater(openRuntimeSetup)
-        } else if(workspaces.info.showSetup) Qt.callLater(function(){workspaceSetup.open()})
+        } else if(workspaces.info.showSetup === "models" || (developer && workspaces.info.showSetup)) Qt.callLater(function(){workspaceSetup.open()})
     }
     function flushAllDrafts() {
         if (!learningPanel.flushDrafts()) return false
@@ -159,6 +224,12 @@ ApplicationWindow {
     ModelManager{id:modelManager}
     TeachingPreferences{id:teachingPreferences}
     SubtitleCorrection{id:subtitleCorrection}
+    function openLocal() {
+        if (developer) { backend.command("openFiles", {}); return }
+        if (studyHome.state.page === "direction") return
+        goHome()
+        studyHome.browse()
+    }
     function openGuide() {
         app.raise()
         app.requestActivate()
@@ -252,8 +323,8 @@ ApplicationWindow {
     TextConnectionConsent { onConfirmationRequested: { app.raise(); app.requestActivate() } }
     ActionGroup { id: interfaceActions; exclusive: true }
     Timer{id:persist;interval:350;onTriggered:app.saveWorkspace()}
-    Shortcut{sequence:"Ctrl+O";onActivated:backend.command("openFiles",{})}
-    Shortcut{sequence:"Ctrl+Shift+O";onActivated:backend.command("openFolder",{})}
+    Shortcut{sequence:"Ctrl+O";enabled:!studyHome.state.setupRequired;onActivated:app.openLocal()}
+    Shortcut{sequence:"Ctrl+Shift+O";enabled:!studyHome.state.setupRequired;onActivated:backend.command("openFolder",{})}
     header:Rectangle {
         height:62;color:Theme.bg
         RowLayout {
@@ -280,7 +351,7 @@ ApplicationWindow {
                 }
                 AppMenu {
                     objectName:"fileMenu";title:qsTranslate("Tingmu", "文件")
-                    Action{text:qsTranslate("Tingmu", "打开视频…    Ctrl+O");onTriggered:backend.command("openFiles",{})}
+                    Action{text:qsTranslate("Tingmu", "打开视频…    Ctrl+O");onTriggered:app.openLocal()}
                     Action{text:qsTranslate("Tingmu", "添加多个视频…");onTriggered:backend.command("addFiles",{})}
                     Action{text:qsTranslate("Tingmu", "打开文件夹…    Ctrl+Shift+O");onTriggered:backend.command("openFolder",{})}
                     AppMenuSeparator {}
@@ -329,21 +400,21 @@ ApplicationWindow {
                         }
                     }
                     AppMenuSeparator {}
-                    Action{text:qsTranslate("Tingmu", "学习布局");onTriggered:app.changeView("learn")}
-                    Action{text:qsTranslate("Tingmu", "观看布局");onTriggered:app.changeView("watch")}
-                    Action{text:qsTranslate("Tingmu", "准备布局");onTriggered:app.changeView("prepare")}
+                    Action{enabled:app.developer;text:qsTranslate("Tingmu", "学习布局");onTriggered:app.changeView("learn")}
+                    Action{enabled:app.developer;text:qsTranslate("Tingmu", "观看布局");onTriggered:app.changeView("watch")}
+                    Action{enabled:app.developer;text:qsTranslate("Tingmu", "准备布局");onTriggered:app.changeView("prepare")}
                     AppMenuSeparator {}
-                    Action{text:qsTranslate("Tingmu", "浮动播放器");checkable:true;checked:playerDock.detached;onTriggered:app.openModule("player")}
-                    Action{text:qsTranslate("Tingmu", "浮动学习伴侣");checkable:true;checked:companionDock.detached;onTriggered:app.openModule("companion")}
-                    Action{text:qsTranslate("Tingmu", "浮动字幕列表");checkable:true;checked:subtitleDock.detached;onTriggered:app.openModule("subtitles")}
-                    Action{text:qsTranslate("Tingmu", "独立聊天窗口");checkable:true;checked:chatDock.detached;onTriggered:app.openModule("chat")}
-                    Action{text:qsTranslate("Tingmu", "浮动媒体库");checkable:true;checked:libraryDock.detached;onTriggered:app.openModule("library")}
-                    Action{text:qsTranslate("Tingmu", "处理队列");checkable:true;checked:queueDock.detached;onTriggered:app.openModule("queue")}
+                    Action{enabled:app.developer;text:qsTranslate("Tingmu", "浮动播放器");checkable:true;checked:playerDock.detached;onTriggered:app.openModule("player")}
+                    Action{enabled:app.developer;text:qsTranslate("Tingmu", "浮动学习伴侣");checkable:true;checked:companionDock.detached;onTriggered:app.openModule("companion")}
+                    Action{enabled:app.developer;text:qsTranslate("Tingmu", "浮动字幕列表");checkable:true;checked:subtitleDock.detached;onTriggered:app.openModule("subtitles")}
+                    Action{enabled:app.developer;text:qsTranslate("Tingmu", "独立聊天窗口");checkable:true;checked:chatDock.detached;onTriggered:app.openModule("chat")}
+                    Action{enabled:app.developer;text:qsTranslate("Tingmu", "浮动媒体库");checkable:true;checked:libraryDock.detached;onTriggered:app.openModule("library")}
+                    Action{enabled:app.developer;text:qsTranslate("Tingmu", "处理队列");checkable:true;checked:queueDock.detached;onTriggered:app.openModule("queue")}
                     AppMenuSeparator {}
-                    Action{text:qsTranslate("Tingmu", "恢复默认布局");onTriggered:app.resetWorkspace()}
+                    Action{enabled:app.developer;text:qsTranslate("Tingmu", "恢复默认布局");onTriggered:app.resetWorkspace()}
                 }
                 AppMenu {
-                    title:qsTranslate("Tingmu", "帮助")
+                    objectName:"studyHelpMenu"; title:qsTranslate("Tingmu", "帮助")
                     Action{objectName:"quickStartGuideAction";text:qsTranslate("Tingmu", "快速上手与使用说明");onTriggered:app.openGuide()}
                     Action{text:qsTranslate("Tingmu", "关于听幕");onTriggered:aboutDialog.open()}
                     AppMenuSeparator {}
@@ -365,20 +436,25 @@ ApplicationWindow {
                     }
                 }
             }
-            Item{Layout.fillWidth:true}
+            Item { Layout.fillWidth: true }
+            TButton {
+                objectName: "goStudyHome"; visible: !app.developer && !app.atHome
+                text: "首页"; quiet: true; onClicked: app.goHome()
+            }
             SegmentBar {
-                TButton { text:qsTranslate("Tingmu", "观看"); quiet:true; checked:app.viewMode==="watch"; onClicked:app.changeView("watch") }
-                TButton { text:qsTranslate("Tingmu", "准备"); quiet:true; checked:app.viewMode==="prepare"; onClicked:app.changeView("prepare") }
-                TButton { objectName:"learningViewButton"; text:qsTranslate("Tingmu", "学习"); quiet:true; checked:app.viewMode==="learn"; onClicked:app.changeView("learn") }
+                visible: app.developer || (studyHome.state.page !== "direction" && !["working", "download"].includes(studyHome.state.page)) || app.studying
+                TButton { objectName:"watchViewButton"; text:qsTranslate("Tingmu", "观看"); quiet:true; checked:app.developer ? app.viewMode==="watch" : !app.studentLearning; onClicked:app.changeView("watch") }
+                TButton { objectName:"prepareViewButton"; visible:app.developer; text:qsTranslate("Tingmu", "准备"); quiet:true; checked:app.viewMode==="prepare"; onClicked:app.changeView("prepare") }
+                TButton { objectName:"learningViewButton"; text:qsTranslate("Tingmu", "学习"); quiet:true; checked:app.learningVisible; onClicked:app.changeView("learn") }
             }
             Choice{objectName:"themeChoice";Layout.preferredWidth:88;translateOptions:true;model:["森林","纸页","薄雾","石墨"];property var values:["forest","paper","mist","graphite"];currentIndex:Math.max(0,values.indexOf(backend.settings.theme));onActivated:backend.setting("theme",values[currentIndex])}
-            TButton{visible:app.width>=980;text:qsTranslate("Tingmu", "对话");quiet:true;onClicked:{chatDock.detached=true;chatDock.save()}}
-            TButton{text:app.width>=950 ? qsTranslate("Tingmu", "打开视频") : "";tip:qsTranslate("Tingmu", "打开视频");iconSource:"arrow-up-right";primary:true;onClicked:backend.command("openFiles",{})}
+            TButton{visible:app.developer && app.width>=980;text:qsTranslate("Tingmu", "对话");quiet:true;onClicked:{chatDock.detached=true;chatDock.save()}}
+            TButton{visible:app.developer;text:app.width>=950 ? qsTranslate("Tingmu", "打开视频") : "";tip:qsTranslate("Tingmu", "打开视频");iconSource:"arrow-up-right";primary:true;onClicked:backend.command("openFiles",{})}
         }
     }
     SplitView {
         id:columns;objectName:"workspaceSplit"
-        visible:app.viewMode!=="learn"
+        visible:app.developer && app.viewMode!=="learn"
         anchors.fill:parent;anchors.leftMargin:12;anchors.rightMargin:12;anchors.bottomMargin:8
         orientation:Qt.Horizontal
         handle:Rectangle {
@@ -420,15 +496,67 @@ ApplicationWindow {
             handle:Rectangle{implicitHeight:8;implicitWidth:8;color:"transparent";Rectangle{anchors.centerIn:parent;width:30;height:2;color:SplitHandle.hovered || SplitHandle.pressed ? Theme.accent : Theme.line}}
             onResizingChanged:if(!resizing)persist.restart()
             DockPanel { id:companionDock;objectName:"companionModule";moduleId:"companion";title:qsTranslate("Tingmu", "学习伴侣");subtitle:"";workspace:app;visible:app.slotEnabled(moduleId);SplitView.preferredHeight:460;SplitView.minimumHeight:app.slotMinimumHeight("companion",220);panelContent:Component{CompanionPanel{workspace:app}} }
-            DockPanel { id:chatDock;objectName:"chatModule";moduleId:"chat";title:qsTranslate("Tingmu", "对话");subtitle:app.chatSubtitle();workspace:app;visible:app.slotEnabled(moduleId);SplitView.fillHeight:true;SplitView.minimumHeight:app.slotMinimumHeight("chat",190);panelContent:Component{ChatPanel{panelShown:chatDock.detached || (app.viewMode!=="learn" && app.moduleEnabled("chat"))}} }
+            DockPanel { id:chatDock;objectName:"chatModule";moduleId:"chat";title:qsTranslate("Tingmu", "对话");subtitle:app.chatSubtitle();workspace:app;visible:app.slotEnabled(moduleId);SplitView.fillHeight:true;SplitView.minimumHeight:app.slotMinimumHeight("chat",190);panelContent:Component{ChatPanel{panelShown:(!app.developer && app.studying && app.showChat) || chatDock.detached || (app.viewMode!=="learn" && app.moduleEnabled("chat"))}} }
         }
     }
-    LearningPanel{id:learningPanel;anchors.fill:parent;visible:app.viewMode==="learn";workspace:app}
+    LearningPanel{id:learningPanel;anchors.fill:parent;visible:app.learningVisible;workspace:app}
+    HomePage {
+        anchors.fill: parent
+        visible: app.atHome
+        onSettingsRequested: function(target) { app.navigateStudio(target) }
+    }
+    RowLayout {
+        objectName: "studentLesson"
+        anchors.fill: parent
+        anchors.margins: 14
+        spacing: 12
+        visible: !app.developer && app.studying && !app.studentLearning
+        Item { id: studyPlayer; objectName: "studentVideo"; Layout.preferredWidth: app.width * 0.64; Layout.minimumWidth: 300; Layout.fillWidth: true; Layout.fillHeight: true }
+        SplitView {
+            id: studySide
+            orientation: Qt.Vertical
+            Layout.minimumWidth: 290
+            Layout.preferredWidth: Math.min(app.width * 0.36, 430)
+            Layout.fillHeight: true
+            handle: Rectangle {
+                implicitHeight: 8
+                color: "transparent"
+                Rectangle {
+                    anchors.centerIn: parent
+                    width: 30; height: 2
+                    color: SplitHandle.hovered || SplitHandle.pressed ? Theme.accent : Theme.line
+                }
+            }
+            Item {
+                SplitView.minimumHeight: Math.min(260, studySide.height * 0.56)
+                SplitView.preferredHeight: studySide.height * 0.56
+                Item { id: studyCompanion; anchors.fill: parent; visible: !app.showChat }
+                Item { id: studyChat; anchors.fill: parent; visible: app.showChat }
+            }
+            Item {
+                id: studySubtitles
+                SplitView.minimumHeight: Math.min(170, studySide.height * 0.36)
+                SplitView.fillHeight: true
+            }
+        }
+    }
     DropArea {
+        enabled: !studyHome.state.setupRequired
         anchors.fill:parent
-        onDropped:function(drop){if(drop.hasUrls){backend.command("addPaths",{paths:drop.urls.map(function(url){return url.toString()})});drop.acceptProposedAction()}}
+        onDropped: function(drop) {
+            if (!drop.hasUrls) return
+            if (app.developer) {
+                backend.command("addPaths", {paths: drop.urls.map(function(url){return url.toString()})})
+            } else {
+                if (studyHome.state.page === "direction") return
+                app.goHome()
+                studyHome.select(drop.urls[0].toString())
+            }
+            drop.acceptProposedAction()
+        }
     }
     footer:Rectangle {
+        visible: app.developer
         height:30;color:Theme.bg
         Rectangle { anchors.top:parent.top; width:parent.width; height:1; color:Theme.line }
         RowLayout {
